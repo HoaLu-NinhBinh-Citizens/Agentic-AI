@@ -1,0 +1,61 @@
+# Runtime Configuration for Phase 2C
+# Tool execution parameters
+
+tool_execution:
+  # Default timeout for tool execution in seconds
+  default_timeout_seconds: 30
+
+  # Maximum concurrent tool calls per session
+  # Controls the semaphore limit
+  max_concurrent_tools_per_session: 5
+
+  # Maximum pending calls before backpressure kicks in
+  # Requests exceeding this will be rejected
+  max_pending_calls_per_session: 20
+
+  # Maximum number of completed calls to retain in history per session
+  max_history_per_session: 100
+
+  # Enable trace_id generation for observability
+  enable_trace_id: true
+
+  # Phase 2C: Retry configuration
+  retry:
+    # Maximum number of retry attempts (including first)
+    max_attempts: 3
+    # Base delay between retries in seconds
+    base_delay_seconds: 1.0
+    # Maximum delay cap in seconds
+    max_delay_seconds: 30.0
+    # Error codes that should trigger retry
+    retryable_codes:
+      - "MCP_ERROR"
+      - "TIMEOUT"
+    # Random jitter factor (0.0 to 1.0) added to delay
+    jitter_factor: 0.1
+
+  # Phase 2C: Rate limiting configuration
+  rate_limits:
+    # Per-session default rate limit
+    per_session:
+      calls: 10
+      period: 60
+    # Per-tool rate limit overrides
+    per_tool:
+      "filesystem/read_file":
+        calls: 30
+        period: 60
+
+  # Phase 2C: Cancellation configuration
+  cancellation:
+    # Grace period before force cleanup after session deletion
+    grace_period_seconds: 2.0
+
+  # Phase 2C: Middleware execution order
+  # Available middlewares: ownership, rate_limit, retry, cancellation, audit
+  middleware_order:
+    - "ownership"
+    - "rate_limit"
+    - "retry"
+    - "cancellation"
+    - "audit"

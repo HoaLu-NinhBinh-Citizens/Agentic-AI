@@ -1,4 +1,4 @@
-"""FastAPI server for Phase 2A.
+"""FastAPI server for Phase 2B.
 
 Runtime with reliability and resource protection:
 - Sessions persist across restarts (SQLite)
@@ -8,6 +8,12 @@ Runtime with reliability and resource protection:
 - Token-level backpressure (per WebSocket queue)
 - Basic rate limiting (per session)
 - MCP connectivity and tool discovery
+- Tool execution runtime (Phase 2B)
+
+Phase 2B additions:
+- Tool execution via ToolExecutionService
+- WebSocket tool_call message handling
+- Tool registry per session with concurrency control
 """
 
 from __future__ import annotations
@@ -27,6 +33,8 @@ if str(_SRC_DIR) not in sys.path:
 from fastapi import FastAPI, HTTPException, WebSocket, WebSocketDisconnect, status
 from fastapi.middleware.cors import CORSMiddleware
 
+from application.orchestration.tool_execution.config import get_tool_execution_config
+from application.orchestration.tool_execution.service import ToolExecutionService
 from core.agent.mock_agent import MockAgent
 from core.rate_limiter import SlidingWindowRateLimiter
 from core.runtime.runtime_manager import RuntimeManager
@@ -50,7 +58,7 @@ RATE_LIMIT_CHAT_WINDOW = 10.0
 
 
 class ServerState:
-    """Application state container for Phase 1B."""
+    """Application state container for Phase 2B."""
 
     def __init__(
         self,
@@ -58,11 +66,13 @@ class ServerState:
         connection_manager: ConnectionManager,
         runtime_manager: RuntimeManager,
         mock_agent: MockAgent,
+        tool_execution_service: ToolExecutionService,
     ) -> None:
         self.session_manager = session_manager
         self.connection_manager = connection_manager
         self.runtime_manager = runtime_manager
         self.mock_agent = mock_agent
+        self.tool_execution_service = tool_execution_service
         self._rate_limiters: dict[str, SlidingWindowRateLimiter] = {}
 
     def get_rate_limiter(self, session_id: str) -> SlidingWindowRateLimiter:
@@ -82,10 +92,14 @@ class ServerState:
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     """Application lifespan handler."""
-    logger.info("Starting AI_support Phase 2A server...")
+    logger.info("Starting AI_support Phase 2B server...")
+
+    # Load tool execution configuration
+    tool_config = get_tool_execution_config()
 
     store = SessionStore()
     session_manager = PersistentSessionManager(store)
+    session_manager.set_config(tool_config)
     await session_manager.initialize()
 
     connection_manager = ConnectionManager()
@@ -93,6 +107,7 @@ async def lifespan(app: FastAPI):
     runtime_manager = RuntimeManager(mock_agent)
     await runtime_manager.start()
 
+    # Initialize MCP manager
     mcp_manager = MCPClientManager(config_path="configs/mcp/servers.yaml")
     try:
         await mcp_manager.initialize()
@@ -105,35 +120,42 @@ async def lifespan(app: FastAPI):
         logger.warning("MCP initialization failed: %s", str(e))
         mcp_manager = None
 
+    # Set MCP manager in session manager for tool execution
+    session_manager.set_mcp_manager(mcp_manager)
+
+    # Create tool execution service
+    tool_execution_service = ToolExecutionService(session_manager)
+
     app.state.server_state = ServerState(
         session_manager=session_manager,
         connection_manager=connection_manager,
         runtime_manager=runtime_manager,
         mock_agent=mock_agent,
+        tool_execution_service=tool_execution_service,
     )
     app.state.mcp_manager = mcp_manager
 
     logger.info(
-        "AI_support Phase 2A server started. "
+        "AI_support Phase 2B server started. "
         "Loaded %d active sessions from database.",
         len(session_manager.list_sessions()),
     )
 
     yield
 
-    logger.info("Shutting down AI_support Phase 2A server...")
-    if mcp_manager is not None:
-        await mcp_manager.shutdown()
+    logger.info("Shutting down AI_support Phase 2B server...")
+    await session_manager.close()
     await runtime_manager.stop()
     await connection_manager.close_all_for_session("*")
-    await session_manager.close()
-    logger.info("AI_support Phase 2A server stopped")
+    if mcp_manager is not None:
+        await mcp_manager.shutdown()
+    logger.info("AI_support Phase 2B server stopped")
 
 
 app = FastAPI(
-    title="AI_support Phase 2A",
-    description="Runtime with MCP connectivity and tool discovery",
-    version="1.2.0",
+    title="AI_support Phase 2B",
+    description="Runtime with tool execution support",
+    version="1.3.0",
     lifespan=lifespan,
 )
 
@@ -228,6 +250,8 @@ async def get_session(session_id: str) -> dict:
 async def delete_session(session_id: str) -> dict[str, str]:
     """Delete a session and close all its WebSocket connections.
 
+    Phase 2B: Also closes the tool registry for this session.
+
     Args:
         session_id: The session ID.
 
@@ -257,15 +281,19 @@ async def delete_session(session_id: str) -> dict[str, str]:
 
 @app.websocket("/ws/{session_id}")
 async def websocket_endpoint(websocket: WebSocket, session_id: str):
-    """WebSocket endpoint for chat interaction.
+    """WebSocket endpoint for chat interaction and tool execution.
 
     Flow:
     1. Validate session exists
     2. Check connection rate limit
     3. Register connection with heartbeat
-    4. Handle messages: chat, cancel
+    4. Handle messages: chat, cancel, tool_call
     5. Stream response with timeout
     6. Keep connection open for more messages
+
+    Phase 2B additions:
+    - tool_call message handling for tool execution
+    - Broadcast of tool_call_start, tool_call_result, tool_call_error events
 
     Args:
         websocket: The WebSocket connection.
@@ -295,6 +323,10 @@ async def websocket_endpoint(websocket: WebSocket, session_id: str):
     async def send_event(event: dict) -> None:
         await client.send_event(event)
 
+    async def broadcast_to_session(session_id: str, event: dict) -> None:
+        """Broadcast an event to all clients of a session."""
+        await server_state.connection_manager.broadcast_to_session(session_id, event)
+
     try:
         while True:
             try:
@@ -302,7 +334,9 @@ async def websocket_endpoint(websocket: WebSocket, session_id: str):
             except Exception:
                 break
 
-            if data.get("type") == "chat":
+            msg_type = data.get("type")
+
+            if msg_type == "chat":
                 if server_state.runtime_manager.is_streaming(session_id):
                     await send_event({
                         "type": "error",
@@ -338,11 +372,19 @@ async def websocket_endpoint(websocket: WebSocket, session_id: str):
                     client,
                 )
 
-            elif data.get("type") == "cancel":
+            elif msg_type == "cancel":
                 logger.info("Cancellation requested: session=%s", session_id)
                 await server_state.runtime_manager.cancel_stream(session_id)
 
-            elif data.get("type") == "pong":
+            elif msg_type == "tool_call":
+                await handle_tool_call(
+                    server_state,
+                    session_id,
+                    data,
+                    broadcast_to_session,
+                )
+
+            elif msg_type == "pong":
                 pass
 
     except WebSocketDisconnect:
@@ -356,6 +398,55 @@ async def websocket_endpoint(websocket: WebSocket, session_id: str):
         )
         await server_state.connection_manager.disconnect(session_id, client)
         await client.close()
+
+
+async def handle_tool_call(
+    server_state: ServerState,
+    session_id: str,
+    data: dict,
+    broadcast_callback: Any,
+) -> None:
+    """Handle a tool_call message from WebSocket.
+
+    Args:
+        server_state: Server state.
+        session_id: Session ID.
+        data: Message data containing tool_call details.
+        broadcast_callback: Callback for broadcasting events.
+    """
+    message_data = data.get("data", {})
+    tool_name = message_data.get("tool_name")
+    arguments = message_data.get("arguments", {})
+    call_id = message_data.get("call_id")
+    trace_id = message_data.get("trace_id")
+
+    if not tool_name or not isinstance(arguments, dict):
+        await server_state.connection_manager.broadcast_to_session(
+            session_id,
+            {
+                "type": "error",
+                "data": {
+                    "code": "INVALID_TOOL_CALL",
+                    "message": "Missing tool_name or arguments",
+                },
+            }
+        )
+        return
+
+    logger.info(
+        "Processing tool_call: session=%s, tool=%s",
+        session_id,
+        tool_name,
+    )
+
+    await server_state.tool_execution_service.execute_tool(
+        session_id=session_id,
+        tool_name=tool_name,
+        arguments=arguments,
+        call_id=call_id,
+        trace_id=trace_id,
+        broadcast_callback=broadcast_callback,
+    )
 
 
 if __name__ == "__main__":

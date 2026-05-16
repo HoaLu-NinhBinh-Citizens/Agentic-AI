@@ -5,6 +5,9 @@ Phase 2A provides:
 - MCP session initialization handshake
 - Tool discovery from connected servers
 - Global namespaced tool registry
+
+Phase 2B adds:
+- Tool execution via call_tool method
 """
 
 from __future__ import annotations
@@ -17,6 +20,7 @@ from typing import Any
 import structlog
 
 from infrastructure.mcp.config import MCPServerConfig, MCPConfigLoader
+from shared.exceptions.tool_errors import ToolNotFoundError
 
 logger = structlog.get_logger(__name__)
 
@@ -319,6 +323,47 @@ class MCPClientManager:
             True if initialization completed successfully.
         """
         return self._initialized
+
+    async def call_tool(self, tool_name: str, arguments: dict) -> Any:
+        """Call an MCP tool by namespaced name.
+
+        Phase 2B: Implements tool execution via MCP.
+
+        Args:
+            tool_name: Namespaced tool name (e.g., 'filesystem/read_file').
+            arguments: Tool input arguments.
+
+        Returns:
+            Tool result from the MCP server.
+
+        Raises:
+            ToolNotFoundError: If tool doesn't exist.
+            RuntimeError: If MCP manager is not initialized.
+            Exception: Any error from the MCP server.
+        """
+        if not self._initialized:
+            raise RuntimeError("MCP manager not initialized")
+
+        tool_info = self._global_tools.get(tool_name)
+        if not tool_info:
+            raise ToolNotFoundError(f"Tool not found: {tool_name}")
+
+        server_name = tool_info["server"]
+        original_name = tool_info["original_name"]
+
+        server = self._servers.get(server_name)
+        if not server or not server.session:
+            raise RuntimeError(f"Server not connected: {server_name}")
+
+        logger.debug(
+            "Calling MCP tool",
+            tool_name=tool_name,
+            original_name=original_name,
+            server=server_name,
+        )
+
+        result = await server.session.call_tool(original_name, arguments)
+        return result
 
     async def shutdown(self) -> None:
         """Gracefully shut down all MCP servers.
