@@ -80,3 +80,4 @@ ignore_missing_imports = true
 testpaths = ["tests"]
 pythonpath = ["src", "."]
 asyncio_mode = "auto"
+addopts = "-v"
