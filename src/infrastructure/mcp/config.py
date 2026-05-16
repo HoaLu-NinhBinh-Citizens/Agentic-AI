@@ -6,6 +6,7 @@ Phase 2A loads server configurations from YAML and validates them using Pydantic
 from __future__ import annotations
 
 import logging
+import os
 from pathlib import Path
 from typing import List
 
@@ -69,7 +70,7 @@ class MCPConfigLoader:
             MCPServerConfig(
                 name="filesystem",
                 command="npx",
-                args=["-y", "@modelcontextprotocol/server-filesystem", "/tmp"],
+                args=["-y", "@modelcontextprotocol/server-filesystem", str(Path.home())],
                 enabled=True,
             )
         ]

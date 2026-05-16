@@ -23,7 +23,7 @@ Phase 1B extends the Phase 1A minimal viable runtime with reliability and resour
 |------|---------|------|
 | `token` | `{"content": "H", "is_last": false}` | Each chunk of response |
 | `done` | `{"success": true}` | After all tokens sent |
-| `error` | `{"code": "BUSY\|RATE_LIMITED\|TIMEOUT", "message": "..."}` | On failure |
+| `error` | `{"code": "BUSY|RATE_LIMITED|TIMEOUT", "message": "..."}` | On failure |
 | `cancelled` | `{}` | When stream is cancelled |
 | `ping` | `{}` | Heartbeat (every 30s) |
 | `pong` | `{}` | Client response to ping |
@@ -79,7 +79,6 @@ src/
 │   │   ├── session_manager.py      # Phase 1A in-memory manager (kept for compatibility)
 │   │   └── persistent_manager.py   # Phase 1B persistent session manager
 │   ├── runtime/
-│   │   ├── __init__.py            # Phase 1B RuntimeManager + lazy load Phase 15
 │   │   └── runtime_manager.py     # Stream cancellation and timeout
 │   └── rate_limiter.py            # Sliding window rate limiter
 ├── infrastructure/
@@ -179,7 +178,7 @@ src/
 ### Start the Server
 
 ```bash
-uvicorn src.interfaces.server.main:app --reload
+python -m uvicorn interfaces.server.main:app --reload
 ```
 
 ### Environment Variables
@@ -203,6 +202,7 @@ python -m pytest \
   tests/unit/test_connection_manager.py \
   tests/unit/test_runtime_manager.py \
   tests/unit/test_persistent_session_manager.py \
+  tests/unit/test_session_manager.py \
   tests/integration/test_phase1b_features.py \
   -v
 ```
@@ -230,6 +230,7 @@ python -m pytest \
   tests/unit/test_connection_manager.py \
   tests/unit/test_runtime_manager.py \
   tests/unit/test_persistent_session_manager.py \
+  tests/unit/test_session_manager.py \
   tests/integration/test_phase1b_features.py \
   --cov=src \
   --cov-report=term-missing
@@ -239,16 +240,15 @@ python -m pytest \
 
 | File | Description |
 |------|-------------|
-| `tests/unit/test_session_store.py` | SQLite store operations (8 tests) |
-| `tests/unit/test_rate_limiter.py` | Sliding window rate limiter (6 tests) |
-| `tests/unit/test_websocket_client.py` | WebSocketClient heartbeat/backpressure (7 tests) |
-| `tests/unit/test_mock_agent.py` | MockAgent streaming (6 tests) |
-| `tests/unit/test_connection_manager.py` | ConnectionManager (12 tests) |
-| `tests/unit/test_runtime_manager.py` | RuntimeManager cancellation/timeout (15 tests) |
-| `tests/unit/test_persistent_session_manager.py` | PersistentSessionManager (8 tests) |
-| `tests/integration/test_phase1b_features.py` | Integration tests (10 tests) |
-
-**Total: 71 tests passing**
+| `tests/unit/test_session_store.py` | SQLite store operations |
+| `tests/unit/test_rate_limiter.py` | Sliding window rate limiter |
+| `tests/unit/test_websocket_client.py` | WebSocketClient heartbeat/backpressure |
+| `tests/unit/test_mock_agent.py` | MockAgent streaming |
+| `tests/unit/test_connection_manager.py` | ConnectionManager |
+| `tests/unit/test_runtime_manager.py` | RuntimeManager cancellation/timeout |
+| `tests/unit/test_persistent_session_manager.py` | PersistentSessionManager |
+| `tests/unit/test_session_manager.py` | SessionManager (Phase 1A compatibility) |
+| `tests/integration/test_phase1b_features.py` | Integration tests |
 
 ## Definition of Done
 
@@ -275,10 +275,9 @@ python -m pytest \
 | Task orchestration | DAG engine, multi-agent |
 | Advanced features | Supervisor framework |
 
-## Next Phase (Phase 2 - Explicitly NOT in Phase 1B)
+## Next Phase (Phase 2A - Explicitly NOT in Phase 1B)
 
+- MCP protocol support for tool discovery
+- Integration with external MCP servers (filesystem, browser)
+- Real agent with LLM integration (future phases)
 - Conversation history persistence
-- Real agent with LLM integration
-- Tool calling infrastructure
-- Workspace context management
-- Basic MCP protocol support

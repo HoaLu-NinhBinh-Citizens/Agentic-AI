@@ -3,12 +3,13 @@
 
 servers:
   # Filesystem server - provides file system operations
+  # Note: On Windows, use a valid Windows path like %TEMP% or an absolute path
   - name: "filesystem"
     command: "npx"
     args:
       - "-y"
       - "@modelcontextprotocol/server-filesystem"
-      - "/tmp"
+      - "C:\\Users\\thang\\Desktop"
     transport: "stdio"
     enabled: true
 

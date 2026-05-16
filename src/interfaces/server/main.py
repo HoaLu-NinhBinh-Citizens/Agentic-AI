@@ -1,4 +1,4 @@
-"""FastAPI server for Phase 1B.
+"""FastAPI server for Phase 2A.
 
 Runtime with reliability and resource protection:
 - Sessions persist across restarts (SQLite)
@@ -7,14 +7,22 @@ Runtime with reliability and resource protection:
 - Request timeout (30s)
 - Token-level backpressure (per WebSocket queue)
 - Basic rate limiting (per session)
+- MCP connectivity and tool discovery
 """
 
 from __future__ import annotations
 
 import logging
 import os
+import sys
 from contextlib import asynccontextmanager
+from pathlib import Path
 from typing import Any
+
+# Add src/ to path so 'from core.', 'from infrastructure.' etc. work
+_SRC_DIR = Path(__file__).parent.parent.parent
+if str(_SRC_DIR) not in sys.path:
+    sys.path.insert(0, str(_SRC_DIR))
 
 from fastapi import FastAPI, HTTPException, WebSocket, WebSocketDisconnect, status
 from fastapi.middleware.cors import CORSMiddleware

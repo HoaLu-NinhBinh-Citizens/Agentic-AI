@@ -59,7 +59,13 @@ Only THREE event types:
 ### Start the Server
 
 ```bash
-uvicorn src.interfaces.server.main:app --reload
+python -m uvicorn interfaces.server.main:app --reload
+```
+
+Or from the src directory:
+
+```bash
+cd src && python -m uvicorn interfaces.server.main:app --reload
 ```
 
 ### Environment Variables
@@ -97,7 +103,7 @@ curl -X POST http://localhost:8000/sessions -H "Content-Type: application/json" 
 
 ```bash
 curl http://localhost:8000/sessions/{session_id}
-# Response: {"id": "...", "created_at": "...", "workspace": null, "status": "active"}
+# Response: {"id": "...", "created_at": "...", "workspace": null, "state": "active"}
 ```
 
 ### Delete Session
@@ -162,14 +168,15 @@ If `send_json` raises an exception (e.g., WebSocket disconnected):
 src/
 ├── core/
 │   ├── agent/
-│   │   └── mock_agent.py       # Mock agent for streaming responses
+│   │   └── mock_agent.py           # Mock agent for streaming responses
 │   └── session/
-│       └── session_manager.py    # In-memory session management
+│       └── session_manager.py       # In-memory session management
 └── interfaces/
     └── server/
-        ├── main.py              # FastAPI server
+        ├── main.py                 # FastAPI server
         └── websocket/
-            └── manager.py       # WebSocket connection manager
+            ├── client.py           # WebSocket client wrapper
+            └── manager.py         # WebSocket connection manager
 ```
 
 ## Non-Goals (Explicitly Excluded)

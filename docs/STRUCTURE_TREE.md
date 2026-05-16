@@ -66,6 +66,7 @@ src/
 │   │       └── tracing.py
 │   │
 │   ├── runtime/
+│   │   ├── __init__.py           # Phase 1B RuntimeManager + lazy load Phase 15
 │   │   ├── runtime_manager.py
 │   │   ├── dispatcher.py
 │   │   ├── scheduler.py
@@ -91,10 +92,11 @@ src/
 │   │   └── ownership.py
 │   │
 │   ├── session/
-│   │   ├── session_manager.py
+│   │   ├── session_manager.py      # Phase 1A in-memory manager
 │   │   ├── session_state.py
 │   │   ├── lifecycle.py
-│   │   └── session_store.py
+│   │   ├── session_store.py
+│   │   └── persistent_manager.py   # Phase 1B SQLite-backed manager
 │   │
 │   ├── checkpoint/
 │   │   ├── checkpoint_manager.py
@@ -266,6 +268,8 @@ src/
 │   │   └── isolation.py
 │   │
 │   ├── mcp/
+│   │   ├── manager.py             # MCPClientManager (Phase 2A)
+│   │   ├── config.py             # MCPConfigLoader & MCPServerConfig
 │   │   ├── client/
 │   │   ├── server/
 │   │   └── transports/
@@ -312,6 +316,8 @@ src/
 │   │
 │   ├── persistence/
 │   │   ├── sqlite/
+│   │   │   ├── schema.sql         # Session persistence schema
+│   │   │   └── session_store.py   # SQLite session store implementation
 │   │   ├── postgres/
 │   │   ├── checkpoints/
 │   │   ├── conversations/
@@ -396,18 +402,21 @@ pytest test suite.
 tests/
 ├── conftest.py
 ├── unit/
-│   ├── core/
-│   ├── domain/
-│   ├── application/
-│   ├── infrastructure/
-│   └── interfaces/
+│   ├── test_session_store.py
+│   ├── test_rate_limiter.py
+│   ├── test_websocket_client.py
+│   ├── test_mock_agent.py
+│   ├── test_connection_manager.py
+│   ├── test_runtime_manager.py
+│   ├── test_persistent_session_manager.py
+│   ├── test_session_manager.py
+│   ├── test_mcp_config.py
+│   └── test_mcp_manager.py
 ├── integration/
-│   ├── llm/
-│   ├── mcp/
-│   ├── websocket/
-│   ├── filesystem/
-│   ├── pty/
-│   └── workspace/
+│   ├── test_phase1b_features.py
+│   ├── test_mcp_phase2a.py
+│   ├── test_session_lifecycle.py
+│   └── test_websocket_chat.py
 ├── e2e/
 ├── performance/
 ├── fixtures/
@@ -427,6 +436,8 @@ docs/
 ├── api/
 ├── adr/
 ├── phase1a.md
+├── phase1b.md
+├── phase2a.md
 └── STRUCTURE_TREE.md
 ```
 
@@ -466,6 +477,8 @@ Configuration files.
 configs/
 ├── runtime/
 ├── llm/
+├── mcp/
+│   └── servers.yaml           # MCP server configurations (Phase 2A)
 ├── security/
 ├── observability/
 ├── policies/

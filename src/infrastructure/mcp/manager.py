@@ -33,6 +33,7 @@ class ConnectedServer:
         read_stream: Input stream from server.
         write_stream: Output stream to server.
         tools: List of tool definitions discovered from this server.
+        stdio_context: The stdio context manager for cleanup.
     """
 
     name: str
@@ -42,6 +43,7 @@ class ConnectedServer:
     read_stream: Any
     write_stream: Any
     tools: list[dict] = field(default_factory=list)
+    stdio_context: Any = None
 
 
 class ToolInfo(dict):
@@ -82,7 +84,7 @@ class MCPClientManager:
         config_path: Path to servers.yaml configuration file.
     """
 
-    INITIALIZE_TIMEOUT = 30.0
+    INITIALIZE_TIMEOUT = 60.0
     LIST_TOOLS_TIMEOUT = 30.0
 
     def __init__(self, config_path: str = "configs/mcp/servers.yaml") -> None:
@@ -222,6 +224,7 @@ class MCPClientManager:
                 read_stream=read_stream,
                 write_stream=write_stream,
                 tools=tools,
+                stdio_context=stdio_context,
             )
 
             logger.info(
@@ -273,16 +276,22 @@ class MCPClientManager:
 
         Args:
             name: Server name.
-            session: MCP session to close.
+            session: MCP session (unused, kept for compatibility).
             read_stream: Input stream to close.
             write_stream: Output stream to close.
             stdio_context: The async context manager to exit.
         """
         try:
-            if session is not None:
-                await session.close()
-        except Exception as e:
-            logger.debug("Error closing session", server=name, error=str(e))
+            if write_stream is not None:
+                await write_stream.aclose()
+        except Exception:
+            pass
+
+        try:
+            if read_stream is not None:
+                await read_stream.aclose()
+        except Exception:
+            pass
 
         try:
             if stdio_context is not None:
@@ -324,11 +333,27 @@ class MCPClientManager:
 
         for name, server in list(self._servers.items()):
             try:
-                await server.session.close()
-                logger.debug("Closed MCP session", server=name)
+                # Close write stream first, then read stream
+                if server.write_stream is not None:
+                    try:
+                        await server.write_stream.aclose()
+                    except Exception:
+                        pass
+                if server.read_stream is not None:
+                    try:
+                        await server.read_stream.aclose()
+                    except Exception:
+                        pass
+                # Exit the stdio context manager to terminate the subprocess
+                if server.stdio_context is not None:
+                    try:
+                        await server.stdio_context.__aexit__(None, None, None)
+                    except Exception:
+                        pass
+                logger.debug("Closed MCP server", server=name)
             except Exception as e:
-                logger.error(
-                    "Error closing MCP session",
+                logger.debug(
+                    "Error closing MCP server",
                     server=name,
                     error=str(e),
                 )

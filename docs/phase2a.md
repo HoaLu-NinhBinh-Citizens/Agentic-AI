@@ -1,213 +1,221 @@
-# Phase 2A: MCP Connectivity & Discovery
+# Phase 2A: MCP Integration
 
 ## Overview
 
-Phase 2A transforms AI_support into an MCP-aware runtime by implementing the foundational MCP connectivity layer. This phase establishes infrastructure connectivity only - no tool execution or runtime orchestration is included.
+Phase 2A adds MCP (Model Context Protocol) connectivity to the runtime. The server can now connect to external MCP servers via stdio transport, discover their tools, and make them available for use by the agent.
 
 ## Technology Stack
 
 | Component | Technology |
 |-----------|------------|
-| MCP SDK | `mcp>=1.0.0` |
-| Configuration | PyYAML + Pydantic validation |
-| Async runtime | asyncio |
-| Logging | structlog |
+| MCP Client | `mcp` Python SDK |
+| Transport | stdio (subprocess-based) |
+| Configuration | YAML + Pydantic validation |
+| Tool Registry | In-memory dictionary with namespacing |
 
 ## Architecture
 
 ```
 src/
+├── core/
+│   ├── agent/
+│   │   └── mock_agent.py           # Mock agent with cancellation support
+│   ├── session/
+│   │   ├── session_manager.py      # Phase 1A in-memory manager
+│   │   └── persistent_manager.py   # Phase 1B persistent session manager
+│   ├── runtime/
+│   │   ├── __init__.py           # Phase 1B RuntimeManager + lazy load Phase 15
+│   │   └── runtime_manager.py     # Stream cancellation and timeout
+│   └── rate_limiter.py            # Sliding window rate limiter
 ├── infrastructure/
-│   └── mcp/
-│       ├── __init__.py     # Public exports
-│       ├── config.py       # Configuration models & loader
-│       └── manager.py      # MCP client lifecycle manager
-└── interfaces/
-    └── server/
-        └── main.py         # FastAPI lifespan integration
+│   ├── mcp/
+│   │   ├── manager.py            # MCPClientManager for server lifecycle
+│   │   └── config.py             # MCPConfigLoader and MCPServerConfig
+│   └── persistence/
+│       └── sqlite/
+│           ├── schema.sql          # Database schema
+│           └── session_store.py    # SQLite session store
+├── interfaces/
+│   └── server/
+│       ├── main.py               # FastAPI server (Phase 2A)
+│       └── websocket/
+│           ├── client.py          # WebSocketClient with heartbeat/backpressure
+│           └── manager.py          # Connection manager
+└── runtime/                      # Stub for backward compatibility
+    └── __init__.py                # Redirects to core.runtime
 ```
 
-## Components
+## MCP Configuration
 
-### 1. MCP Configuration (`config.py`)
+### Configuration File
 
-#### MCPServerConfig
-
-```python
-from infrastructure.mcp.config import MCPServerConfig
-
-config = MCPServerConfig(
-    name="filesystem",          # Unique identifier (lowercase, alphanumeric + underscore)
-    command="npx",               # Executable command
-    args=["-y", "@modelcontextprotocol/server-filesystem", "/tmp"],
-    transport="stdio",          # Only stdio supported in Phase 2A
-    enabled=True,               # Whether to start on initialization
-)
-```
-
-#### MCPConfigLoader
-
-Loads configuration from YAML with fallback to defaults:
-
-```python
-from infrastructure.mcp.config import MCPConfigLoader
-
-loader = MCPConfigLoader("configs/mcp/servers.yaml")
-config = loader.load()
-```
-
-### 2. MCP Client Manager (`manager.py`)
-
-Manages MCP server lifecycle and tool registry:
-
-```python
-from infrastructure.mcp.manager import MCPClientManager
-
-manager = MCPClientManager(config_path="configs/mcp/servers.yaml")
-await manager.initialize()
-
-# List discovered tools
-tools = await manager.list_tools()
-# {'filesystem/read_file': ToolInfo(...), 'filesystem/write_file': ToolInfo(...)}
-
-# Check readiness
-if manager.is_ready():
-    print(f"Connected to {len(manager._servers)} servers")
-    print(f"Total tools: {len(tools)}")
-
-# Graceful shutdown
-await manager.shutdown()
-```
-
-#### Tool Registry Format
-
-Tools are namespaced as `{server_name}/{tool_name}`:
-
-```python
-ToolInfo(
-    server="filesystem",
-    original_name="read_file",
-    definition={
-        "name": "read_file",
-        "description": "Read a file from the filesystem",
-        "inputSchema": {...}
-    }
-)
-```
-
-#### ConnectedServer Structure
-
-```python
-@dataclass
-class ConnectedServer:
-    name: str                          # Server name from config
-    config: MCPServerConfig            # Original configuration
-    process: asyncio.subprocess.Process # Spawned subprocess (None for stdio)
-    session: ClientSession             # MCP session
-    read_stream: Any                   # Input stream
-    write_stream: Any                  # Output stream
-    tools: list[dict]                   # Discovered tool definitions
-```
-
-## Configuration File
-
-**File:** `configs/mcp/servers.yaml`
+File: `configs/mcp/servers.yaml`
 
 ```yaml
 servers:
-  - name: "filesystem"
-    command: "npx"
+  - name: filesystem
+    command: npx
     args:
       - "-y"
       - "@modelcontextprotocol/server-filesystem"
-      - "/tmp"
-    transport: "stdio"
+      - "C:\\Users\\thang\\Desktop"
+    transport: stdio
     enabled: true
-
-  - name: "git"
-    command: "uvx"
-    args:
-      - "mcp-server-git"
-    transport: "stdio"
-    enabled: false
-
-  - name: "terminal"
-    command: "python"
-    args:
-      - "-m"
-      - "mcp_server_terminal"
-    transport: "stdio"
-    enabled: false
 ```
 
-### Adding a New MCP Server
+### MCPServerConfig Schema
 
-1. Add server configuration to `configs/mcp/servers.yaml`:
+| Field | Type | Required | Description |
+|-------|------|---------|-------------|
+| `name` | string | Yes | Unique server name (lowercase, alphanumeric + underscore) |
+| `command` | string | Yes | Executable (e.g., `npx`, `uvx`, `python`) |
+| `args` | list[string] | No | Command-line arguments |
+| `transport` | string | No | Only `stdio` supported (default: `stdio`) |
+| `enabled` | boolean | No | Whether to start this server (default: `true`) |
+
+## Key Components
+
+### MCPClientManager
+
+`src/infrastructure/mcp/manager.py`
+
+Responsibilities:
+- Load MCP server configurations from YAML
+- Spawn enabled servers as stdio subprocesses
+- Perform MCP initialization handshake
+- Discover tools from each server
+- Build global namespaced tool registry
+- Graceful shutdown of all servers
+
+#### Initialization Flow
+
+```
+1. Load configuration from servers.yaml
+2. Filter enabled servers
+3. For each server:
+   a. Spawn subprocess with stdio transport
+   b. Create MCP ClientSession
+   c. Perform initialize handshake (60s timeout)
+   d. List tools (30s timeout)
+   e. Normalize tool names and namespace
+   f. Add to global registry
+4. Mark initialization complete
+```
+
+#### Tool Naming
+
+Tools are namespaced by server name to avoid collisions:
+
+```
+server_name/tool_name
+```
+
+Example:
+```
+filesystem/read_file
+filesystem/write_file
+browser/navigate
+```
+
+### MCPConfigLoader
+
+`src/infrastructure/mcp/config.py`
+
+Loads and validates MCP server configurations from YAML files.
+
+### Default Configuration
+
+If no `configs/mcp/servers.yaml` exists, the following default is used:
 
 ```yaml
 servers:
-  - name: "my_server"
-    command: "python"
+  - name: filesystem
+    command: npx
     args:
-      - "-m"
-      - "my_mcp_server"
-    transport: "stdio"
+      - "-y"
+      - "@modelcontextprotocol/server-filesystem"
+      - "C:\\Users\\thang\\Desktop"
+    transport: stdio
     enabled: true
 ```
 
-2. Ensure the server implements MCP protocol (stdio transport)
-3. Restart the server - the new server will be automatically discovered
+## Server Lifecycle
 
-## Startup Lifecycle
+### Startup
 
-1. **Load Configuration** - Parse `configs/mcp/servers.yaml`
-2. **Filter Enabled** - Select only `enabled: true` servers
-3. **Spawn Servers** - For each server:
-   - Spawn subprocess with stdio transport
-   - Create MCP session
-   - Perform initialize handshake (30s timeout)
-   - Discover tools (30s timeout)
-   - Normalize tool names (replace `/` and `-` with `_`)
-   - Namespace tools as `{server_name}/{tool_name}`
-4. **Build Registry** - Populate global tool registry
-5. **Mark Ready** - Set `_initialized = True`
+1. Create `MCPClientManager` with config path
+2. Call `await mcp_manager.initialize()`
+3. If no servers can start, log warning and continue (server still runs)
+4. MCP manager is attached to `app.state.mcp_manager`
 
-## Shutdown Lifecycle
+### Shutdown
 
-1. Close all MCP sessions
-2. Clear server registry
-3. Clear tool registry
-4. Mark as uninitialized
+1. Call `await mcp_manager.shutdown()`
+2. Close all write streams
+3. Close all read streams
+4. Exit stdio context managers (terminates subprocesses)
+5. Clear registries
 
 ## Error Handling
 
 | Error | Behavior |
 |-------|----------|
-| Config file missing | Load default config (filesystem only) |
-| Invalid YAML | Raise `RuntimeError` |
-| Invalid transport | Pydantic validation error |
-| Command spawn failure | Log error, skip server, continue with others |
-| Initialize timeout (30s) | Log error, cleanup, skip server |
-| list_tools timeout (30s) | Log error, cleanup, skip server |
-| Empty tools list | Log info, keep server connected |
-| Process exits early | Log error, skip server |
+| Config file not found | Use default configuration |
+| YAML parse error | Raise RuntimeError |
+| Command not found | Log error, skip server |
+| Initialization timeout | Log error, skip server |
+| Tool listing timeout | Log error, skip server |
+| Tool name collision | Keep first, warn about duplicate |
 
-## Testing
+### Timeout Values
 
-### Mock MCP Server
+| Operation | Timeout |
+|-----------|---------|
+| MCP initialization handshake | 60 seconds |
+| List tools | 30 seconds |
+| Tool execution | Not implemented (Phase 2A) |
 
-Located at `tests/mocks/mock_mcp_server.py`. Provides deterministic tools:
+## Limitations (Phase 2A)
 
-- `echo` - Echoes input message
-- `add` - Adds two numbers
-- `sleep` - Sleeps for N seconds (for timeout testing)
+| Feature | Status |
+|---------|--------|
+| stdio transport | ✅ Supported |
+| Tool discovery | ✅ Supported |
+| Tool execution (call_tool) | ❌ Not implemented |
+| Tool result handling | ❌ Not implemented |
+| Server-to-server communication | ❌ Not implemented |
+| Streaming tools | ❌ Not implemented |
+| Resource subscriptions | ❌ Not implemented |
 
-### Run Unit Tests
+## How to Run
+
+### Start the Server
 
 ```bash
-python -m pytest tests/unit/test_mcp_config.py -v
-python -m pytest tests/unit/test_mcp_manager.py -v
+python -m uvicorn interfaces.server.main:app --reload
 ```
+
+Or run directly:
+
+```bash
+python -m interfaces.server.main
+```
+
+### Verify MCP Status
+
+Check server logs for MCP initialization:
+
+```
+INFO: MCP client manager initialized, servers=1, total_tools=5
+```
+
+Or check the warning if MCP fails:
+
+```
+WARNING: MCP initialization failed: No MCP servers could be started. Check that required commands (npx, uvx) are installed.
+```
+
+## Testing
 
 ### Run All Phase 2A Tests
 
@@ -215,138 +223,54 @@ python -m pytest tests/unit/test_mcp_manager.py -v
 python -m pytest \
   tests/unit/test_mcp_config.py \
   tests/unit/test_mcp_manager.py \
+  tests/integration/test_mcp_phase2a.py \
   -v
 ```
 
-### Run with Coverage
+### Run MCP Manager Tests Only
 
 ```bash
-python -m pytest \
-  tests/unit/test_mcp_config.py \
-  tests/unit/test_mcp_manager.py \
-  --cov=src.infrastructure.mcp \
-  --cov-report=term-missing
+python -m pytest tests/unit/test_mcp_manager.py -v
 ```
 
-## Integration
+### Run MCP Config Tests Only
 
-### FastAPI Lifespan
-
-MCP manager is integrated into the FastAPI lifespan:
-
-```python
-async with lifespan(app):
-    mcp_manager = MCPClientManager()
-    await mcp_manager.initialize()
-    app.state.mcp_manager = mcp_manager
-    yield
-    await mcp_manager.shutdown()
-```
-
-### Accessing MCP Manager
-
-```python
-from fastapi import FastAPI
-
-app = FastAPI()
-
-@app.get("/tools")
-async def list_mcp_tools():
-    mcp_manager = app.state.mcp_manager
-    if mcp_manager is None:
-        return {"tools": [], "message": "MCP not initialized"}
-    tools = await mcp_manager.list_tools()
-    return {"tools": list(tools.keys()), "count": len(tools)}
-```
-
-## Troubleshooting
-
-### Command Not Found
-
-```
-Error: No MCP servers could be started
-```
-
-**Cause:** Required command (npx, uvx) not installed.
-
-**Solution:**
 ```bash
-# For npx-based servers
-npm install -g npx
-
-# For uvx-based servers
-pip install uv
+python -m pytest tests/unit/test_mcp_config.py -v
 ```
 
-### Timeout Errors
+### Run Integration Tests
 
-```
-Error: MCP server initialization timed out
-```
-
-**Cause:** Server is slow to respond or hangs.
-
-**Solution:** Check server logs, increase timeout in `manager.py`:
-```python
-INITIALIZE_TIMEOUT = 30.0  # Increase if needed
-LIST_TOOLS_TIMEOUT = 30.0
+```bash
+python -m pytest tests/integration/test_mcp_phase2a.py -v
 ```
 
-### Empty Tool Registry
+## Test Files
 
-**Cause:** Server connected but returned no tools.
-
-**Solution:** Check that the MCP server implements `list_tools` correctly.
-
-## Non-Goals (Phase 2A)
-
-| Category | What NOT implemented |
-|----------|---------------------|
-| Tool execution | No `call_tool()`, no invocation |
-| Runtime orchestration | No per-session tool registries |
-| Reliability | No retries, auto-restart, recovery |
-| Runtime controls | No cancellation, timeouts, rate limiting |
-| WebSocket integration | No tool_call messages |
-| Persistence | No database storage |
-| Remote transports | Only stdio, no HTTP/SSE/WebSocket |
+| File | Description |
+|------|-------------|
+| `tests/unit/test_mcp_config.py` | MCPConfigLoader and MCPServerConfig tests |
+| `tests/unit/test_mcp_manager.py` | MCPClientManager lifecycle tests |
+| `tests/integration/test_mcp_phase2a.py` | Full MCP integration tests |
 
 ## Definition of Done
 
-- [x] MCPConfigLoader loads and validates servers.yaml (default config works)
-- [x] MCPClientManager spawns each enabled server as a subprocess via stdio
-- [x] MCP handshake (initialize) completes successfully (30s timeout)
-- [x] list_tools() discovers tools from each server; empty tool list handled gracefully
-- [x] Tools are namespaced (server_name/tool_name) and normalized (no `/` in tool name)
-- [x] Global tool registry built correctly; duplicate namespaced tools log warning
-- [x] is_ready() returns True only after successful initialization of at least one server
-- [x] shutdown() closes all sessions, terminates processes, never raises
-- [x] FastAPI lifespan integrates manager (startup & shutdown)
-- [x] All unit tests pass (including mock MCP server tests)
-- [x] Integration test verifies manager accessible via app.state
-- [x] Code coverage for new code ≥ 80%
-- [x] No regression of Phase 1B features
+- [x] Server loads MCP configuration from YAML
+- [x] Servers spawn as stdio subprocesses
+- [x] Initialization handshake completes successfully
+- [x] Tools are discovered and namespaced correctly
+- [x] Timeout handling works for slow servers
+- [x] Graceful shutdown closes all servers
+- [x] Server runs even if MCP fails to initialize
+- [x] All tests pass
 - [x] Documentation complete
 
-## Next Phase (Phase 2B)
+## Next Phase (Phase 2B - Explicitly NOT in Phase 2A)
 
-- Tool execution infrastructure
-- Per-session tool registries
-- Streaming responses
-- Error handling for tool calls
-
----
-
-## Phase 2A Files Summary
-
-| File | Description | Lines |
-|------|-------------|-------|
-| `pyproject.toml` | Added mcp, pyyaml dependencies | - |
-| `configs/mcp/servers.yaml` | MCP server configuration | 26 |
-| `src/infrastructure/mcp/__init__.py` | Public exports | 20 |
-| `src/infrastructure/mcp/config.py` | Config models & loader | 102 |
-| `src/infrastructure/mcp/manager.py` | Client manager | 219 |
-| `tests/mocks/mock_mcp_server.py` | Mock MCP server | 67 |
-| `tests/unit/test_mcp_config.py` | Config unit tests | 138 |
-| `tests/unit/test_mcp_manager.py` | Manager unit tests | 265 |
-| `src/interfaces/server/main.py` | FastAPI integration | +30 |
-| `docs/phase2a.md` | Documentation | This file |
+- Tool execution (call_tool support)
+- Tool result streaming
+- Server-to-server communication
+- Multiple transport support (sse, http)
+- MCP resource management
+- MCP prompt templates
+- Real agent with LLM integration
