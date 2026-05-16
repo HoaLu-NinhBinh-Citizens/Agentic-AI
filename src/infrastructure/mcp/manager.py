@@ -1,0 +1,340 @@
+"""MCP Client Manager for spawning and managing MCP server subprocesses.
+
+Phase 2A provides:
+- Spawning MCP servers via stdio subprocesses
+- MCP session initialization handshake
+- Tool discovery from connected servers
+- Global namespaced tool registry
+"""
+
+from __future__ import annotations
+
+import asyncio
+import logging
+from dataclasses import dataclass, field
+from typing import Any
+
+import structlog
+
+from infrastructure.mcp.config import MCPServerConfig, MCPConfigLoader
+
+logger = structlog.get_logger(__name__)
+
+
+@dataclass
+class ConnectedServer:
+    """Represents a connected MCP server.
+
+    Attributes:
+        name: Server name from configuration.
+        config: Original server configuration.
+        process: The spawned subprocess.
+        session: MCP ClientSession for communication.
+        read_stream: Input stream from server.
+        write_stream: Output stream to server.
+        tools: List of tool definitions discovered from this server.
+    """
+
+    name: str
+    config: MCPServerConfig
+    process: asyncio.subprocess.Process
+    session: Any
+    read_stream: Any
+    write_stream: Any
+    tools: list[dict] = field(default_factory=list)
+
+
+class ToolInfo(dict):
+    """Tool information with metadata.
+
+    Keys:
+        server: Name of the server providing this tool.
+        original_name: Original tool name from the server.
+        definition: Full tool definition dictionary.
+    """
+
+    def __init__(self, server: str, original_name: str, definition: dict) -> None:
+        super().__init__(
+            server=server,
+            original_name=original_name,
+            definition=definition,
+        )
+
+
+class MCPClientManager:
+    """Manages MCP server lifecycle and tool registry.
+
+    Responsibilities:
+    - Load MCP server configurations
+    - Spawn enabled servers as stdio subprocesses
+    - Perform MCP initialization handshake
+    - Discover tools from each server
+    - Build global namespaced tool registry
+    - Graceful shutdown of all servers
+
+    Phase 2A Scope:
+    - Only stdio transport supported
+    - No tool execution (call_tool)
+    - No retries or recovery
+    - In-memory tool registry only
+
+    Attributes:
+        config_path: Path to servers.yaml configuration file.
+    """
+
+    INITIALIZE_TIMEOUT = 30.0
+    LIST_TOOLS_TIMEOUT = 30.0
+
+    def __init__(self, config_path: str = "configs/mcp/servers.yaml") -> None:
+        """Initialize the MCP client manager.
+
+        Args:
+            config_path: Path to the MCP servers configuration file.
+        """
+        self._config_path = config_path
+        self._config_loader = MCPConfigLoader(config_path)
+        self._servers: dict[str, ConnectedServer] = {}
+        self._global_tools: dict[str, ToolInfo] = {}
+        self._initialized = False
+
+    async def initialize(self) -> None:
+        """Initialize all enabled MCP servers.
+
+        Loads configuration, spawns servers, performs handshake,
+        discovers tools, and builds the global tool registry.
+
+        Raises:
+            RuntimeError: If called more than once, or if no server can be started.
+        """
+        if self._initialized:
+            logger.warning("MCPClientManager already initialized, skipping")
+            return
+
+        logger.info("Initializing MCP client manager")
+        config = self._config_loader.load()
+        enabled_servers = [s for s in config.servers if s.enabled]
+
+        if not enabled_servers:
+            logger.info("No enabled MCP servers in configuration")
+            self._initialized = True
+            return
+
+        for server_config in enabled_servers:
+            await self._start_server(server_config)
+
+        if not self._servers:
+            raise RuntimeError(
+                "No MCP servers could be started. "
+                "Check that required commands (npx, uvx) are installed."
+            )
+
+        self._initialized = True
+        logger.info(
+            "MCP client manager initialized",
+            servers_count=len(self._servers),
+            total_tools=len(self._global_tools),
+        )
+
+    async def _start_server(self, config: MCPServerConfig) -> None:
+        """Start a single MCP server.
+
+        Steps:
+        1. Spawn subprocess with stdio transport
+        2. Create MCP session
+        3. Perform initialize handshake (30s timeout)
+        4. Discover tools (30s timeout)
+        5. Normalize and namespace tool names
+        6. Add to global registry
+
+        Args:
+            config: Server configuration.
+        """
+        name = config.name
+        command = config.command
+
+        logger.info(
+            "Starting MCP server",
+            server=name,
+            command=command,
+            args=config.args,
+        )
+
+        read_stream = None
+        write_stream = None
+        session = None
+        stdio_context = None
+
+        try:
+            # Step 1: Import MCP SDK and spawn subprocess
+            from mcp import ClientSession
+            from mcp.client.stdio import stdio_client, StdioServerParameters
+
+            params = StdioServerParameters(command=config.command, args=config.args)
+
+            # Enter async context manager to get streams
+            stdio_context = stdio_client(params)
+            read_stream, write_stream = await stdio_context.__aenter__()
+
+            # Create and initialize session
+            session = ClientSession(read_stream, write_stream)
+
+            # Step 2: Initialize handshake with timeout
+            await asyncio.wait_for(session.initialize(), timeout=self.INITIALIZE_TIMEOUT)
+            logger.info("MCP server handshake complete", server=name)
+
+            # Step 3: Discover tools with timeout
+            result = await asyncio.wait_for(session.list_tools(), timeout=self.LIST_TOOLS_TIMEOUT)
+            tools = [tool.model_dump() for tool in result.tools]
+            logger.info(
+                "Discovered tools from MCP server",
+                server=name,
+                tools_count=len(tools),
+            )
+
+            # Step 4: Normalize and namespace tools
+            for tool_def in tools:
+                original_name = tool_def.get("name", "")
+                # Replace / and - with _ to avoid namespace issues
+                normalized_name = original_name.replace("/", "_").replace("-", "_")
+                namespaced_name = f"{name}/{normalized_name}"
+
+                if namespaced_name in self._global_tools:
+                    logger.warning(
+                        "Tool name collision, keeping first",
+                        server=name,
+                        tool=namespaced_name,
+                        existing_server=self._global_tools[namespaced_name]["server"],
+                    )
+                    continue
+
+                self._global_tools[namespaced_name] = ToolInfo(
+                    server=name,
+                    original_name=original_name,
+                    definition=tool_def,
+                )
+
+            # Step 5: Store connected server (keep context manager open)
+            self._servers[name] = ConnectedServer(
+                name=name,
+                config=config,
+                process=None,
+                session=session,
+                read_stream=read_stream,
+                write_stream=write_stream,
+                tools=tools,
+            )
+
+            logger.info(
+                "MCP server started successfully",
+                server=name,
+                tools_count=len(tools),
+            )
+
+        except asyncio.TimeoutError:
+            logger.error(
+                "MCP server initialization timed out",
+                server=name,
+                timeout=self.INITIALIZE_TIMEOUT,
+            )
+            await self._cleanup_server(
+                name, session, read_stream, write_stream, stdio_context
+            )
+
+        except ImportError as e:
+            logger.error(
+                "MCP SDK import failed, ensure 'mcp' package is installed",
+                server=name,
+                error=str(e),
+            )
+            await self._cleanup_server(
+                name, session, read_stream, write_stream, stdio_context
+            )
+
+        except Exception as e:
+            logger.error(
+                "MCP server failed to start",
+                server=name,
+                error=str(e),
+                error_type=type(e).__name__,
+            )
+            await self._cleanup_server(
+                name, session, read_stream, write_stream, stdio_context
+            )
+
+    async def _cleanup_server(
+        self,
+        name: str,
+        session: Any,
+        read_stream: Any,
+        write_stream: Any,
+        stdio_context: Any,
+    ) -> None:
+        """Clean up resources for a failed or shutting down server.
+
+        Args:
+            name: Server name.
+            session: MCP session to close.
+            read_stream: Input stream to close.
+            write_stream: Output stream to close.
+            stdio_context: The async context manager to exit.
+        """
+        try:
+            if session is not None:
+                await session.close()
+        except Exception as e:
+            logger.debug("Error closing session", server=name, error=str(e))
+
+        try:
+            if stdio_context is not None:
+                await stdio_context.__aexit__(None, None, None)
+        except Exception:
+            pass
+
+        self._servers.pop(name, None)
+
+    async def list_tools(self) -> dict[str, ToolInfo]:
+        """Return a copy of the global tool registry.
+
+        Returns:
+            Dictionary mapping namespaced tool names to ToolInfo.
+        """
+        return self._global_tools.copy()
+
+    def is_ready(self) -> bool:
+        """Check if the manager is initialized.
+
+        Returns True after successful initialization, even if no servers
+        are connected (e.g., all servers are disabled).
+
+        Returns:
+            True if initialization completed successfully.
+        """
+        return self._initialized
+
+    async def shutdown(self) -> None:
+        """Gracefully shut down all MCP servers.
+
+        Closes all sessions and terminates subprocesses.
+        Never raises exceptions - logs errors and continues.
+        """
+        if not self._initialized:
+            return
+
+        logger.info("Shutting down MCP client manager", servers_count=len(self._servers))
+
+        for name, server in list(self._servers.items()):
+            try:
+                await server.session.close()
+                logger.debug("Closed MCP session", server=name)
+            except Exception as e:
+                logger.error(
+                    "Error closing MCP session",
+                    server=name,
+                    error=str(e),
+                )
+
+        self._servers.clear()
+        self._global_tools.clear()
+        self._initialized = False
+
+        logger.info("MCP client manager shutdown complete")

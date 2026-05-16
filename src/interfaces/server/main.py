@@ -24,6 +24,7 @@ from core.rate_limiter import SlidingWindowRateLimiter
 from core.runtime.runtime_manager import RuntimeManager
 from core.session.persistent_manager import PersistentSessionManager
 from infrastructure.persistence.sqlite.session_store import SessionStore
+from infrastructure.mcp.manager import MCPClientManager
 from interfaces.server.websocket.manager import ConnectionManager
 
 logging.basicConfig(
@@ -73,7 +74,7 @@ class ServerState:
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     """Application lifespan handler."""
-    logger.info("Starting AI_support Phase 1B server...")
+    logger.info("Starting AI_support Phase 2A server...")
 
     store = SessionStore()
     session_manager = PersistentSessionManager(store)
@@ -84,32 +85,47 @@ async def lifespan(app: FastAPI):
     runtime_manager = RuntimeManager(mock_agent)
     await runtime_manager.start()
 
+    mcp_manager = MCPClientManager(config_path="configs/mcp/servers.yaml")
+    try:
+        await mcp_manager.initialize()
+        logger.info(
+            "MCP client manager ready",
+            servers=len(mcp_manager._servers),
+            tools=len(mcp_manager._global_tools),
+        )
+    except RuntimeError as e:
+        logger.warning("MCP initialization failed: %s", str(e))
+        mcp_manager = None
+
     app.state.server_state = ServerState(
         session_manager=session_manager,
         connection_manager=connection_manager,
         runtime_manager=runtime_manager,
         mock_agent=mock_agent,
     )
+    app.state.mcp_manager = mcp_manager
 
     logger.info(
-        "AI_support Phase 1B server started. "
+        "AI_support Phase 2A server started. "
         "Loaded %d active sessions from database.",
         len(session_manager.list_sessions()),
     )
 
     yield
 
-    logger.info("Shutting down AI_support Phase 1B server...")
+    logger.info("Shutting down AI_support Phase 2A server...")
+    if mcp_manager is not None:
+        await mcp_manager.shutdown()
     await runtime_manager.stop()
     await connection_manager.close_all_for_session("*")
     await session_manager.close()
-    logger.info("AI_support Phase 1B server stopped")
+    logger.info("AI_support Phase 2A server stopped")
 
 
 app = FastAPI(
-    title="AI_support Phase 1B",
-    description="Runtime with reliability and resource protection",
-    version="1.1.0",
+    title="AI_support Phase 2A",
+    description="Runtime with MCP connectivity and tool discovery",
+    version="1.2.0",
     lifespan=lifespan,
 )
 
