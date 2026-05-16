@@ -1,4 +1,4 @@
-# Runtime Configuration for Phase 2C
+# Runtime Configuration for Phase 2C/2D/2D.1
 # Tool execution parameters
 
 tool_execution:
@@ -51,11 +51,92 @@ tool_execution:
     # Grace period before force cleanup after session deletion
     grace_period_seconds: 2.0
 
-  # Phase 2C: Middleware execution order
-  # Available middlewares: ownership, rate_limit, retry, cancellation, audit
+  # Phase 2C/2D: Middleware execution order
+  # Available middlewares: ownership, rate_limit, retry, cancellation, audit, logging, circuit_breaker
   middleware_order:
     - "ownership"
     - "rate_limit"
     - "retry"
+    - "circuit_breaker"
     - "cancellation"
     - "audit"
+    - "logging"
+
+# Phase 2D/2D.1: Observability configuration
+observability:
+  logging:
+    # Log level: DEBUG, INFO, WARNING, ERROR
+    level: INFO
+    # Log format: json or console
+    format: json
+    # Whether to propagate client-provided trace_id
+    propagate_client_trace_id: true
+    # Log rotation settings
+    file: "./logs/ai_support.log"
+    max_bytes: 10485760
+    backup_count: 5
+    # Fields to redact in logs (security)
+    redacted_fields:
+      - password
+      - token
+      - secret
+      - api_key
+      - authorization
+      - private_key
+      - access_token
+      - refresh_token
+
+  health:
+    # Interval for readiness checks in seconds
+    readiness_check_interval_seconds: 30
+    # If true, degraded status returns HTTP 200
+    include_degraded_in_ready: true
+    # Maximum acceptable event loop lag in seconds (Phase 2D.1)
+    event_loop_max_lag_seconds: 5
+
+  metrics:
+    # Enable metrics endpoint
+    enabled: true
+    # Metrics endpoint path
+    endpoint: /metrics
+    # Histogram buckets for duration metrics (in seconds)
+    buckets:
+      - 0.01
+      - 0.05
+      - 0.1
+      - 0.5
+      - 1.0
+      - 2.0
+      - 5.0
+      - 10.0
+      - 30.0
+      - 60.0
+
+  recovery:
+    # MCP server recovery configuration
+    mcp:
+      # Maximum restart attempts before marking as permanently failed
+      max_restarts: 3
+      # Base delay between restarts (exponential backoff)
+      base_delay_seconds: 1.0
+      # Maximum delay cap between restarts
+      max_delay_seconds: 30.0
+
+  circuit_breaker:
+    # Number of failures before opening circuit
+    failure_threshold: 5
+    # Time window for tracking failures (Phase 2D.1: sliding window)
+    window_seconds: 60
+    # Seconds before attempting to close circuit
+    timeout_seconds: 60
+    # Error codes considered transient (will open circuit)
+    transient_error_codes:
+      - "MCP_ERROR"
+      - "TIMEOUT"
+      - "CONNECTION_REFUSED"
+      - "CONNECTION_ERROR"
+
+  # Admin API settings (Phase 2D.1)
+  admin:
+    enabled: true
+    token_env_var: ADMIN_API_TOKEN

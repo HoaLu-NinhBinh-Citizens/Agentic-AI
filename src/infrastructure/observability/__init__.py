@@ -6,6 +6,8 @@ Provides:
 - Configuration management with YAML support
 - Prometheus metrics export
 - HTTP metrics server
+- Health checks (liveness and readiness)
+- Circuit breaker for fault tolerance
 - OpenTelemetry tracing with span management
 - Execution graph and causal chain logging
 
@@ -20,10 +22,13 @@ Usage:
         TraceContext,
         Span,
         configure_tracing,
+        HealthChecker,
+        HealthStatus,
+        MetricsRegistry,
     )
 """
 
-from src.infrastructure.observability.structured_logging import (
+from .structured_logging import (
     StructuredLogger,
     LogContext,
     LogAggregator,
@@ -32,13 +37,13 @@ from src.infrastructure.observability.structured_logging import (
     get_logger,
 )
 
-from src.infrastructure.observability.config_manager import (
+from .config_manager import (
     ConfigManager,
     ConfigSource,
     ConfigChange,
 )
 
-from src.infrastructure.observability.prometheus_metrics import (
+from .prometheus_metrics import (
     MetricsCollector,
     Counter,
     Gauge,
@@ -47,13 +52,25 @@ from src.infrastructure.observability.prometheus_metrics import (
     get_metrics,
 )
 
-from src.infrastructure.observability.metrics_server import (
+from .metrics_server import (
     MetricsServer,
     ThreadedHTTPServer,
     start_metrics_server,
 )
 
-from src.infrastructure.observability.otel import (
+from .health import (
+    HealthChecker,
+    HealthStatus,
+    HealthReport,
+    ServerHealth,
+)
+
+from .metrics import (
+    MetricsRegistry,
+    SimpleHistogram,
+)
+
+from .otel import (
     OtelTracer,
     TraceContext,
     Span,
@@ -82,11 +99,18 @@ __all__ = [
     "ConfigChange",
     # Metrics
     "MetricsCollector",
+    "MetricsRegistry",
+    "SimpleHistogram",
     "Counter",
     "Gauge",
     "Histogram",
     "Timer",
     "get_metrics",
+    # Health
+    "HealthChecker",
+    "HealthStatus",
+    "HealthReport",
+    "ServerHealth",
     # Server
     "MetricsServer",
     "ThreadedHTTPServer",

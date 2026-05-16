@@ -1,4 +1,4 @@
-"""Tool execution middleware for Phase 2C.
+"""Tool execution middleware for Phase 2C/2D.
 
 Provides configurable middleware pipeline for tool execution including:
 - RetryMiddleware: Exponential backoff with jitter
@@ -6,6 +6,8 @@ Provides configurable middleware pipeline for tool execution including:
 - OwnershipMiddleware: Client ownership verification
 - AuditMiddleware: Logging and observability
 - CancellationMiddleware: Cancellation token injection
+- LoggingMiddleware: Tool call lifecycle logging (Phase 2D)
+- CircuitBreakerMiddleware: MCP server fault tolerance (Phase 2D)
 """
 
 from __future__ import annotations
@@ -451,6 +453,163 @@ class RetryMiddleware:
         )
 
 
+class LoggingMiddleware:
+    """Logging middleware for Phase 2D.
+
+    Logs the complete tool call lifecycle (start, success, failure, exception).
+    This middleware should be placed after AuditMiddleware to avoid duplicate logging.
+    """
+
+    async def __call__(
+        self,
+        request: ExecutionRequest,
+        next_handler: Callable[[ExecutionRequest], Awaitable[ToolExecutionResult]],
+    ) -> ToolExecutionResult:
+        """Handle the request with structured logging.
+
+        Args:
+            request: The execution request.
+            next_handler: Next handler that accepts a request.
+
+        Returns:
+            Tool execution result.
+        """
+        start = time.monotonic()
+
+        logger.info(
+            "Tool call started",
+            extra={
+                "session_id": request.context.session_id,
+                "trace_id": request.context.trace_id,
+                "call_id": request.call_id,
+                "tool_name": request.tool_name,
+            },
+        )
+
+        try:
+            result = await next_handler(request)
+            duration_ms = (time.monotonic() - start) * 1000
+
+            if result.success:
+                logger.info(
+                    "Tool call succeeded",
+                    extra={
+                        "call_id": request.call_id,
+                        "duration_ms": round(duration_ms, 2),
+                    },
+                )
+            else:
+                logger.error(
+                    "Tool call failed",
+                    extra={
+                        "call_id": request.call_id,
+                        "duration_ms": round(duration_ms, 2),
+                        "error_code": result.error_code,
+                        "error_message": result.error,
+                    },
+                )
+
+            return result
+
+        except Exception as e:
+            duration_ms = (time.monotonic() - start) * 1000
+            logger.exception(
+                "Tool call exception",
+                extra={
+                    "call_id": request.call_id,
+                    "duration_ms": round(duration_ms, 2),
+                    "error_message": str(e),
+                },
+            )
+            raise
+
+
+class CircuitBreakerMiddleware:
+    """Circuit breaker middleware for Phase 2D.
+
+    Wraps tool execution with circuit breaker protection for MCP servers.
+    Fails fast when a server is unhealthy.
+    """
+
+    def __init__(
+        self,
+        failure_threshold: int = 5,
+        timeout: float = 60.0,
+    ) -> None:
+        """Initialize the circuit breaker middleware.
+
+        Args:
+            failure_threshold: Number of failures before opening circuit.
+            timeout: Seconds before attempting to close circuit.
+        """
+        self._failure_threshold = failure_threshold
+        self._timeout = timeout
+        self._circuit_breakers: dict[str, Any] = {}
+
+    async def __call__(
+        self,
+        request: ExecutionRequest,
+        next_handler: Callable[[ExecutionRequest], Awaitable[ToolExecutionResult]],
+    ) -> ToolExecutionResult:
+        """Handle the request with circuit breaker protection.
+
+        Args:
+            request: The execution request.
+            next_handler: Next handler that accepts a request.
+
+        Returns:
+            Tool execution result.
+        """
+        from infrastructure.resilience.circuit_breaker import (
+            CircuitBreaker,
+            CircuitBreakerOpenError,
+        )
+
+        tool_name = request.tool_name
+        if tool_name not in self._circuit_breakers:
+            self._circuit_breakers[tool_name] = CircuitBreaker(
+                name=tool_name,
+                failure_threshold=self._failure_threshold,
+                timeout=self._timeout,
+            )
+
+        cb = self._circuit_breakers[tool_name]
+
+        if cb.state.value == "open":
+            logger.warning(
+                "Circuit breaker open, failing fast",
+                extra={
+                    "call_id": request.call_id,
+                    "tool_name": tool_name,
+                    "circuit_state": cb.state.value,
+                },
+            )
+            return ToolExecutionResult.error_result(
+                error=f"Circuit breaker open for tool '{tool_name}'",
+                error_code="CIRCUIT_OPEN",
+                metadata={"circuit_state": cb.state.value},
+            )
+
+        try:
+            return await cb.call(next_handler, request)
+        except CircuitBreakerOpenError:
+            return ToolExecutionResult.error_result(
+                error=f"Circuit breaker open for tool '{tool_name}'",
+                error_code="CIRCUIT_OPEN",
+                metadata={"circuit_state": "open"},
+            )
+        except Exception as e:
+            logger.error(
+                "Circuit breaker caught error",
+                extra={
+                    "call_id": request.call_id,
+                    "tool_name": tool_name,
+                    "error_message": str(e),
+                },
+            )
+            raise
+
+
 class Pipeline:
     """Middleware pipeline for tool execution.
 
@@ -509,6 +668,8 @@ class MiddlewareBuilder:
         "retry": RetryMiddleware,
         "cancellation": CancellationMiddleware,
         "audit": AuditMiddleware,
+        "logging": LoggingMiddleware,
+        "circuit_breaker": CircuitBreakerMiddleware,
     }
 
     def __init__(self) -> None:

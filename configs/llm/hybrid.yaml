@@ -1,0 +1,97 @@
+# LLM Configuration for Phase 3
+# Hybrid LLM Gateway with local Ollama and cloud Groq
+
+llm:
+  # Router configuration
+  router:
+    # Order of providers to try
+    provider_order: ["local", "cloud"]
+    # Enable fallback to other providers if primary fails
+    fallback_enabled: true
+    # Complexity threshold (0-1) for selecting local vs cloud
+    # Below this threshold -> local; above -> cloud
+    complexity_threshold: 0.6
+    # Keyword weights for complexity estimation
+    keyword_weights:
+      analyze: 0.3
+      design: 0.3
+      debug: 0.25
+      optimize: 0.25
+      refactor: 0.3
+      architecture: 0.35
+      complex: 0.2
+      advanced: 0.2
+      detailed: 0.15
+      review: 0.1
+      explain: 0.1
+      help: 0.05
+
+  # Provider configurations
+  providers:
+    # Local provider (Ollama)
+    local:
+      type: ollama
+      base_url: http://localhost:11434
+      model: qwen2.5-coder:7b
+      temperature: 0.1
+      max_tokens: 4096
+      timeout_seconds: 120
+      # Circuit breaker settings
+      circuit_breaker:
+        failure_threshold: 3
+        window_seconds: 60
+        timeout_seconds: 30
+
+    # Cloud provider (Groq)
+    cloud:
+      groq:
+        enabled: true
+        api_key_env: GROQ_API_KEY
+        model: llama-3.3-70b-versatile
+        # Alternative models:
+        # - llama-3.1-8b-instant (faster, smaller)
+        # - mixtral-8x7b-32768 (good balance)
+        temperature: 0.1
+        max_tokens: 4096
+        timeout_seconds: 60
+        # Circuit breaker settings
+        circuit_breaker:
+          failure_threshold: 2
+          window_seconds: 60
+          timeout_seconds: 60
+
+  # Agent service configuration
+  agent:
+    # Maximum tool call rounds per request
+    max_tool_rounds: 10
+    # Maximum concurrent tool calls
+    max_concurrent_tools: 5
+    # Maximum context tokens (for truncation)
+    max_context_tokens: 8000
+    # Per-tool timeout in seconds
+    tool_timeout_seconds: 30
+    # Consecutive failures before giving up
+    consecutive_failure_limit: 3
+    # System prompt for the agent
+    system_prompt: |
+      You are an AI assistant with access to tools for file operations,
+      code execution, and system tasks. Use the appropriate tools when
+      needed to fulfill user requests.
+
+      Guidelines:
+      - Use tools efficiently; prefer batch operations when possible
+      - Check file existence before reading
+      - Provide clear, concise responses
+      - Handle errors gracefully and suggest alternatives
+      - Always verify actions before destructive operations
+
+      After receiving tool results, analyze them and provide your final answer.
+      If a tool fails, explain the error and try a different approach.
+
+# Observability configuration
+observability:
+  metrics:
+    # Enable LLM-specific metrics
+    llm_enabled: true
+    # Export interval in seconds
+    export_interval: 60
