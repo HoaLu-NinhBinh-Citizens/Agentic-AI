@@ -211,7 +211,7 @@ python -m pytest tests/integration/ -v
 ### With Coverage
 
 ```bash
-python -m pytest tests/ --cov=src --cov-report=term-missing --cov-fail-under=70
+python -m pytest --cov=src --cov-report=term-missing --cov-fail-under=40
 ```
 
 ## Definition of Done

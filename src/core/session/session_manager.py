@@ -2,6 +2,9 @@
 
 Provides in-memory session management with full lifecycle support.
 Sessions are NOT persisted - data is lost on restart.
+
+Note: For Phase 1B and later, use PersistentSessionManager from
+core.session.persistent_manager for SQLite-backed persistence.
 """
 
 from __future__ import annotations

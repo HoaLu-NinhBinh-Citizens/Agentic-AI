@@ -1,209 +1,95 @@
-"""
-Runtime Kernel Module
+"""Runtime module for Phase 1B and Phase 15.
 
-Provides the core runtime infrastructure for Phase 15 P0:
+Phase 1B provides:
+- RuntimeManager: Stream cancellation and timeout support
 
-Core Components:
-- RuntimeController: State machine lifecycle management
-- EventJournal: Persistent event logging with replay
-- DeadLetterQueue: Failed event quarantine
-- EventReplayer: Replay events from journal
-
-Phase 15 P0 - Runtime Collapse Prevention:
-- TaskScheduler: Priority-based task scheduling
-- CircuitBreaker: Fault isolation for dependencies
-- AdmissionController: Queue and capacity management
-- CancellationScope: Hierarchical cancellation propagation
-- BackpressureManager: Cascade failure prevention
-- ResourceGovernor: Resource budget management
-- IdempotencyStore: Safe retries with deduplication
-- IsolatedExecutor: Process-based tool isolation
-- RuntimeIntrospector: Live debugging capabilities
-- Kernel boundary definitions
-
-Usage:
-    from src.domains.runtime import (
-        RuntimeController,
-        RuntimeState,
-        TaskScheduler,
-        CircuitBreaker,
-        AdmissionController,
-        CancellationScope,
-        BackpressureManager,
-    )
-
-Phase 15 P0 Modules:
-    scheduler/task_scheduler.py  - Priority-based scheduling
-    runtime/circuit_breaker.py - Fault isolation
-    runtime/admission.py       - Queue admission control
-    runtime/cancellation.py    - Cancellation propagation
-    runtime/backpressure.py     - Backpressure management
-    runtime/resource_governor.py - Resource budgets
-    runtime/idempotency.py     - Idempotency store
-    runtime/tool_isolation.py  - Tool process isolation
-    runtime/introspector.py    - Runtime debugging
-    runtime/kernel.py          - Kernel boundary
-
-Phase 15 P1 Modules:
-    runtime/execution_tracker.py - DAG-based task tracking
+Phase 15 components are available via lazy import.
 """
 
-# Core runtime components
-from src.domains.runtime.controller import RuntimeController, RuntimeState, LifecycleEvent
-from src.domains.runtime.journal import EventJournal, JournalEntry, JournalPartition, PartitionStrategy
-from src.domains.runtime.dlq import DeadLetterQueue, DLQEntry, DLQReason, DLQStatus
-from src.domains.runtime.replayer import EventReplayer, ReplayResult, ReplayFilter
+from __future__ import annotations
 
-# Phase 15 P0: Runtime collapse prevention
-from src.core.scheduler import TaskScheduler, Priority, ScheduledTask, QueueFullError
-from src.domains.runtime.circuit_breaker import (
-    CircuitBreaker,
-    CircuitState,
-    CircuitOpenError,
-    get_circuit,
-    circuit_registry,
-)
-from src.domains.runtime.admission import (
-    AdmissionController,
-    AdmissionDecision,
-    AdmissionRequest,
-    get_admission_controller,
-)
-from src.domains.runtime.cancellation import (
-    CancellationScope,
-    CancellationToken,
-    CancelledError,
-    cancellation_token,
-    get_current_cancellation,
-)
-from src.domains.runtime.backpressure import (
-    BackpressureManager,
-    BackpressureSignal,
-    PressureState,
-    backpressure_manager,
-    get_backpressure_manager,
-)
-from src.domains.runtime.resource_governor import (
-    ResourceGovernor,
-    ResourceBudget,
-    ResourceAcquired,
-    get_governor,
-)
-from src.domains.runtime.idempotency import (
-    IdempotencyStore,
-    IdempotencyKey,
-    idempotent,
-    idempotency_store,
-)
-from src.domains.runtime.tool_isolation import (
-    IsolatedExecutor,
-    IsolationConfig,
-    ToolTimeoutError,
-    ToolExecutionError,
-    get_executor,
-)
-from src.domains.runtime.introspector import (
-    RuntimeIntrospector,
-    RuntimeSnapshot,
-    TaskSnapshot,
-    QueueSnapshot,
-    get_introspector,
-)
-from src.domains.runtime.kernel import (
-    KernelBoundary,
-    classify,
-    is_kernel,
-    validate_kernel,
-)
+import sys
+from typing import TYPE_CHECKING
 
-# Phase 15 P1: Execution Tracking
-from src.domains.runtime.execution_tracker import (
-    ExecutionTracker,
-    ExecutionGraph,
-    TaskState,
-    TaskNode,
-    get_tracker,
-)
+if TYPE_CHECKING:
+    pass
+
+# Phase 1B Runtime Manager
+from core.runtime.runtime_manager import RuntimeManager, StreamInfo
 
 __all__ = [
-    # Controller
-    "RuntimeController",
-    "RuntimeState",
-    "LifecycleEvent",
-    # Journal
-    "EventJournal",
-    "JournalEntry",
-    "JournalPartition",
-    "PartitionStrategy",
-    # DLQ
-    "DeadLetterQueue",
-    "DLQEntry",
-    "DLQReason",
-    "DLQStatus",
-    # Replayer
-    "EventReplayer",
-    "ReplayResult",
-    "ReplayFilter",
-    # Phase 15 P0
-    # Scheduler
-    "TaskScheduler",
-    "Priority",
-    "ScheduledTask",
-    "QueueFullError",
-    # Circuit Breaker
-    "CircuitBreaker",
-    "CircuitState",
-    "CircuitOpenError",
-    "get_circuit",
-    "circuit_registry",
-    # Admission
-    "AdmissionController",
-    "AdmissionDecision",
-    "AdmissionRequest",
-    "get_admission_controller",
-    # Cancellation
-    "CancellationScope",
-    "CancellationToken",
-    "CancelledError",
-    "cancellation_token",
-    "get_current_cancellation",
-    # Backpressure
-    "BackpressureManager",
-    "BackpressureSignal",
-    "PressureState",
-    "backpressure_manager",
-    "get_backpressure_manager",
-    # Resource
-    "ResourceGovernor",
-    "ResourceBudget",
-    "ResourceAcquired",
-    "get_governor",
-    # Idempotency
-    "IdempotencyStore",
-    "IdempotencyKey",
-    "idempotent",
-    "idempotency_store",
-    # Tool Isolation
-    "IsolatedExecutor",
-    "IsolationConfig",
-    "ToolTimeoutError",
-    "ToolExecutionError",
-    "get_executor",
-    # Introspector
-    "RuntimeIntrospector",
-    "RuntimeSnapshot",
-    "TaskSnapshot",
-    "QueueSnapshot",
-    "get_introspector",
-    # Kernel
-    "KernelBoundary",
-    "classify",
-    "is_kernel",
-    "validate_kernel",
-    # Phase 15 P1 - Execution Tracking
-    "ExecutionTracker",
-    "ExecutionGraph",
-    "TaskState",
-    "TaskNode",
-    "get_tracker",
+    "RuntimeManager",
+    "StreamInfo",
 ]
+
+
+class _LazyLoader:
+    """Lazy loading wrapper for Phase 15 modules."""
+
+    _phase15_imports = {
+        "RuntimeController": ("src.domains.runtime.controller", "RuntimeController"),
+        "RuntimeState": ("src.domains.runtime.controller", "RuntimeState"),
+        "LifecycleEvent": ("src.domains.runtime.controller", "LifecycleEvent"),
+        "EventJournal": ("src.domains.runtime.journal", "EventJournal"),
+        "JournalEntry": ("src.domains.runtime.journal", "JournalEntry"),
+        "JournalPartition": ("src.domains.runtime.journal", "JournalPartition"),
+        "PartitionStrategy": ("src.domains.runtime.journal", "PartitionStrategy"),
+        "DeadLetterQueue": ("src.domains.runtime.dlq", "DeadLetterQueue"),
+        "DLQEntry": ("src.domains.runtime.dlq", "DLQEntry"),
+        "DLQReason": ("src.domains.runtime.dlq", "DLQReason"),
+        "DLQStatus": ("src.domains.runtime.dlq", "DLQStatus"),
+        "EventReplayer": ("src.domains.runtime.replayer", "EventReplayer"),
+        "ReplayResult": ("src.domains.runtime.replayer", "ReplayResult"),
+        "ReplayFilter": ("src.domains.runtime.replayer", "ReplayFilter"),
+        "TaskScheduler": ("src.core.scheduler", "TaskScheduler"),
+        "CircuitBreaker": ("src.domains.runtime.circuit_breaker", "CircuitBreaker"),
+    }
+
+    def __getattr__(self, name: str):
+        if name in self._phase15_imports:
+            import importlib
+            module_path, class_name = self._phase15_imports[name]
+            try:
+                mod = importlib.import_module(module_path)
+                return getattr(mod, class_name)
+            except ImportError:
+                raise AttributeError(
+                    f"Phase 15 module not available: {module_path}. "
+                    f"Install required dependencies for Phase 15 features."
+                )
+        raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
+
+
+_lazy_loader = _LazyLoader()
+
+
+def __getattr__(name: str):
+    """Lazy load Phase 15 components."""
+    return _lazy_loader.__getattr__(name)
+
+
+# Also expose under core.runtime namespace for backward compatibility
+sys.modules['core.runtime'].RuntimeController = property(
+    lambda self: _lazy_loader.__getattr__("RuntimeController")
+)
+sys.modules['core.runtime'].RuntimeState = property(
+    lambda self: _lazy_loader.__getattr__("RuntimeState")
+)
+sys.modules['core.runtime'].LifecycleEvent = property(
+    lambda self: _lazy_loader.__getattr__("LifecycleEvent")
+)
+sys.modules['core.runtime'].EventJournal = property(
+    lambda self: _lazy_loader.__getattr__("EventJournal")
+)
+sys.modules['core.runtime'].DeadLetterQueue = property(
+    lambda self: _lazy_loader.__getattr__("DeadLetterQueue")
+)
+sys.modules['core.runtime'].EventReplayer = property(
+    lambda self: _lazy_loader.__getattr__("EventReplayer")
+)
+sys.modules['core.runtime'].TaskScheduler = property(
+    lambda self: _lazy_loader.__getattr__("TaskScheduler")
+)
+sys.modules['core.runtime'].CircuitBreaker = property(
+    lambda self: _lazy_loader.__getattr__("CircuitBreaker")
+)

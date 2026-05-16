@@ -1,0 +1,30 @@
+# MCP Server Configuration
+# Phase 2A - MCP Connectivity & Discovery
+
+servers:
+  # Filesystem server - provides file system operations
+  - name: "filesystem"
+    command: "npx"
+    args:
+      - "-y"
+      - "@modelcontextprotocol/server-filesystem"
+      - "/tmp"
+    transport: "stdio"
+    enabled: true
+
+  # Git server - provides git operations
+  - name: "git"
+    command: "uvx"
+    args:
+      - "mcp-server-git"
+    transport: "stdio"
+    enabled: false
+
+  # Terminal server - provides terminal/shell operations
+  - name: "terminal"
+    command: "python"
+    args:
+      - "-m"
+      - "mcp_server_terminal"
+    transport: "stdio"
+    enabled: false

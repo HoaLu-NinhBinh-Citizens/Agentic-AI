@@ -1,9 +1,12 @@
-"""FastAPI server for Phase 1A.
+"""FastAPI server for Phase 1B.
 
-Minimal viable runtime that allows clients to:
-- Create sessions
-- Send chat messages over WebSocket
-- Receive streaming tokens from mock agent
+Runtime with reliability and resource protection:
+- Sessions persist across restarts (SQLite)
+- Heartbeat to detect dead WebSocket clients
+- Graceful cancellation of ongoing streams
+- Request timeout (30s)
+- Token-level backpressure (per WebSocket queue)
+- Basic rate limiting (per session)
 """
 
 from __future__ import annotations
@@ -17,7 +20,10 @@ from fastapi import FastAPI, HTTPException, WebSocket, WebSocketDisconnect, stat
 from fastapi.middleware.cors import CORSMiddleware
 
 from core.agent.mock_agent import MockAgent
-from core.session.session_manager import InMemorySessionManager
+from core.rate_limiter import SlidingWindowRateLimiter
+from core.runtime.runtime_manager import RuntimeManager
+from core.session.persistent_manager import PersistentSessionManager
+from infrastructure.persistence.sqlite.session_store import SessionStore
 from interfaces.server.websocket.manager import ConnectionManager
 
 logging.basicConfig(
@@ -30,34 +36,80 @@ HOST = os.getenv("HOST", "0.0.0.0")
 PORT = int(os.getenv("PORT", "8000"))
 LOG_LEVEL = os.getenv("LOG_LEVEL", "INFO")
 
+RATE_LIMIT_CHAT_MAX = 5
+RATE_LIMIT_CHAT_WINDOW = 10.0
+
 
 class ServerState:
-    """Application state container."""
+    """Application state container for Phase 1B."""
 
     def __init__(
         self,
-        session_manager: InMemorySessionManager,
+        session_manager: PersistentSessionManager,
         connection_manager: ConnectionManager,
+        runtime_manager: RuntimeManager,
         mock_agent: MockAgent,
     ) -> None:
         self.session_manager = session_manager
         self.connection_manager = connection_manager
+        self.runtime_manager = runtime_manager
         self.mock_agent = mock_agent
-        self._busy_sessions: set[str] = set()
+        self._rate_limiters: dict[str, SlidingWindowRateLimiter] = {}
+
+    def get_rate_limiter(self, session_id: str) -> SlidingWindowRateLimiter:
+        """Get or create rate limiter for a session."""
+        if session_id not in self._rate_limiters:
+            self._rate_limiters[session_id] = SlidingWindowRateLimiter(
+                max_requests=RATE_LIMIT_CHAT_MAX,
+                window_seconds=RATE_LIMIT_CHAT_WINDOW,
+            )
+        return self._rate_limiters[session_id]
+
+    def clear_rate_limiter(self, session_id: str) -> None:
+        """Clear rate limiter for a session."""
+        self._rate_limiters.pop(session_id, None)
 
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     """Application lifespan handler."""
-    logger.info("Starting AI_support Phase 1A server...")
+    logger.info("Starting AI_support Phase 1B server...")
+
+    store = SessionStore()
+    session_manager = PersistentSessionManager(store)
+    await session_manager.initialize()
+
+    connection_manager = ConnectionManager()
+    mock_agent = MockAgent()
+    runtime_manager = RuntimeManager(mock_agent)
+    await runtime_manager.start()
+
+    app.state.server_state = ServerState(
+        session_manager=session_manager,
+        connection_manager=connection_manager,
+        runtime_manager=runtime_manager,
+        mock_agent=mock_agent,
+    )
+
+    logger.info(
+        "AI_support Phase 1B server started. "
+        "Loaded %d active sessions from database.",
+        len(session_manager.list_sessions()),
+    )
+
     yield
-    logger.info("Shutting down AI_support Phase 1A server...")
+
+    logger.info("Shutting down AI_support Phase 1B server...")
+    await runtime_manager.stop()
+    await connection_manager.close_all_for_session("*")
+    await session_manager.close()
+    logger.info("AI_support Phase 1B server stopped")
 
 
 app = FastAPI(
-    title="AI_support Phase 1A",
-    description="Minimal viable runtime for AI_support",
-    version="1.0.0",
+    title="AI_support Phase 1B",
+    description="Runtime with reliability and resource protection",
+    version="1.1.0",
     lifespan=lifespan,
 )
 
@@ -95,11 +147,9 @@ async def global_exception_handler(request, exc):
     return {"detail": "Internal server error"}, 500
 
 
-state = ServerState(
-    session_manager=InMemorySessionManager(),
-    connection_manager=ConnectionManager(),
-    mock_agent=MockAgent(),
-)
+def get_state() -> ServerState:
+    """Get server state."""
+    return app.state.server_state
 
 
 @app.get("/health")
@@ -118,11 +168,13 @@ async def create_session(body: dict[str, Any] | None = None) -> dict[str, str]:
     Returns:
         Session ID and WebSocket URL.
     """
+    server_state = get_state()
     workspace = None
     if body and "workspace" in body:
         workspace = body["workspace"]
 
-    session_id = state.session_manager.create_session(workspace=workspace)
+    session_id = server_state.session_manager.create_session()
+    await server_state.session_manager.save_session(session_id)
     ws_url = f"ws://{HOST}:{PORT}/ws/{session_id}"
     logger.info("Created session: %s", session_id)
     return {"session_id": session_id, "ws_url": ws_url}
@@ -141,7 +193,8 @@ async def get_session(session_id: str) -> dict:
     Raises:
         HTTPException: If session not found.
     """
-    session = state.session_manager.get_session(session_id)
+    server_state = get_state()
+    session = server_state.session_manager.get_session(session_id)
     if not session:
         raise HTTPException(status_code=404, detail="Session not found")
     return session
@@ -160,21 +213,17 @@ async def delete_session(session_id: str) -> dict[str, str]:
     Raises:
         HTTPException: If session not found.
     """
-    session = state.session_manager.get_session(session_id)
+    server_state = get_state()
+    session = server_state.session_manager.get_session(session_id)
     if not session:
         raise HTTPException(status_code=404, detail="Session not found")
 
-    connections = state.connection_manager.get_connections(session_id)
-    for ws in connections:
-        try:
-            await ws.close(code=1000)
-        except Exception:
-            pass
-
-    state.connection_manager.close_all_for_session(session_id)
+    await server_state.runtime_manager.cancel_stream(session_id)
+    await server_state.connection_manager.close_all_for_session(session_id)
+    server_state.clear_rate_limiter(session_id)
 
     try:
-        state.session_manager.delete_session(session_id)
+        await server_state.session_manager.delete_session(session_id)
     except KeyError:
         raise HTTPException(status_code=404, detail="Session not found")
 
@@ -188,23 +237,39 @@ async def websocket_endpoint(websocket: WebSocket, session_id: str):
 
     Flow:
     1. Validate session exists
-    2. Register connection
-    3. Wait for chat messages
-    4. Process with mock agent
-    5. Keep connection open for more messages
+    2. Check connection rate limit
+    3. Register connection with heartbeat
+    4. Handle messages: chat, cancel
+    5. Stream response with timeout
+    6. Keep connection open for more messages
 
     Args:
         websocket: The WebSocket connection.
         session_id: The session ID from URL path.
     """
-    session = state.session_manager.get_session(session_id)
+    server_state = get_state()
+
+    session = server_state.session_manager.get_session(session_id)
     if not session:
-        logger.warning("WebSocket connection rejected: session %s not found", session_id)
+        logger.warning(
+            "WebSocket connection rejected: session %s not found",
+            session_id,
+        )
         await websocket.close(code=4001)
         return
 
-    await state.connection_manager.connect(session_id, websocket)
+    client = await server_state.connection_manager.connect(session_id, websocket)
+    if not client:
+        logger.warning(
+            "WebSocket connection rejected: max connections for session %s",
+            session_id,
+        )
+        return
+
     logger.info("WebSocket connected: session=%s", session_id)
+
+    async def send_event(event: dict) -> None:
+        await client.send_event(event)
 
     try:
         while True:
@@ -214,49 +279,59 @@ async def websocket_endpoint(websocket: WebSocket, session_id: str):
                 break
 
             if data.get("type") == "chat":
-                if session_id in state._busy_sessions:
-                    await state.connection_manager.send_to_session(
-                        session_id,
-                        {
-                            "type": "error",
-                            "data": {
-                                "code": "BUSY",
-                                "message": "Another chat in progress",
-                            },
+                if server_state.runtime_manager.is_streaming(session_id):
+                    await send_event({
+                        "type": "error",
+                        "data": {
+                            "code": "BUSY",
+                            "message": "Another chat in progress",
                         },
-                    )
+                    })
+                    continue
+
+                rate_limiter = server_state.get_rate_limiter(session_id)
+                if not rate_limiter.allow():
+                    await send_event({
+                        "type": "error",
+                        "data": {
+                            "code": "RATE_LIMITED",
+                            "message": "Too many requests, please wait",
+                        },
+                    })
                     continue
 
                 message = data.get("message", "")
-                state._busy_sessions.add(session_id)
-                logger.info("Processing chat: session=%s, message=%s", session_id, message)
+                logger.info(
+                    "Processing chat: session=%s, message=%s",
+                    session_id,
+                    message,
+                )
 
-                async def send_event(event: dict) -> None:
-                    await state.connection_manager.send_to_session(session_id, event)
+                await server_state.runtime_manager.execute(
+                    session_id,
+                    message,
+                    send_event,
+                    client,
+                )
 
-                try:
-                    await state.mock_agent.stream_response(message, send_event)
-                except Exception as e:
-                    logger.exception("Error in mock agent: %s", e)
-                    await state.connection_manager.send_to_session(
-                        session_id,
-                        {
-                            "type": "error",
-                            "data": {
-                                "code": "INTERNAL_ERROR",
-                                "message": str(e),
-                            },
-                        },
-                    )
-                finally:
-                    state._busy_sessions.discard(session_id)
+            elif data.get("type") == "cancel":
+                logger.info("Cancellation requested: session=%s", session_id)
+                await server_state.runtime_manager.cancel_stream(session_id)
+
+            elif data.get("type") == "pong":
+                pass
 
     except WebSocketDisconnect:
         logger.info("WebSocket disconnected: session=%s", session_id)
     except Exception:
         logger.exception("WebSocket error: session=%s", session_id)
     finally:
-        state.connection_manager.disconnect(session_id, websocket)
+        await server_state.runtime_manager.cancel_stream_for_client(
+            session_id,
+            client,
+        )
+        await server_state.connection_manager.disconnect(session_id, client)
+        await client.close()
 
 
 if __name__ == "__main__":
