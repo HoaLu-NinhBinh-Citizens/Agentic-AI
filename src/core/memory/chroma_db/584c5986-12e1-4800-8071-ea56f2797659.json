@@ -1,0 +1,15 @@
+{
+  "id": "584c5986-12e1-4800-8071-ea56f2797659",
+  "type": "episodic",
+  "content": "Task: Analyze code quality\nOutcome: False\nContext: {}",
+  "metadata": {},
+  "created_at": "2026-05-09T18:33:35.850658",
+  "accessed_at": "2026-05-09T18:33:35.850658",
+  "access_count": 0,
+  "importance_score": 0.8,
+  "tags": [
+    "task",
+    "execution",
+    "failure"
+  ]
+}

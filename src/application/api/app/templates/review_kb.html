@@ -1,0 +1,17 @@
+<!doctype html>
+<html><head><meta charset="utf-8"><title>KB Review</title>
+<style>body{font-family:Segoe UI,Arial,sans-serif;margin:32px}table{border-collapse:collapse;width:100%}td,th{border:1px solid #ccc;padding:6px;vertical-align:top}pre{white-space:pre-wrap}</style></head>
+<body>
+<p><a href="/">Back</a> | <a href="/kb.json?file_hash={{FILE_HASH}}">JSON</a></p>
+<h1>KB Review: {{FILE_HASH_SHORT}}</h1>
+<h2>Component</h2>
+<p><b>Part:</b> {{PART_NUMBER}} | <b>Package:</b> {{PACKAGE_NAME}}</p>
+<h2>Voltage</h2>
+<pre>{{OPERATING_VOLTAGE}}</pre>
+<h2>Pinout</h2>
+<table><tr><th>Name</th><th>Number</th><th>Functions</th><th>Citations page/table/row/cell</th></tr>{{PIN_ROWS}}</table>
+<h2>Citation Browser</h2>
+{{CITATION_BLOCKS}}
+<h2>OCR Quality</h2>
+<pre>{{OCR_QUALITY}}</pre>
+</body></html>

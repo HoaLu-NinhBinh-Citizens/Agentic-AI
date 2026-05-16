@@ -1,0 +1,10 @@
+AI_SUPPORT.md
+node_modules/
+.vscode-test/
+*.vsix
+*.log
+.DS_Store
+coverage/
+.nyc_output/
+extension/src/test/
+extension/dist/*.map

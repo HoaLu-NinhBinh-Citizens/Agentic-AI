@@ -1,0 +1,16 @@
+version: '3.8'
+
+services:
+  ai-support:
+    build: ../..
+    ports:
+      - "8766:8766"
+    environment:
+      - OPENAI_API_KEY=${OPENAI_API_KEY}
+    volumes:
+      - ./data:/app/data
+
+  redis:
+    image: redis:7-alpine
+    ports:
+      - "6379:6379"

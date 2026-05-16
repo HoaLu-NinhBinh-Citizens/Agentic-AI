@@ -1,0 +1,56 @@
+# Git
+.git
+.gitignore
+
+# Python
+__pycache__
+*.py[cod]
+*$py.class
+*.so
+.Python
+.pytest_cache
+.mypy_cache
+.ruff_cache
+*.egg-info
+.eggs
+dist
+build
+
+# Virtual environments
+venv
+.venv
+env
+.env
+
+# IDE
+.vscode
+.idea
+*.swp
+*.swo
+*~
+
+# AI_support specific
+AI_support/__pycache__
+AI_support/.pytest_cache
+AI_support/outputs
+AI_support/rag_index
+AI_support/retrieval_reports
+AI_support/ai_agent_memory
+AI_support/.ruff_cache
+
+# Archived modules
+AI_support/archive
+
+# Tests (keep test files, skip test cache)
+AI_support/tests/__pycache__
+
+# Documentation
+*.md
+!requirements.txt
+
+# Hardware/Firmware (mounted as volume)
+main/software/output
+main/software/build
+*.elf
+*.bin
+*.hex

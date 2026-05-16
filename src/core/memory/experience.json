@@ -1,0 +1,123 @@
+{
+  "experiences": [
+    {
+      "timestamp": "2026-05-10T19:12:20",
+      "task": "Generate UART driver",
+      "success": false,
+      "attempts": 4,
+      "files_created": [],
+      "last_error": "Stopping after repeated iterations with no measurable progress.",
+      "response_preview": "[QUERY] Generate UART driver [RETRIEVED CONTEXT] 1. source=main/software/resources/plugins/Lin_43_LPUART_FLEXIO_TS_T40D2M20I0R0/doc/RTD_LIN_43_LPUART_FLEXIO_IM.pdf | section=n/a | score=13.0 excerpt=Path: main/software/resources/plugins/Lin_43_LPUART_FLEXIO_TS_T40D2M20I0R0/doc/RTD_LIN_43_LPUART_FLEXIO_IM.pdf Filename: RTD_LIN_43_LPUART_FLEXIO_IM.pdf Extension: .pdf Folders: main software resou",
+      "lessons": [],
+      "memory_records": [
+        {
+          "timestamp": "2026-05-10T19:12:20",
+          "task": "Generate UART driver",
+          "iteration": 4,
+          "phase": "complete",
+          "outcome": "failure",
+          "error_signature": "query uart driver retrieved context 1 source main software resources plugins lin_43_lpuart_flexio_ts_t40d2m20i0r0",
+          "root_cause": "Stopping after repeated iterations with no measurable progress.",
+          "fix_strategy": "Stopping after repeated iterations with no measurable progress.",
+          "context_terms": [
+            "uart",
+            "driver",
+            "main",
+            "software",
+            "resources",
+            "plugins",
+            "lin_43_lpuart_flexio_ts_t40d2m20i0r0",
+            "doc",
+            "rtd_lin_43_lpuart_flexio_im",
+            "pdf",
+            "rtd_lin_43_lpuart_flexio_um",
+            "anchors",
+            "xml"
+          ],
+          "prevention_rules": [
+            "On failure, preserve response preview and error summary for a pending learning proposal."
+          ],
+          "evidence_paths": [
+            "main/software/resources/plugins/Lin_43_LPUART_FLEXIO_TS_T40D2M20I0R0/doc/RTD_LIN_43_LPUART_FLEXIO_IM.pdf",
+            "main/software/resources/plugins/Lin_43_LPUART_FLEXIO_TS_T40D2M20I0R0/doc/RTD_LIN_43_LPUART_FLEXIO_UM.pdf",
+            "main/software/resources/plugins/Lin_43_LPUART_FLEXIO_TS_T40D2M20I0R0/anchors.xml"
+          ]
+        }
+      ]
+    }
+  ],
+  "knowledge": [],
+  "rules": [],
+  "feedback": [],
+  "policy_scores": {},
+  "learning_proposals": [
+    {
+      "proposal_id": "proposal_20260510_191220_714875",
+      "timestamp": "2026-05-10T19:12:20",
+      "type": "failure_pattern",
+      "target_layer": "project_kb",
+      "field": "complete",
+      "old_value": "",
+      "new_value": "On failure, preserve response preview and error summary for a pending learning proposal.",
+      "reason": "Stopping after repeated iterations with no measurable progress.",
+      "evidence": {
+        "source": "task_experience",
+        "task": "Generate UART driver",
+        "evidence_paths": [
+          "main/software/resources/plugins/Lin_43_LPUART_FLEXIO_TS_T40D2M20I0R0/doc/RTD_LIN_43_LPUART_FLEXIO_IM.pdf",
+          "main/software/resources/plugins/Lin_43_LPUART_FLEXIO_TS_T40D2M20I0R0/doc/RTD_LIN_43_LPUART_FLEXIO_UM.pdf",
+          "main/software/resources/plugins/Lin_43_LPUART_FLEXIO_TS_T40D2M20I0R0/anchors.xml"
+        ],
+        "outcome": "failure",
+        "iteration": 4
+      },
+      "confidence": "UNVERIFIED",
+      "risk_level": "LOW",
+      "requires_human_approval": false,
+      "validation_status": "UNVERIFIED",
+      "approval_status": "PENDING",
+      "memory_version": 1,
+      "source_record": {
+        "timestamp": "2026-05-10T19:12:20",
+        "task": "Generate UART driver",
+        "iteration": 4,
+        "phase": "complete",
+        "outcome": "failure",
+        "error_signature": "query uart driver retrieved context 1 source main software resources plugins lin_43_lpuart_flexio_ts_t40d2m20i0r0",
+        "root_cause": "Stopping after repeated iterations with no measurable progress.",
+        "fix_strategy": "Stopping after repeated iterations with no measurable progress.",
+        "context_terms": [
+          "uart",
+          "driver",
+          "main",
+          "software",
+          "resources",
+          "plugins",
+          "lin_43_lpuart_flexio_ts_t40d2m20i0r0",
+          "doc",
+          "rtd_lin_43_lpuart_flexio_im",
+          "pdf",
+          "rtd_lin_43_lpuart_flexio_um",
+          "anchors",
+          "xml"
+        ],
+        "prevention_rules": [
+          "On failure, preserve response preview and error summary for a pending learning proposal."
+        ],
+        "evidence_paths": [
+          "main/software/resources/plugins/Lin_43_LPUART_FLEXIO_TS_T40D2M20I0R0/doc/RTD_LIN_43_LPUART_FLEXIO_IM.pdf",
+          "main/software/resources/plugins/Lin_43_LPUART_FLEXIO_TS_T40D2M20I0R0/doc/RTD_LIN_43_LPUART_FLEXIO_UM.pdf",
+          "main/software/resources/plugins/Lin_43_LPUART_FLEXIO_TS_T40D2M20I0R0/anchors.xml"
+        ]
+      }
+    }
+  ],
+  "source_kb_refs": [],
+  "project_kb": [],
+  "pattern_kb": [],
+  "failure_memory": [],
+  "memory_approvals": [],
+  "memory_versions": [],
+  "memory_conflicts": [],
+  "memory_compactions": []
+}

@@ -1,0 +1,16 @@
+# Observability Configuration
+
+logging:
+  level: INFO
+  format: json
+  output: stdout
+
+metrics:
+  enabled: true
+  port: 9090
+  path: /metrics
+
+tracing:
+  enabled: true
+  exporter: otlp
+  endpoint: http://localhost:4317

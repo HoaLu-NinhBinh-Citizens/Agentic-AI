@@ -1,0 +1,225 @@
+<!doctype html>
+<html><head><meta charset="utf-8"><title>AI KiCad Review UI</title>
+<style>
+body{font-family:Segoe UI,Arial,sans-serif;margin:0;color:#1f2933;background:#f7f8fa}
+main{max-width:1380px;margin:0 auto;padding:20px}
+section{background:#fff;border:1px solid #d8dee8;border-radius:8px;padding:16px;margin:16px 0}
+table{border-collapse:collapse;width:100%;background:#fff}td,th{border:1px solid #ccd4df;padding:6px;vertical-align:top}
+input,textarea,select{box-sizing:border-box;margin:3px 0;padding:6px;border:1px solid #b8c2cf;border-radius:4px;font:inherit;width:100%}
+textarea{min-height:64px}button{padding:7px 10px;border:1px solid #2f5f8f;background:#315f8d;color:#fff;border-radius:4px;cursor:pointer}
+.layout{display:grid;grid-template-columns:minmax(0,1fr) 420px;gap:16px;align-items:start}.grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(300px,1fr));gap:12px}.field{margin:6px 0}.inline{display:flex;gap:8px;align-items:center}.inline input{width:auto}
+.path-input-row{display:flex;gap:6px;align-items:center}.path-input-row input{flex:1;min-width:0}.path-input-row button{flex:0 0 auto;margin:3px 0;white-space:nowrap}
+pre{white-space:pre-wrap;overflow:auto;background:#0f1720;color:#e6edf3;padding:12px;border-radius:6px;max-height:520px}
+.sticky{position:sticky;top:12px}.muted{color:#627083}.path-results{display:grid;gap:6px;margin-top:8px}.path-item{display:flex;gap:6px;align-items:center;border:1px solid #d8dee8;border-radius:6px;padding:6px;background:#fbfcfe}.path-item code{flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}.statusline{min-height:22px;color:#315f8d}
+@media(max-width:980px){.layout{grid-template-columns:1fr}.sticky{position:static}}
+</style></head>
+<body>
+<main>
+<h1>AI KiCad Review UI</h1>
+<p><a href="/export">Export review JSON</a> | <a href="/path-finder" target="_blank">Open Path Finder (standalone)</a></p>
+<div class="layout">
+<div>
+<section>
+<h2>Path Finder</h2>
+<div class="grid">
+<div class="field"><label>Search path<input id="path-query" placeholder="sensor, firmware_output, kicad_output"></label></div>
+<div class="field"><label>Type<select id="path-kind"><option value="all">All useful files</option><option value="pdf">PDF</option><option value="json">JSON</option><option value="kicad">KiCad</option><option value="dir">Directory</option></select></label></div>
+</div>
+<button type="button" id="path-search-button">Find Paths</button>
+<span class="muted">Use Search beside a path field, then click a result to fill it and copy the path.</span>
+<div id="path-status" class="statusline"></div>
+<div id="path-results" class="path-results"></div>
+</section>
+<section>
+<h2>Workflow Console</h2>
+<div class="grid">
+<form method="post" action="/tool-status" data-async="1">
+<h3>Tool Status</h3>
+<div class="field"><label>Target platform<input name="target_platform" value="STM32"></label></div>
+<div class="field"><label>Language<input name="language" value="C"></label></div>
+<button>Check Tools</button>
+</form>
+<form method="post" action="/kb-build" data-async="1">
+<h3>Build Approved KB</h3>
+<div class="field"><label>PDF path<input name="pdf" data-path-field="1" data-path-kind="pdf" placeholder="main/Documents/sensor.pdf"></label></div>
+<div class="field"><label>Project ID<input name="project_id" placeholder="demo_sensor"></label></div>
+<div class="field"><label>Component name<input name="component_name" placeholder="optional"></label></div>
+<div class="field"><label>Document scope<input name="document_scope_id" placeholder="optional"></label></div>
+<label class="inline"><input type="checkbox" name="require_kicad_fields"> require KiCad fields</label>
+<button>Build KB</button>
+</form>
+<form method="post" action="/pipeline-run" data-async="1">
+<h3>Run Full Pipeline</h3>
+<div class="field"><label>PDF path<input name="pdf" data-path-field="1" data-path-kind="pdf" placeholder="main/Documents/sensor.pdf"></label></div>
+<div class="field"><label>Project ID<input name="project_id" placeholder="demo_sensor"></label></div>
+<div class="field"><label>Firmware requirement<textarea name="requirement" placeholder="Use I2C to read sensor"></textarea></label></div>
+<div class="field"><label>Hardware requirement<textarea name="hardware_requirement" placeholder="simple I2C sensor board"></textarea></label></div>
+<div class="field"><label>Target platform<input name="target_platform" value="STM32"></label></div>
+<div class="field"><label>Language<input name="language" value="C"></label></div>
+<div class="field"><label>Component name<input name="component_name" placeholder="optional"></label></div>
+<label class="inline"><input type="checkbox" name="require_kicad_fields" checked> require KiCad fields</label>
+<label class="inline"><input type="checkbox" name="skip_erc_drc" checked> skip ERC/DRC</label>
+<button>Run Pipeline</button>
+</form>
+<form method="post" action="/firmware-generate" data-async="1">
+<h3>Generate Firmware JSON</h3>
+<div class="field"><label>File hash<input name="file_hash" placeholder="sha256"></label></div>
+<div class="field"><label>Requirement<textarea name="requirement"></textarea></label></div>
+<div class="field"><label>Target platform<input name="target_platform" value="STM32"></label></div>
+<div class="field"><label>Language<input name="language" value="C"></label></div>
+<button>Generate Firmware</button>
+</form>
+<form method="post" action="/kicad-generate" data-async="1">
+<h3>Generate KiCad JSON</h3>
+<div class="field"><label>File hash<input name="file_hash" placeholder="sha256"></label></div>
+<div class="field"><label>Firmware JSON<input name="firmware_json" data-path-field="1" data-path-kind="json" placeholder="AI_support/outputs/.../firmware_output.json"></label></div>
+<div class="field"><label>Firmware validation JSON<input name="firmware_validation_json" data-path-field="1" data-path-kind="json" placeholder="AI_support/outputs/.../firmware_validation.json"></label></div>
+<div class="field"><label>Hardware requirement<textarea name="hardware_requirement"></textarea></label></div>
+<button>Generate KiCad</button>
+</form>
+<form method="post" action="/kicad-write" data-async="1">
+<h3>Write KiCad Project</h3>
+<div class="field"><label>KiCad JSON<input name="kicad_json" data-path-field="1" data-path-kind="json" placeholder="AI_support/outputs/.../kicad_output.json"></label></div>
+<div class="field"><label>Output dir<input name="output_dir" data-path-field="1" data-path-kind="dir" placeholder="optional"></label></div>
+<button>Write Files</button>
+</form>
+</div>
+</section>
+<section>
+<h2>KB / Citation Browser</h2>
+<form method="get" action="/kb"><input name="file_hash" placeholder="PDF SHA256 file_hash" size="72"><button>Open KB</button></form>
+</section>
+<section>
+<h2>Learning Proposals</h2>
+<table><tr><th>ID</th><th>Risk</th><th>Field</th><th>Proposal</th><th>Action</th></tr>{{PROPOSALS_ROWS}}</table>
+</section>
+<section>
+<h2>Human Override Audit</h2>
+<pre>{{HUMAN_OVERRIDES}}</pre>
+<h2>Memory Conflicts</h2>
+<pre>{{MEMORY_CONFLICTS}}</pre>
+</section>
+</div>
+<aside class="sticky">
+<section>
+<h2>Result</h2>
+<div id="action-status" class="statusline">Ready.</div>
+<pre id="result-panel">Submit a workflow form to see JSON here.</pre>
+</section>
+</aside>
+</div>
+<script>
+let lastPathField = null;
+let pathSearchTimer = null;
+function focusPathField(el) {
+  lastPathField = el;
+  const kind = el.dataset.pathKind;
+  if (kind) { document.getElementById('path-kind').value = kind; }
+}
+document.querySelectorAll('[data-path-field="1"]').forEach((el) => {
+  el.addEventListener('focus', () => focusPathField(el));
+  const wrapper = document.createElement('span');
+  wrapper.className = 'path-input-row';
+  el.parentNode.insertBefore(wrapper, el);
+  wrapper.appendChild(el);
+  const search = document.createElement('button');
+  search.type = 'button';
+  search.className = 'path-search-inline';
+  search.textContent = 'Search';
+  search.title = 'Search files for this path field';
+  search.addEventListener('click', () => {
+    focusPathField(el);
+    const raw = el.value.trim() || el.placeholder || '';
+    const parts = raw.split(/[\\/]/).filter(Boolean);
+    document.getElementById('path-query').value = parts.length ? parts[parts.length - 1] : raw;
+    const kind = el.dataset.pathKind;
+    if (kind) { document.getElementById('path-kind').value = kind; }
+    runPathSearch();
+    document.getElementById('path-results').scrollIntoView({behavior: 'smooth', block: 'nearest'});
+  });
+  wrapper.appendChild(search);
+});
+function showResult(payload) {
+  document.getElementById('result-panel').textContent = JSON.stringify(payload, null, 2);
+  document.getElementById('action-status').textContent = 'Done: ' + (payload.status || 'ok');
+}
+document.querySelectorAll('form[data-async="1"]').forEach((form) => {
+  form.addEventListener('submit', async (event) => {
+    event.preventDefault();
+    const button = form.querySelector('button');
+    const oldText = button ? button.textContent : '';
+    if (button) { button.disabled = true; button.textContent = 'Running...'; }
+    document.getElementById('action-status').textContent = 'Running ' + form.action.split('/').pop() + '...';
+    try {
+      const response = await fetch(form.action, {
+        method: 'POST',
+        headers: {'X-Requested-With': 'fetch', 'Content-Type': 'application/x-www-form-urlencoded'},
+        body: new URLSearchParams(new FormData(form))
+      });
+      const payload = await response.json();
+      showResult(payload);
+    } catch (error) {
+      showResult({status: 'failed', error: String(error)});
+    } finally {
+      if (button) { button.disabled = false; button.textContent = oldText; }
+    }
+  });
+});
+async function runPathSearch() {
+  const q = document.getElementById('path-query').value;
+  const kind = document.getElementById('path-kind').value;
+  const status = document.getElementById('path-status');
+  const box = document.getElementById('path-results');
+  status.textContent = 'Searching...';
+  box.innerHTML = '';
+  const response = await fetch('/path-search?q=' + encodeURIComponent(q) + '&kind=' + encodeURIComponent(kind));
+  const payload = await response.json();
+  status.textContent = payload.count + ' result(s)' + (payload.truncated ? ' (truncated)' : '');
+  if (!payload.results.length) {
+    box.textContent = 'No matches.';
+    return;
+  }
+  payload.results.forEach((item) => {
+    const row = document.createElement('div');
+    row.className = 'path-item';
+    const code = document.createElement('code');
+    code.textContent = item.path;
+    code.title = item.absolute || item.path;
+    const copy = document.createElement('button');
+    copy.type = 'button';
+    copy.textContent = 'Use';
+    copy.addEventListener('click', async () => {
+      if (lastPathField) {
+        lastPathField.value = item.path;
+        lastPathField.focus();
+      }
+      try { await navigator.clipboard.writeText(item.path); } catch (_) {}
+    });
+    row.appendChild(code);
+    if (item.open_url) {
+      const open = document.createElement('button');
+      open.type = 'button';
+      open.textContent = 'Open';
+      open.addEventListener('click', () => {
+        window.open(item.open_url, '_blank', 'noopener');
+      });
+      row.appendChild(open);
+    }
+    row.appendChild(copy);
+    box.appendChild(row);
+  });
+}
+document.getElementById('path-search-button').addEventListener('click', runPathSearch);
+document.getElementById('path-query').addEventListener('keydown', (event) => {
+  if (event.key === 'Enter') { event.preventDefault(); runPathSearch(); }
+});
+document.getElementById('path-query').addEventListener('input', () => {
+  clearTimeout(pathSearchTimer);
+  const q = document.getElementById('path-query').value.trim();
+  if (q.length < 2) { return; }
+  pathSearchTimer = setTimeout(runPathSearch, 350);
+});
+document.getElementById('path-kind').addEventListener('change', runPathSearch);
+</script>
+</main>
+</body></html>

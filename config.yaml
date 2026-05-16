@@ -1,0 +1,237 @@
+# AI_support Configuration File
+# All settings can be overridden via environment variables.
+
+# ─── LLM Configuration ────────────────────────────────────────────────────────
+
+llm:
+  # Ollama settings
+  ollama:
+    model: "qwen2.5-coder:7b"       # 💻 Code model (primary)
+    planner_model: "llama3.1"    # 🧠 Planner model
+
+    url: "http://localhost:11434"   # Ollama server URL
+    streaming: true                 # Enable streaming by default
+    keep_alive: "5m"               # Model keep-alive time (default: 5 minutes)
+    connect_timeout: 10             # Connection timeout in seconds
+    read_timeout: 90               # Read timeout in seconds
+    max_retries: 2                 # Number of retry attempts
+
+  # OpenAI settings (fallback)
+  openai:
+    model: "gpt-4o"                 # Default OpenAI model
+    api_key: ""                     # Leave empty to use local Ollama only
+    base_url: "https://api.openai.com/v1"
+    streaming: true
+    temperature: 0.3
+    max_tokens: 2048
+    read_timeout: 120
+    max_retries: 2
+
+  # Anthropic Claude settings (optional cloud provider)
+  anthropic:
+    model: "claude-sonnet-4-5"      # Default Anthropic model
+    api_key: ""                     # Set ANTHROPIC_API_KEY env var or here
+    temperature: 0.3
+    max_tokens: 4096
+    read_timeout: 120
+    max_retries: 2
+
+  # Google Gemini settings (optional cloud provider)
+  gemini:
+    model: "gemini-2.0-flash"       # Default Gemini model
+    api_key: ""                     # Set GEMINI_API_KEY env var or here
+    temperature: 0.3
+    max_tokens: 4096
+    read_timeout: 120
+    max_retries: 2
+
+# ─── Model Routing ─────────────────────────────────────────────────────────────
+
+model_routing:
+  # Local-only mode: ignore cloud providers even if configured
+  local_only: true                  # Set to false to enable cloud fallback
+
+  # Fallback chain: providers tried in order when the primary fails
+  # Available: ollama, openai, anthropic, gemini
+  fallback_order:
+    - ollama
+    - openai
+    - anthropic
+    - gemini
+
+  # Task -> model mapping (overrides local_only for specific tasks)
+  # "openai", "ollama", "anthropic", or "gemini"
+  task_defaults:
+    code_generation: "ollama"
+    fix_errors: "ollama"
+    document_analysis: "ollama"
+    simple: "ollama"
+    complex_reasoning: "ollama"
+
+  # Expert mode: use OpenAI for complex firmware tasks
+  use_openai_for_complex: false     # Enable GPT for CAN/bootloader/RTOS drivers
+
+  # Confidence threshold: use GPT for low-confidence classifications
+  low_confidence_threshold: 0.5     # Below this, prefer OpenAI
+  low_confidence_model: "ollama"    # Model to use for low-confidence tasks
+
+# ─── Token / Context Settings ─────────────────────────────────────────────────
+
+tokens:
+  # Context window sizes (can be overridden per model)
+  context_windows:
+    gpt_4o: 128000
+    gpt_4o_mini: 128000
+    gpt_4_turbo: 128000
+    gpt_4: 8192
+    gpt_35_turbo: 16385
+    llama3_1: 128000
+    llama3: 8192
+    llama2: 4096
+    mistral: 8192
+    codellama: 16384
+    qwen2_5_coder: 8192
+    bge_m3: 8192
+    default: 4096
+
+  # Safety margin: leave this many tokens for response
+  response_safety_margin: 512
+
+  # Enable tiktoken for accurate counting (requires tiktoken package)
+  use_tiktoken: true
+
+# ─── RAG / Retrieval Settings ─────────────────────────────────────────────────
+
+rag:
+  # Chunk configuration
+  chunk:
+    text_chars: 1400                # Target characters per chunk
+    overlap_ratio: 0.25             # Overlap as fraction of chunk size
+    max_chunks: 8                  # Max chunks per section
+
+  # Semantic search
+  semantic:
+    enabled: true                  # Enable vector similarity search
+    model: "bge-m3"               # 🔎 Embedding model
+    top_k: 5                      # Default top-k results
+    rerank_candidates: 10         # Candidates for reranking
+
+  # Hybrid search weights
+  hybrid_weights:
+    lexical: 0.65                  # BM25 weight
+    vector: 8.0                   # Vector similarity weight
+    rerank_bonus_high: 3.0        # Bonus for high-confidence hits
+    rerank_bonus_medium: 1.5      # Bonus for medium-confidence hits
+
+  # Vector store backend
+  vector_backend: "numpy"          # "numpy" (default) or "chromadb"
+  chromadb:
+    persist_directory: "AI_support/rag_index/chromadb"
+    collection_name: "carv_embeddings"
+    distance_metric: "cosine"
+
+  # Cache settings
+  cache:
+    ttl_seconds: 120
+    max_entries: 64
+
+  # Confidence thresholds
+  confidence:
+    high: 2                       # Min hits for HIGH confidence
+    medium: 1                     # Min hits for MEDIUM confidence
+
+# ─── Agent Settings ─────────────────────────────────────────────────────────────
+
+agent:
+  # Retry limits
+  max_attempts: 3
+
+  # Stage timeouts (seconds, base)
+  timeouts:
+    generate: 150
+    fix: 120
+    review: 90
+    chapter_worker: 75
+
+  # Review gate
+  review:
+    enabled: true                 # Enable reviewer gate after generation
+    max_review_attempts: 2        # Retry generation if review fails
+
+  # Chapter workers (parallel PDF section processing)
+  chapter_workers:
+    enabled: true
+    max_workers: 4
+    retry_limit: 2
+    cache_max_age_hours: 12
+
+# ─── Memory / Learning Settings ───────────────────────────────────────────────
+
+memory:
+  # Memory compaction
+  compaction:
+    keep_proposals: 100
+    keep_versions: 300
+    auto_compact_threshold: 250    # Auto-compact when proposals exceed this
+
+  # Experience retention
+  experience:
+    max_entries: 50               # Max experience records
+    feedback_max_entries: 50
+    approvals_max_entries: 200
+
+  # Learning proposals
+  proposals:
+    max_entries: 200
+    auto_approve_low_risk: false  # Auto-approve LOW risk proposals
+
+# ─── Build Tools ───────────────────────────────────────────────────────────────
+
+build:
+  # Parallel build
+  parallel_jobs: 4                 # -jN for make/ninja
+  use_ninja: true                 # Prefer Ninja over Make
+
+  # Static analysis
+  static_analysis:
+    enabled: true
+    checks: ["brace", "includes", "gcc_syntax"]
+
+  # Flash settings
+  flash:
+    tool: "stlink"               # "stlink" or "jlink"
+    verify: true                 # Verify after flash
+
+# ─── Streaming / Output ────────────────────────────────────────────────────────
+
+streaming:
+  enabled: true                   # Global streaming toggle
+  show_progress: false            # Show progress bar during streaming
+  flush_interval: 0.1             # Seconds between stdout flushes
+
+# ─── Diagnostics ────────────────────────────────────────────────────────────────
+
+diagnostics:
+  enabled: true                   # Enable automatic diagnostics after edits
+  auto_run: true                 # Run diagnostics automatically after tool execution
+  compilers:                     # Compilers to try (first available is used)
+    - gcc
+    - clang
+    - arm-none-eabi-gcc
+  timeout: 30                    # Timeout for diagnostics run (seconds)
+  max_errors: 50                 # Maximum errors to report
+
+# ─── Session Management ────────────────────────────────────────────────────────
+
+sessions:
+  storage_dir: "~/.carv/sessions" # Where session files are stored
+  auto_save: false               # Auto-save after each turn
+  max_sessions: 50              # Maximum sessions to keep
+
+# ─── Logging ─────────────────────────────────────────────────────────────────
+
+logging:
+  level: "INFO"                  # DEBUG, INFO, WARNING, ERROR
+  structured: true               # Use structlog for JSON logs
+  log_file: ""                   # Optional log file path
+  max_file_size_mb: 10           # Max log file size before rotation

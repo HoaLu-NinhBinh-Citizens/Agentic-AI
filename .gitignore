@@ -1,0 +1,80 @@
+main/software/output/
+main/software/**/CMakeFiles/
+main/software/**/CMakeCache.txt
+main/software/**/cmake_install.cmake
+main/software/**/compile_commands.json
+main/software/**/Makefile
+main/software/**/build.ninja
+main/software/**/.ninja_deps
+main/software/**/.ninja_log
+main/software/**/callgraph_file_release.cgx
+main/software/**/.dep
+main/software/Tools/segger/ozone/*.jdebug.user
+.vscode/
+**/.vscode/
+.venv/
+**/.venv/
+__pycache__/
+**/__pycache__/
+*.py[cod]
+*$py.class
+.pytest_cache/
+**/.pytest_cache/
+
+# AI agent source should be versioned; runtime/cache artifacts should not.
+AI_support/**/__pycache__/
+AI_support/**/.pytest_cache/
+AI_support/ai_agent_memory/
+AI_support/ai_generated/
+AI_support/rag_index/
+AI_support/retrieval_reports/
+AI_support/outputs/
+AI_support/archive/
+AI_support/.ruff_cache/
+AI_support/tests/.pytest_cache/
+
+# Consolidated data directory (Phase 16)
+AI_support/data/rag_index/
+AI_support/data/retrieval/
+AI_support/data/memory/
+AI_support/data/outputs/
+AI_support/data/ai_generated/
+
+# Legacy locations (redirect to data/)
+rag_index/
+retrieval_reports/
+
+# Benchmarking reports (runtime artifacts)
+AI_support/benchmarking/reports/
+AI_support/benchmark/stress_results/
+AI_support/benchmarking/ground_truth/
+
+# Archived modules (use git rm -r --cached to remove from tracking)
+AI_support/ide/
+AI_support/optimization/
+AI_support/benchmarking/
+
+*.log
+node_modules/
+dist/
+build/
+coverage/
+.vite/
+.cache/
+
+# test outputs
+results.json
+
+# python
+__pycache__/
+*.pyc
+venv/
+.env
+
+# IDE
+.vscode/
+.idea/
+
+# OS
+.DS_Store
+Thumbs.db

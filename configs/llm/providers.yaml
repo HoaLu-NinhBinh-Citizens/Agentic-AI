@@ -1,0 +1,14 @@
+# LLM Provider Configurations
+
+openai:
+  api_key: ${OPENAI_API_KEY}
+  model: gpt-4o
+  base_url: https://api.openai.com/v1
+
+anthropic:
+  api_key: ${ANTHROPIC_API_KEY}
+  model: claude-3-5-sonnet
+
+ollama:
+  base_url: http://localhost:11434
+  model: llama3

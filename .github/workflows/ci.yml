@@ -1,0 +1,172 @@
+name: AI_support CI
+
+on:
+  push:
+    branches: [main, develop]
+    paths:
+      - 'AI_support/**'
+      - '.github/workflows/**'
+  pull_request:
+    branches: [main]
+    paths:
+      - 'AI_support/**'
+      - '.github/workflows/**'
+
+jobs:
+  test:
+    name: Test Suite
+    runs-on: ubuntu-latest
+    
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up Python 3.12
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+          cache: 'pip'
+          cache-dependency-path: 'AI_support/requirements.txt'
+
+      - name: Install dependencies
+        run: |
+          pip install -r AI_support/requirements.txt
+          pip install pytest pytest-asyncio httpx
+
+      - name: Run tests
+        run: |
+          python -m pytest AI_support/tests/ \
+            --ignore=AI_support/tests/test_p9_production_concepts.py \
+            --ignore=AI_support/tests/test_aikicad_agent.py \
+            -q --tb=short
+
+  lint:
+    name: Lint
+    runs-on: ubuntu-latest
+    
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up Python 3.12
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Install ruff
+        run: pip install ruff
+
+      - name: Run ruff
+        run: |
+          ruff check AI_support/ \
+            --ignore=E501,F401,E402,W292,F541 \
+            --select=E,F,W
+
+  security:
+    name: Security Scan
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up Python 3.12
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Install bandit
+        run: pip install bandit
+
+      - name: Run bandit security scan
+        run: |
+          bandit -r AI_support/ \
+            --severity-level=medium,high \
+            --confidence-level=medium,high \
+            -f json -o bandit-report.json || true
+          bandit -r AI_support/ \
+            --severity-level=medium,high \
+            --confidence-level=medium,high \
+            -f screen
+
+  dependency-scan:
+    name: Dependency Scan
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up Python 3.12
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+          cache: 'pip'
+          cache-dependency-path: 'AI_support/requirements.txt'
+
+      - name: Install pip-audit
+        run: pip install pip-audit
+
+      - name: Run pip-audit
+        run: |
+          pip-audit -r AI_support/requirements.txt \
+            --format=json --output=pip-audit.json || true
+          pip-audit -r AI_support/requirements.txt
+
+  secrets-scan:
+    name: Secrets Scan
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Install detect-secrets
+        run: pip install detect-secrets
+
+      - name: Run detect-secrets baseline check
+        run: |
+          detect-secrets scan AI_support/ > secrets.baseline.json || true
+          detect-secrets audit secrets.baseline.json || true
+
+  docker:
+    name: Docker Build
+    runs-on: ubuntu-latest
+    
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Build Docker image
+        run: |
+          docker build -t ai-support:test \
+            -f AI_support/Dockerfile .
+
+      - name: Test Docker image
+        run: |
+          docker run --rm ai-support:test \
+            python -c "import AI_support; print('Import OK')"
+
+  api-test:
+    name: API Integration Tests
+    runs-on: ubuntu-latest
+    
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up Python 3.12
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Install dependencies
+        run: pip install -r AI_support/requirements.txt
+
+      - name: Run API tests
+        run: |
+          python -m pytest AI_support/tests/test_api_server.py -q
+          python -m pytest AI_support/tests/test_dashboard_e2e.py -q

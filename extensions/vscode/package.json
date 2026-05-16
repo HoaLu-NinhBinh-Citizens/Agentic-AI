@@ -1,0 +1,11 @@
+"""VSCode Extension for AI_support."""
+
+{
+  "name": "ai-support",
+  "version": "0.1.0",
+  "description": "AI_support IDE Extension",
+  "main": "./out/extension.js",
+  "scripts": {
+    "compile": "tsc"
+  }
+}

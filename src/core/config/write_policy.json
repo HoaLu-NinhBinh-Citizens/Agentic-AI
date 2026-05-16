@@ -1,0 +1,23 @@
+{
+  "schema_version": "write_policy_v1",
+  "default_mode": "target_project",
+  "protected_roots": [
+    "AI_support"
+  ],
+  "protected_always": [
+    ".git",
+    ".venv",
+    ".pytest_cache",
+    ".vscode"
+  ],
+  "allowed_write_roots": [
+    "main",
+    "AI_support/outputs",
+    "AI_support/data",
+    "AI_support/retrieval_reports",
+    "AI_support/rag_index"
+  ],
+  "agent_upgrade_allowed_roots": [
+    "AI_support"
+  ]
+}

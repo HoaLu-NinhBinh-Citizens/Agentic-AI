@@ -1,0 +1,16 @@
+name: CD
+
+on:
+  push:
+    branches: [main]
+    tags: ['v*']
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Build and push Docker image
+        run: |
+          docker build -t ai-support:${{ github.ref_name }} .
+          docker push ai-support:${{ github.ref_name }}

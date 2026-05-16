@@ -1,0 +1,8 @@
+{
+  "pipeline_context": {
+    "project_id": "test",
+    "requirement": "blink LED on STM32",
+    "target_platform": "STM32",
+    "language": "C"
+  }
+}

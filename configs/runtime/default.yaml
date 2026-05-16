@@ -1,0 +1,17 @@
+# AI_support Configuration
+
+runtime:
+  max_concurrent_tasks: 10
+  task_timeout_seconds: 300
+  retry_attempts: 3
+
+llm:
+  default_provider: openai
+  model: gpt-4o
+  temperature: 0.7
+  max_tokens: 4096
+
+observability:
+  log_level: INFO
+  enable_tracing: true
+  metrics_port: 9090

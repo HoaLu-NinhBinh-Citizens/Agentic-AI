@@ -1,0 +1,7 @@
+{
+  "file_hash": "abc123",
+  "validation": {
+    "valid": true,
+    "checks_passed": ["pin_mapping", "voltage_level"]
+  }
+}

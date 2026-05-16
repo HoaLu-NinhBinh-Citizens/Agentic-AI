@@ -1,0 +1,25 @@
+{
+  "worktrees": {
+    "wt-1778426664381-1": {
+      "branch": "lithe-hedgehog",
+      "path": "c:\\Users\\thang\\Desktop\\carv\\.kilo\\worktrees\\lithe-hedgehog",
+      "parentBranch": "main",
+      "createdAt": "2026-05-10T15:24:24.381Z",
+      "remote": "origin"
+    }
+  },
+  "sessions": {
+    "ses_1ed82a644ffe19lvZpMTO9YzEq": {
+      "worktreeId": "wt-1778426664381-1",
+      "createdAt": "2026-05-10T15:24:25.434Z"
+    }
+  },
+  "tabOrder": {
+    "local": [
+      "pending:1"
+    ]
+  },
+  "worktreeOrder": [
+    "wt-1778426664381-1"
+  ]
+}
