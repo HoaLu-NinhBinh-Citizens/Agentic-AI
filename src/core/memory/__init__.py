@@ -1,3 +1,14 @@
-from .store import AgentMemory
+"""Core memory module exports."""
 
-__all__ = ["AgentMemory"]
+from .semantic_memory import SemanticMemory, MemoryRecord, MemoryResult
+from .chunker import Chunker, Chunk
+from .deduplication import DeduplicationEngine
+
+__all__ = [
+    "SemanticMemory",
+    "MemoryRecord",
+    "MemoryResult",
+    "Chunker",
+    "Chunk",
+    "DeduplicationEngine",
+]

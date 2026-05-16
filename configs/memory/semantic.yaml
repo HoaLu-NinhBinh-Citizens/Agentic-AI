@@ -1,0 +1,74 @@
+# Semantic Memory Configuration for Phase 4A
+
+memory:
+  # Database settings
+  db_path: "./data/lancedb"
+
+  # Storage limits for backpressure / growth control
+  limits:
+    # Maximum vectors (0 = unlimited)
+    max_vectors: 1000000
+    # Warn when storage reaches this percentage of max_vectors
+    warn_at_percent: 80
+
+  # Embedding settings
+  embedding:
+    # Ollama URL for embeddings
+    ollama_url: http://localhost:11434/api/embeddings
+    # Model for embeddings (bge-m3:latest recommended)
+    model: bge-m3:latest
+    # Cache size for embeddings
+    cache_maxsize: 4096
+    # Timeout for embedding requests
+    timeout_seconds: 3
+    # Max retries for failed embeddings
+    max_retries: 2
+
+  # Chunking settings
+  chunking:
+    # Maximum chunk size in characters
+    max_chunk_size: 500
+    # Maximum JSON chunk size
+    max_json_chunk_size: 2000
+
+  # Deduplication settings
+  dedup:
+    # Enable Bloom filter for exact-match dedup
+    enable_bloom: true
+    # Window size for semantic dedup
+    window_size: 20
+    # Cosine similarity threshold
+    similarity_threshold: 0.95
+    # Bloom filter capacity (expected number of elements)
+    bloom_capacity: 100000
+    # Bloom filter false positive rate
+    bloom_error_rate: 0.01
+
+  # Retrieval settings
+  retrieval:
+    # Default top-k results
+    default_top_k: 5
+    # Default minimum score for RAG
+    default_min_score: 0.5
+    # Oversample factor for ANN search
+    oversample_factor: 4
+    # Minimum oversample count
+    min_oversample: 20
+
+  # Index settings
+  index:
+    # Create index when row count exceeds this
+    create_threshold: 10000
+    # Index type (IVF_FLAT recommended)
+    index_type: IVF_FLAT
+    # Number of partitions for IVF index
+    num_partitions: 256
+    # Metric type (cosine recommended)
+    metric: cosine
+
+  # Storage policy
+  storage:
+    # Skip trivial acknowledgements
+    skip_trivial: true
+    # Minimum content length
+    min_content_length: 10
