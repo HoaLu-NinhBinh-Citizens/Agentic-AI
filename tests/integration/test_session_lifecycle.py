@@ -41,7 +41,7 @@ async def test_get_session(test_client):
     assert get_response.status_code == 200
     session = get_response.json()
     assert session["id"] == session_id
-    assert session["state"] == "active"
+    assert session["status"] == "active"
     assert "created_at" in session
 
 

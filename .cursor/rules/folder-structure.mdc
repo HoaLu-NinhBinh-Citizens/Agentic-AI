@@ -23,9 +23,9 @@ Before creating a new file, you MUST:
 
 ### 2. File Naming Conventions
 
-| Component | Required Files | Forbidden Patterns |
-|-----------|---------------|-------------------|
-| `core/agent/` | `runtime_agent.py`, `reasoning_loop.py`, `reflection.py`, `state.py` | ❌ `mock_agent.py` (use spec names) |
+| Component | Required Files | Notes |
+|-----------|---------------|-------|
+| `core/agent/` | `mock_agent.py` (Phase 1A), `reasoning_loop.py`, `reflection.py`, `state.py` | Use `mock_agent.py` for Phase 1A mock agent |
 | `core/session/` | `session_manager.py`, `session_state.py`, `lifecycle.py`, `session_store.py` | ❌ `manager.py` (already covered by `session_manager.py`) |
 | `interfaces/server/` | `main.py`, `health.py` | ✅ WebSocket subdir OK |
 | `interfaces/server/websocket/` | No specific files in spec | ✅ `manager.py` acceptable as implementation detail |
@@ -42,14 +42,11 @@ src/core/session/manager.py  # ← DO NOT CREATE
 src/core/session/session_manager.py  # ← Use this instead
 ```
 
-#### ❌ WRONG: Using non-spec file names
+#### ✅ CORRECT: Phase 1A uses mock_agent.py
 
 ```python
-# WRONG: File name not in STRUCTURE_TREE.md
-src/core/agent/mock_agent.py  # ← DO NOT CREATE
-
-# CORRECT: Use spec names or create under appropriate subdirectory
-src/core/agent/runtime_agent.py  # ← Use this
+# CORRECT for Phase 1A: Mock agent for streaming responses
+src/core/agent/mock_agent.py  # ← Use this for Phase 1A
 ```
 
 #### ✅ CORRECT: Check existing files first
@@ -94,7 +91,7 @@ If a file violates STRUCTURE_TREE.md:
 ```
 src/
 ├── core/
-│   ├── agent/        → runtime_agent.py, reasoning_loop.py, reflection.py, state.py
+│   ├── agent/        → mock_agent.py (Phase 1A), reasoning_loop.py, reflection.py, state.py
 │   ├── session/     → session_manager.py, session_state.py, lifecycle.py, session_store.py
 │   ├── runtime/     → runtime_manager.py, dispatcher.py, scheduler.py
 │   ├── execution/   → executor.py, execution_graph.py, task_queue.py

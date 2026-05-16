@@ -37,15 +37,16 @@ These instructions are shared across coding agents such as Codex, Claude Code, C
 
 ## Repository Map
 
-- `AI_support/`: Python agent, retrieval, LLM, services, tooling, and tests.
+- `src/AI_support/`: Python agent, retrieval, LLM, services, tooling, and tests.
+- `tests/`: pytest test suite.
 - `main/software/`: STM32 firmware, build/flash/test scripts, tools, and generated outputs.
 - `main/hardware/`: PCB, documents, references, and hardware assets.
 
 ## AI_support Python
 
 - Follow existing module boundaries.
-- Use `pytest`; test files are `test_*.py` under `AI_support/tests`.
-- Run tests from the repository root with `python -m pytest AI_support\tests`; for focused tests use `python -m pytest AI_support\tests\test_name.py`.
+- Use `pytest`; test files are `test_*.py` under `tests/`.
+- Run tests from the repository root with `python -m pytest tests`; for focused tests use `python -m pytest tests/test_name.py`.
 - Use `asyncio.run(...)` for async tests unless the project adds an async pytest plugin.
 - Prefer `tmp_path`, `monkeypatch`, and small local fakes over real filesystem, network, LLM, or hardware calls.
 - Preserve structured return shapes used by tests instead of changing schemas casually.

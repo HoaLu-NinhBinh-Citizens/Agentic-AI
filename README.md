@@ -3,12 +3,14 @@
 `AI_support` is the local AI-agent side of the project. It is intentionally
 separate from the embedded firmware/application tree.
 
+The source code lives under `src/` with the package name `AI_support`.
+
 The rule is simple:
 
 - Firmware/application code belongs outside this package.
 - Agent runtime, RAG indexes, generated drafts, memory, tests, and PDF
   knowledge-base tooling belong inside this package.
-- Generated code must be written under `AI_support/ai_generated` unless an
+- Generated code must be written under `ai_generated/` unless an
   explicit allowlist says otherwise.
 
 ## Quick Start
@@ -17,7 +19,7 @@ The rule is simple:
 
 ```powershell
 # Navigate to frontend
-cd AI_support/frontend
+cd frontend
 
 # Install dependencies
 npm install
@@ -83,7 +85,7 @@ python -m AI_support.app.embedded_agent benchmark
 
 ### Frontend
 ```powershell
-cd AI_support/frontend
+cd frontend
 
 npm run dev          # Development (http://localhost:5173)
 npm run build        # Production build
@@ -304,20 +306,20 @@ reported, the pipeline blocks at `erc_drc`. Use `--skip-erc-drc` only for
 development runs where final approval is not hardware-production ready.
 
 `aikicad-pipeline-run` writes stage reports under
-`AI_support/outputs/projects/<project_id>/reports`. Human review overrides are
-append-only records in `AI_support/data/review/human_overrides.jsonl`.
+`outputs/projects/<project_id>/reports`. Human review overrides are
+append-only records in `data/review/human_overrides.jsonl`.
 
 `autonomy-run` adds a safe deterministic loop on top of the pipeline. It records
 plans, observations, decisions, retry attempts, and fix proposals under
-`AI_support/outputs/projects/<project_id>/autonomy/<run_id>`. It can retry
+`outputs/projects/<project_id>/autonomy/<run_id>`. It can retry
 fixable schema/source failures, but safety-critical missing information,
 conflicts, and tool/input failures stop with a fix proposal instead of
 continuing.
 
 ## Root Modules
 
-No Python implementation file should live directly at `AI_support` root. The
-agent entrypoint and facade live in `app/embedded_agent.py`.
+No Python implementation file should live directly at root. The
+agent entrypoint and facade live in `app/embedded_agent.py` under `src/`.
 
 Before moving another module, update imports and run the full test suite.
 
@@ -327,13 +329,13 @@ Before moving another module, update imports and run the full test suite.
 
 ```powershell
 # Run all tests
-python -m pytest AI_support\tests -q
+python -m pytest tests -q
 
 # Run specific test module
-python -m pytest AI_support\tests\test_chaos.py -v
-python -m pytest AI_support\tests\test_redis_bus.py -v
-python -m pytest AI_support\tests\test_flash_tools.py -v
-python -m pytest AI_support\tests\test_observability.py -v
+python -m pytest tests/test_chaos.py -v
+python -m pytest tests/test_redis_bus.py -v
+python -m pytest tests/test_flash_tools.py -v
+python -m pytest tests/test_observability.py -v
 ```
 
 ---
@@ -351,7 +353,7 @@ taskkill /PID <pid> /F
 
 **Missing dependencies:**
 ```powershell
-cd AI_support/frontend
+cd frontend
 rm -rf node_modules
 npm install
 ```
@@ -361,7 +363,7 @@ npm install
 **Module not found:**
 ```powershell
 # Make sure you're in the project root
-cd C:\Users\thang\Desktop\carv
+cd C:\Users\thang\Desktop\Agentic-AI
 python -m AI_support.app.api_server
 ```
 
@@ -378,23 +380,23 @@ ollama serve
 
 | Document | Description |
 |----------|-------------|
-| [INDEX](AI_support/docs/INDEX.md) | **Main index** - All documentation links |
-| [AI_SUPPORT_DOCUMENTATION](AI_support/docs/AI_SUPPORT_DOCUMENTATION.md) | Full documentation |
-| [CURRENT_SYSTEM_AUDIT](AI_support/docs/CURRENT_SYSTEM_AUDIT.md) | System status & metrics |
-| [ARCHITECTURE](AI_support/docs/ARCHITECTURE.md) | System architecture |
-| [ARCHITECTURE_RUNTIME](AI_support/docs/ARCHITECTURE_RUNTIME.md) | Runtime kernel details |
-| [EVENT_SPEC](AI_support/docs/EVENT_SPEC.md) | Event system specification |
-| [WORKFLOW_SPEC](AI_support/docs/WORKFLOW_SPEC.md) | Workflow specification |
-| [HIL_SPEC](AI_support/docs/HIL_SPEC.md) | Hardware-in-the-Loop spec |
-| [ROADMAP](AI_support/docs/ROADMAP.md) | Development roadmap |
-| [WEB_UI_GUIDE](AI_support/docs/WEB_UI_GUIDE.md) | Web UI usage guide |
-| [STRUCTURE](AI_support/docs/STRUCTURE.md) | Code structure guide |
+| [INDEX](docs/INDEX.md) | **Main index** - All documentation links |
+| [AI_SUPPORT_DOCUMENTATION](docs/AI_SUPPORT_DOCUMENTATION.md) | Full documentation |
+| [CURRENT_SYSTEM_AUDIT](docs/CURRENT_SYSTEM_AUDIT.md) | System status & metrics |
+| [ARCHITECTURE](docs/ARCHITECTURE.md) | System architecture |
+| [ARCHITECTURE_RUNTIME](docs/ARCHITECTURE_RUNTIME.md) | Runtime kernel details |
+| [EVENT_SPEC](docs/EVENT_SPEC.md) | Event system specification |
+| [WORKFLOW_SPEC](docs/WORKFLOW_SPEC.md) | Workflow specification |
+| [HIL_SPEC](docs/HIL_SPEC.md) | Hardware-in-the-Loop spec |
+| [ROADMAP](docs/ROADMAP.md) | Development roadmap |
+| [WEB_UI_GUIDE](docs/WEB_UI_GUIDE.md) | Web UI usage guide |
+| [STRUCTURE](docs/STRUCTURE.md) | Code structure guide |
 
 ---
 
 ## Support
 
 For issues, check:
-1. `AI_support/logs/` - Server logs
+1. `logs/` - Server logs (from running app)
 2. `memory/` - Agent memory traces
 3. Run `smoke` command for diagnostics

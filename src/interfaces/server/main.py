@@ -16,7 +16,7 @@ from typing import Any
 from fastapi import FastAPI, HTTPException, WebSocket, WebSocketDisconnect, status
 from fastapi.middleware.cors import CORSMiddleware
 
-from core.agent.runtime_agent import RuntimeAgent
+from core.agent.mock_agent import MockAgent
 from core.session.session_manager import InMemorySessionManager
 from interfaces.server.websocket.manager import ConnectionManager
 
@@ -98,7 +98,7 @@ async def global_exception_handler(request, exc):
 state = ServerState(
     session_manager=InMemorySessionManager(),
     connection_manager=ConnectionManager(),
-    mock_agent=RuntimeAgent(),
+    mock_agent=MockAgent(),
 )
 
 

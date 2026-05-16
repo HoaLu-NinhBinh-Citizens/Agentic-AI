@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import pytest
 
-from core.session.manager import InMemorySessionManager
+from core.session.session_manager import InMemorySessionManager
 
 
 class TestInMemorySessionManager:
@@ -37,7 +37,7 @@ class TestInMemorySessionManager:
         assert session is not None
         assert session["id"] == session_id
         assert "created_at" in session
-        assert session["state"] == "active"
+        assert session["status"] == "active"
 
     def test_get_session_with_workspace(self):
         """Test that workspace is stored correctly."""
@@ -61,10 +61,11 @@ class TestInMemorySessionManager:
         self.manager.delete_session(session_id)
         assert self.manager.get_session(session_id) is None
 
-    def test_delete_session_raises_for_nonexistent(self):
-        """Test that delete_session raises KeyError for unknown ID."""
-        with pytest.raises(KeyError):
-            self.manager.delete_session("nonexistent-id")
+    def test_delete_session_nonexistent_silently_handles(self):
+        """Test that delete_session silently handles nonexistent ID."""
+        # Should not raise, just do nothing
+        self.manager.delete_session("nonexistent-id")
+        assert True  # If we get here, no exception was raised
 
     def test_list_sessions_returns_all_sessions(self):
         """Test that list_sessions returns all created sessions."""

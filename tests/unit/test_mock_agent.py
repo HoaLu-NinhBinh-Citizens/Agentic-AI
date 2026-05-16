@@ -4,15 +4,15 @@ from __future__ import annotations
 
 import pytest
 
-from core.agent.runtime_agent import RuntimeAgent
+from core.agent.mock_agent import MockAgent
 
 
-class TestRuntimeAgent:
-    """Test suite for RuntimeAgent."""
+class TestMockAgent:
+    """Test suite for MockAgent."""
 
     def setup_method(self):
         """Create a fresh agent for each test."""
-        self.agent = RuntimeAgent()
+        self.agent = MockAgent()
         self.events = []
 
     async def capture_event(self, event: dict) -> None:

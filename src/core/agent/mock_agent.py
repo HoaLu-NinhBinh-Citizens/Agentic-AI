@@ -1,6 +1,6 @@
-"""Runtime agent for Phase 1A.
+"""Mock agent for Phase 1A.
 
-This module provides a streaming runtime agent that responds character by character.
+This module provides a streaming mock agent that responds character by character.
 Deterministic behavior with no cancellation or tool execution.
 """
 
@@ -13,8 +13,8 @@ if TYPE_CHECKING:
     pass
 
 
-class RuntimeAgent:
-    """Runtime agent that streams character-by-character responses.
+class MockAgent:
+    """Mock agent that streams character-by-character responses.
 
     This is a deterministic mock for testing purposes.
     Each character is sent as a separate token with a 50ms delay.
@@ -62,6 +62,3 @@ class RuntimeAgent:
                     "message": str(e),
                 },
             })
-
-
-MockAgent = RuntimeAgent

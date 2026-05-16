@@ -38,6 +38,22 @@ Only THREE event types:
 }
 ```
 
+### Error Codes
+
+| Code | When | Description |
+|------|------|-------------|
+| `BUSY` | Session has ongoing streaming | Only one chat can run per session at a time. Returned when client sends a second chat while the first is still streaming. |
+| `SESSION_NOT_FOUND` | Invalid session ID | Session does not exist or has been deleted. |
+
+## Session States
+
+| State | Description |
+|-------|-------------|
+| `active` | Session exists and can accept chat messages |
+| `ended` | Session has been deleted |
+
+**Note:** `busy` is a runtime state (not persisted), indicating an ongoing streaming operation within an active session. It is not a session state.
+
 ## How to Run
 
 ### Start the Server
@@ -53,6 +69,14 @@ uvicorn src.interfaces.server.main:app --reload
 | `HOST` | `0.0.0.0` | Server host |
 | `PORT` | `8000` | Server port |
 | `LOG_LEVEL` | `INFO` | Logging level |
+
+## Logging Conventions
+
+| Level | Usage |
+|-------|-------|
+| `INFO` | Session lifecycle: create, delete, WebSocket connect/disconnect |
+| `DEBUG` | WebSocket messages: incoming chat, outgoing tokens |
+| `ERROR` | Exceptions, send failures, unexpected conditions |
 
 ## API Endpoints
 
@@ -73,7 +97,7 @@ curl -X POST http://localhost:8000/sessions -H "Content-Type: application/json" 
 
 ```bash
 curl http://localhost:8000/sessions/{session_id}
-# Response: {"id": "...", "created_at": "...", "workspace": null, "state": "active"}
+# Response: {"id": "...", "created_at": "...", "workspace": null, "status": "active"}
 ```
 
 ### Delete Session
@@ -115,6 +139,23 @@ websocat ws://localhost:8000/ws/{session_id}
 {"type": "done", "data": {"success": true}}
 ```
 
+### Multiple WebSocket Clients Per Session
+
+A session can have multiple WebSocket connections. When a chat message is sent:
+
+1. Events (tokens, done, error) are broadcast to **all** WebSocket connections of that session
+2. Any connected client receives the same streaming response
+3. This enables multi-client collaboration (e.g., IDE + CLI connected to same session)
+
+### Error Handling
+
+If `send_json` raises an exception (e.g., WebSocket disconnected):
+
+1. Log the error at `ERROR` level
+2. Stop streaming for that connection
+3. Continue streaming to other connected clients (if any)
+4. Cleanup resources when the WebSocket is disconnected
+
 ## Architecture
 
 ```
@@ -123,10 +164,10 @@ src/
 │   ├── agent/
 │   │   └── mock_agent.py       # Mock agent for streaming responses
 │   └── session/
-│       └── manager.py          # In-memory session management
+│       └── session_manager.py    # In-memory session management
 └── interfaces/
     └── server/
-        ├── main.py             # FastAPI server
+        ├── main.py              # FastAPI server
         └── websocket/
             └── manager.py       # WebSocket connection manager
 ```
