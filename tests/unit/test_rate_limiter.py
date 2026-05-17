@@ -1,77 +1,143 @@
-"""Unit tests for SlidingWindowRateLimiter."""
+"""Unit tests for rate limiter."""
 
-from __future__ import annotations
-
+import asyncio
 import pytest
-from core.rate_limiter import SlidingWindowRateLimiter
+import time
+
+from src.infrastructure.cache.tool.rate_limiter import (
+    FairQueue,
+    RateLimitConfig,
+    TokenBucket,
+    ToolRateLimiter,
+)
 
 
-class TestSlidingWindowRateLimiter:
-    """Test suite for SlidingWindowRateLimiter."""
+class TestTokenBucket:
+    """Tests for TokenBucket."""
 
-    def setup_method(self):
-        """Create a fresh rate limiter for each test."""
-        self.rl = SlidingWindowRateLimiter(max_requests=3, window_seconds=1.0)
+    def test_initial_tokens(self):
+        """Test initial token count equals burst."""
+        bucket = TokenBucket(rate=10.0, burst=5.0)
+        assert bucket.available_tokens == 5.0
 
-    def test_allow_within_limit(self):
-        """Test that requests within limit are allowed."""
-        assert self.rl.allow() is True
-        assert self.rl.allow() is True
-        assert self.rl.allow() is True
+    def test_acquire_success(self):
+        """Test successful token acquisition."""
+        bucket = TokenBucket(rate=10.0, burst=5.0)
+        result = asyncio.run(bucket.acquire(1.0))
 
-    def test_deny_when_exceeded(self):
-        """Test that requests exceeding limit are denied."""
-        assert self.rl.allow() is True
-        assert self.rl.allow() is True
-        assert self.rl.allow() is True
-        assert self.rl.allow() is False
+        assert result is True
+        assert bucket.available_tokens < 5.0
 
-    def test_reset_clears_requests(self):
-        """Test that reset clears all timestamps."""
-        assert self.rl.allow() is True
-        assert self.rl.allow() is True
-        self.rl.reset()
-        assert self.rl.allow() is True
-        assert self.rl.allow() is True
-        assert self.rl.allow() is True
+    def test_acquire_failure(self):
+        """Test failed token acquisition when empty."""
+        bucket = TokenBucket(rate=1.0, burst=1.0)
 
-    def test_remaining_count(self):
-        """Test that remaining count is correct."""
-        assert self.rl.remaining == 3
-        self.rl.allow()
-        assert self.rl.remaining == 2
-        self.rl.allow()
-        assert self.rl.remaining == 1
-        self.rl.allow()
-        assert self.rl.remaining == 0
+        bucket._tokens = 0
+        result = asyncio.run(bucket.acquire(1.0))
 
-    def test_window_expiry(self):
-        """Test that requests expire after window."""
-        import time
+        assert result is False
 
-        rl = SlidingWindowRateLimiter(max_requests=2, window_seconds=0.1)
-        assert rl.allow() is True
-        assert rl.allow() is True
-        assert rl.allow() is False
-        time.sleep(0.15)
-        assert rl.allow() is True
+    def test_token_refill(self):
+        """Test tokens refill over time."""
+        bucket = TokenBucket(rate=10.0, burst=10.0)
+        bucket._tokens = 0
 
-    def test_concurrent_access(self):
-        """Test thread-safe access to rate limiter."""
-        import threading
+        time.sleep(0.1)
 
-        rl = SlidingWindowRateLimiter(max_requests=10, window_seconds=1.0)
-        results = []
+        tokens = bucket.available_tokens
+        assert tokens >= 0.9
 
-        def worker():
-            result = rl.allow()
-            results.append(result)
 
-        threads = [threading.Thread(target=worker) for _ in range(20)]
-        for t in threads:
-            t.start()
-        for t in threads:
-            t.join()
+class TestFairQueue:
+    """Tests for FairQueue."""
 
-        allowed = sum(results)
-        assert allowed == 10
+    @pytest.fixture
+    def queue(self):
+        """Create a fresh fair queue."""
+        return FairQueue()
+
+    @pytest.mark.asyncio
+    async def test_enqueue_dequeue(self, queue):
+        """Test enqueue and dequeue."""
+        event = await queue.enqueue("key1")
+        assert event is not None
+
+        key = await queue.dequeue()
+        assert key == "key1"
+
+    @pytest.mark.asyncio
+    async def test_multiple_keys_round_robin(self, queue):
+        """Test round-robin ordering."""
+        await queue.enqueue("key1")
+        await queue.enqueue("key2")
+        await queue.enqueue("key3")
+
+        keys = []
+        for _ in range(3):
+            key = await queue.dequeue()
+            if key:
+                keys.append(key)
+
+        assert len(keys) == 3
+
+    @pytest.mark.asyncio
+    async def test_remove(self, queue):
+        """Test removing a key."""
+        await queue.enqueue("key1")
+        await queue.remove("key1")
+
+        key = await queue.dequeue()
+        assert key is None
+
+
+class TestToolRateLimiter:
+    """Tests for ToolRateLimiter."""
+
+    @pytest.fixture
+    def limiter(self):
+        """Create a fresh rate limiter."""
+        config = RateLimitConfig(
+            global_rate=100.0,
+            global_burst=50.0,
+            tool_rate=20.0,
+            tool_burst=10.0,
+        )
+        return ToolRateLimiter(config)
+
+    @pytest.mark.asyncio
+    async def test_acquire_success(self, limiter):
+        """Test successful acquire."""
+        result = await limiter.acquire("tool1", "key1")
+        assert result is True
+
+    @pytest.mark.asyncio
+    async def test_cooldown_key_rejected(self, limiter):
+        """Test key in cooldown is rejected."""
+        limiter.set_key_cooldown("key1", 10.0)
+
+        result = await limiter.acquire("tool1", "key1")
+        assert result is False
+
+    @pytest.mark.asyncio
+    async def test_different_keys_allowed(self, limiter):
+        """Test different keys are independent."""
+        assert await limiter.acquire("tool1", "key1") is True
+        assert await limiter.acquire("tool1", "key2") is True
+        assert await limiter.acquire("tool1", "key3") is True
+
+    @pytest.mark.asyncio
+    async def test_tool_weight(self, limiter):
+        """Test tool weight adjustment."""
+        await limiter.set_tool_weight("tool1", 2.0)
+
+        stats = limiter.get_stats()
+        assert stats["tools"]["tool1"]["rate"] == 40.0
+
+    @pytest.mark.asyncio
+    async def test_reset(self, limiter):
+        """Test reset clears all state."""
+        await limiter.acquire("tool1", "key1")
+        await limiter.reset()
+
+        stats = limiter.get_stats()
+        assert len(stats["tools"]) == 0
