@@ -1,0 +1,106 @@
+# Compression Module Configuration
+# Phase 4D - Compression & Memory Optimization
+
+compression:
+  enabled: true
+
+  # Background worker configuration
+  worker:
+    # How often to scan for compressible items (seconds)
+    interval_seconds: 3600
+
+    # Number of items to process per batch
+    batch_size: 50
+
+    # Rate limiting: items per second
+    rate_limit_items_per_second: 10.0
+
+    # Maximum compression attempts per item before marking no_compress
+    max_attempts: 3
+
+    # Only compress items older than this many days
+    min_age_days: 7
+
+    # Use optimistic locking for concurrent safety
+    optimistic_lock: true
+
+    # Cooldown between rate-limited operations (seconds)
+    cooldown_seconds: 0.1
+
+  # Compression strategy configuration
+  strategies:
+    # Default strategy to use
+    default: extractive
+
+    # Truncation compression settings
+    truncation:
+      # Maximum characters to keep
+      max_chars: 2000
+
+      # Keep both beginning and end (with ellipsis in middle)
+      keep_both_ends: true
+
+    # Extractive summarization settings
+    extractive:
+      # Ratio of sentences to keep (0.3 = 30%)
+      top_k_ratio: 0.3
+
+      # Diversity balance (0.5 = equal relevance and diversity)
+      diversity_lambda: 0.5
+
+      # Embedding model version
+      model_version: bge-m3:latest
+
+    # Key-value compaction settings
+    kv_compact:
+      # Ratio of fields to keep (0.5 = 50%)
+      keep_fields_ratio: 0.5
+
+    # Adaptive pruning settings
+    adaptive_prune:
+      # Prune items older than this many days
+      prune_after_days: 30
+
+      # Minimum access count to avoid pruning
+      min_access_count: 2
+
+      # Use soft delete (mark deleted, don't remove)
+      soft_delete: true
+
+      # Permanently delete after this many days in soft-deleted state
+      permanent_delete_days: 7
+
+  # Quality validation settings
+  quality:
+    # Minimum semantic similarity required (0.85 = 85%)
+    min_similarity: 0.85
+
+    # Validate similarity before committing compression
+    validate_before_commit: true
+
+  # Decompression cache settings
+  decompression_cache:
+    # Enable LRU cache for decompressed content
+    enabled: true
+
+    # Maximum cache entries
+    maxsize: 1000
+
+    # Cache TTL in seconds
+    ttl_seconds: 3600
+
+  # Agent feedback handling
+  feedback:
+    # Automatically disable compression for items reported by agent
+    auto_disable_on_report: true
+
+    # Rollback and mark no_compress when agent reports issue
+    rollback_and_mark_no_compress: true
+
+  # Cold storage for original content
+  cold_storage:
+    # Store original content before compression
+    enabled: true
+
+    # Move to cold storage after this many days
+    threshold_days: 7
