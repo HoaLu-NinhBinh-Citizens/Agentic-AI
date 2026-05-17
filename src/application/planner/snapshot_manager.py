@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from datetime import datetime
+from datetime import datetime, timezone
 from typing import Optional
 
 from .types import PlanGraph, PlanNode, PlanSnapshot
@@ -90,7 +90,7 @@ class PlanSnapshotManager:
             definition_version=definition_version,
             serialized_graph=self._serialize_graph(plan_graph),
             snapshot_events=planner_state or [],
-            created_at=int(datetime.utcnow().timestamp()),
+            created_at=int(datetime.now(timezone.utc).timestamp()),
         )
         
         await self._store.save(snapshot)

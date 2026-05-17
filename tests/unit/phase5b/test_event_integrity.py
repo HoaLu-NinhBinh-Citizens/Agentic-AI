@@ -301,34 +301,36 @@ class TestDeterministicValueGenerator:
     @pytest.fixture
     def generator(self):
         """Create deterministic generator."""
-        return DeterministicValueGenerator(seed=42)
+        return DeterministicValueGenerator(workflow_id="wf_test", base_seed=12345)
 
     def test_deterministic_time(self, generator):
         """Test deterministic time generation."""
         time1 = generator.now()
         time2 = generator.now()
-        
+
         assert time1 == time2
         assert isinstance(time1, (int, float))
 
     def test_deterministic_random(self, generator):
         """Test deterministic random generation."""
+        # Compare two different generators with same seed
+        gen2 = DeterministicValueGenerator(workflow_id="wf_test_same", base_seed=12345)
         sequence1 = [generator.random() for _ in range(10)]
-        sequence2 = [generator.random() for _ in range(10)]
-        
+        sequence2 = [gen2.random() for _ in range(10)]
+
         assert sequence1 == sequence2
 
     def test_deterministic_random_range(self, generator):
         """Test deterministic random in range."""
-        values = [generator.random_in_range(0, 100) for _ in range(10)]
-        
+        values = [generator.randint(0, 100) for _ in range(10)]
+
         assert all(0 <= v <= 100 for v in values)
 
     def test_deterministic_uuid(self, generator):
         """Test deterministic UUID generation."""
         uuid1 = generator.uuid()
         uuid2 = generator.uuid()
-        
+
         assert uuid1 != uuid2  # Each UUID should be unique
         assert len(uuid1) == 36  # UUID format
 
@@ -336,42 +338,42 @@ class TestDeterministicValueGenerator:
         """Test deterministic choice from sequence."""
         options = ["a", "b", "c", "d", "e"]
         choices = [generator.choice(options) for _ in range(10)]
-        
+
         # Same seed should produce same sequence
-        gen2 = DeterministicValueGenerator(seed=42)
+        gen2 = DeterministicValueGenerator(workflow_id="wf_test2", base_seed=12345)
         choices2 = [gen2.choice(options) for _ in range(10)]
-        
+
         assert choices == choices2
 
     def test_deterministic_shuffle(self, generator):
         """Test deterministic shuffle."""
         options = list(range(10))
         shuffled = generator.shuffle(options.copy())
-        
+
         # Same seed should produce same shuffle
-        gen2 = DeterministicValueGenerator(seed=42)
+        gen2 = DeterministicValueGenerator(workflow_id="wf_test3", base_seed=12345)
         shuffled2 = gen2.shuffle(options.copy())
-        
+
         assert shuffled == shuffled2
 
-    def test_replay_mode_same_values(self, generator):
+    def test_replay_mode_same_values(self):
         """Test that replay mode returns same values."""
         # Generate original sequence
-        gen = DeterministicValueGenerator(seed=123)
+        gen = DeterministicValueGenerator(workflow_id="wf_replay", base_seed=99999)
         original = {
             "time": gen.now(),
             "random": gen.random(),
             "uuid": gen.uuid(),
         }
-        
+
         # Replay with same seed
-        replay = DeterministicValueGenerator(seed=123)
+        replay = DeterministicValueGenerator(workflow_id="wf_replay", base_seed=99999)
         replay_values = {
             "time": replay.now(),
             "random": replay.random(),
             "uuid": replay.uuid(),
         }
-        
+
         assert original["time"] == replay_values["time"]
         assert original["random"] == replay_values["random"]
         # UUIDs are always unique even with same seed
@@ -424,8 +426,10 @@ class TestEventStoreWithIntegrity:
     @pytest.mark.asyncio
     async def test_verify_integrity_valid(self, store):
         """Test verifying valid event store."""
-        for i in range(3):
-            await store.append_event("wf1", {"event_type": f"task_{i}", "data": {}})
+        # Use explicit event IDs to ensure consistent hashing
+        await store.append_event("wf1", {"event_id": "e1", "event_type": "task_0", "data": {}})
+        await store.append_event("wf1", {"event_id": "e2", "event_type": "task_1", "data": {}})
+        await store.append_event("wf1", {"event_id": "e3", "event_type": "task_2", "data": {}})
         
         result = await store.verify_integrity("wf1")
         

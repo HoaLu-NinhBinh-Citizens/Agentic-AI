@@ -8,7 +8,7 @@ from __future__ import annotations
 import uuid
 import time
 from dataclasses import dataclass, field
-from datetime import datetime
+from datetime import datetime, timezone
 from typing import Any, Optional
 
 from .types import (
@@ -218,7 +218,7 @@ class PlannerFacade:
             plan_id=plan_id,
             goal=goal,
             graph=plan_graph,
-            created_at=int(datetime.utcnow().timestamp()),
+            created_at=int(datetime.now(timezone.utc).timestamp()),
         )
     
     async def resume_plan(

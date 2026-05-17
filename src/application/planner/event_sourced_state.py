@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import uuid
-from datetime import datetime
+from datetime import datetime, timezone
 from typing import Optional
 
 from .types import PlannerEvent, PlannerEventType
@@ -152,7 +152,7 @@ class EventSourcedPlannerState:
             session_id=session,
             event_type=event_type,
             data=data or {},
-            timestamp=int(datetime.utcnow().timestamp()),
+            timestamp=int(datetime.now(timezone.utc).timestamp()),
         )
         
         await self._store.append(event)
@@ -290,7 +290,7 @@ class EventSourcedPlannerState:
             Number of events deleted
         """
         cutoff = int(
-            datetime.utcnow().timestamp() - (retention_days * 86400)
+            datetime.now(timezone.utc).timestamp() - (retention_days * 86400)
         )
         return await self._store.delete_before(session_id, cutoff)
 

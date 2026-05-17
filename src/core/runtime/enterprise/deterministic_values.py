@@ -69,8 +69,10 @@ class DeterministicValueGenerator:
         self._base_random = random.Random(self._hash_seed(seed_input))
         self._sequence = 0
     
-    def _hash_seed(self, value: str) -> int:
-        """Generate a numeric seed from string."""
+    def _hash_seed(self, value: str | int) -> int:
+        """Generate a numeric seed from string or int."""
+        if isinstance(value, int):
+            value = str(value)
         return int(hashlib.sha256(value.encode()).hexdigest()[:16], 16)
     
     def now(self, record_key: Optional[str] = None) -> float:

@@ -299,6 +299,28 @@ src/
 │   │   ├── lancedb/
 │   │   └── chromadb/
 │   │
+│   ├── retrieval/                          # Phase 5C v12 - Advanced Retrieval Engine
+│   │   ├── retrieval_types.py              # Data schemas (Snapshot, Plugin, GoldenSet)
+│   │   ├── retrieval_config.py            # Configuration classes
+│   │   ├── retrieval_components.py       # Core components (7 enterprise features)
+│   │   ├── retrieval_engine.py           # AdvancedRetrievalEngine integration
+│   │   ├── retrieval_resilience.py       # Production resilience (8 extended features)
+│   │   ├── hybrid.py                    # HybridRetriever
+│   │   ├── vector_index.py              # VectorIndex
+│   │   ├── chunk_store.py               # ChunkStore
+│   │   ├── embedding.py                 # OllamaEmbeddingClient
+│   │   ├── query_analyzer.py           # QueryAnalyzer
+│   │   ├── search_cache.py             # SearchCache
+│   │   ├── evidence_builder.py          # EvidenceBuilder
+│   │   ├── ingest.py                   # RetrievalIngestor
+│   │   ├── rag_evaluation.py          # RetrievalEvaluator
+│   │   ├── chroma_store.py              # ChromaVectorStore
+│   │   ├── knowledge_base.py           # ReferenceKnowledgeBase
+│   │   ├── manifest.py                 # IndexManifest
+│   │   ├── page_aware.py              # PageAwareRetrievalSupport
+│   │   ├── context_budget.py          # ContextBudget
+│   │   └── pdf_ocr.py                 # PdfTableOCR
+│   │
 │   ├── tool_registry/                         # unified tool system
 │   │   ├── registry.py
 │   │   ├── builtin.py
@@ -401,6 +423,7 @@ pytest test suite.
 ```
 tests/
 ├── conftest.py
+├── phase5b_test_suite.py                # Phase 5B core tests (31 tests)
 ├── unit/
 │   ├── test_session_store.py
 │   ├── test_rate_limiter.py
@@ -411,12 +434,32 @@ tests/
 │   ├── test_persistent_session_manager.py
 │   ├── test_session_manager.py
 │   ├── test_mcp_config.py
-│   └── test_mcp_manager.py
+│   ├── test_mcp_manager.py
+│   ├── phase5b/                         # Phase 5B detailed tests
+│   │   ├── test_condition_evaluator.py
+│   │   ├── test_schema_validator.py
+│   │   ├── test_exactly_once.py
+│   │   ├── test_heartbeat_lease.py
+│   │   ├── test_compensation_saga.py
+│   │   ├── test_history_compaction.py
+│   │   ├── test_deadlock_detector.py
+│   │   ├── test_expansion_guard.py
+│   │   ├── test_multi_tenant_rbac.py
+│   │   ├── test_poison_defense.py
+│   │   └── test_event_integrity.py
+│   └── phase5c/                        # Phase 5C (Retrieval Engine) tests
+│       ├── test_retrieval_components.py  # Core (73 tests)
+│       └── test_retrieval_resilience.py  # Resilience (50 tests)
 ├── integration/
 │   ├── test_phase1b_features.py
 │   ├── test_mcp_phase2a.py
 │   ├── test_session_lifecycle.py
-│   └── test_websocket_chat.py
+│   ├── test_websocket_chat.py
+│   ├── phase5b/                        # Phase 5B integration tests
+│   │   ├── test_enterprise_integration.py
+│   │   ├── test_chaos_scenarios.py
+│   │   └── test_performance_scale.py
+│   └── phase5c/
 ├── e2e/
 ├── performance/
 ├── fixtures/

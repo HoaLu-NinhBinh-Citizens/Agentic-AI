@@ -71,9 +71,6 @@ class ConditionEvaluator:
         ast.Add, ast.Sub, ast.Mult, ast.Div, ast.Mod,
         ast.Name,
         ast.Constant,
-        ast.NameConstant,
-        ast.Num,
-        ast.Str,
         ast.Subscript,
         ast.Index,
         ast.Call,
@@ -136,12 +133,6 @@ class ConditionEvaluator:
         
         if node_type is ast.Constant:
             return node.value
-        if node_type is ast.NameConstant:
-            return node.value
-        if node_type is ast.Num:
-            return node.n
-        if node_type is ast.Str:
-            return node.s
         
         if node_type is ast.Name:
             return self._eval_name(node, context)

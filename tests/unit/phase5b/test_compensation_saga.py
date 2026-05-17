@@ -229,15 +229,21 @@ class TestSagaCoordinator:
         await coordinator.record_task_completion("saga1", "task1")
         await coordinator.record_task_completion("saga1", "task2")
         
+        # Create compensation tasks first
+        await coordinator.fail_saga("saga1", "task3")
+        
+        async def failing_compensation(in_, out):
+            raise RuntimeError("Failed")
+
         compensation_registry = {
             "task1": lambda in_, out: {"comp1": True},
-            "task2": lambda in_, out: (_ for _ in ()).throw(RuntimeError("Failed")),
+            "task2": failing_compensation,
         }
-        
+
         all_succeeded, failed = await coordinator.compensate_saga(
             "saga1", compensation_registry
         )
-        
+
         assert all_succeeded is False
         assert "task2" in failed
 

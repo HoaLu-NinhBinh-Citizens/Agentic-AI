@@ -312,7 +312,7 @@ class WorkflowHistoryManager:
         self._continue_manager = continue_manager
         self._compactor = compactor
     
-    async def record_event(
+    def record_event(
         self,
         workflow_id: str,
         event: dict,
@@ -326,7 +326,7 @@ class WorkflowHistoryManager:
         Returns:
             True if compaction was triggered
         """
-        compacted = await self._compactor.should_compact(
+        compacted = self._compactor.should_compact(
             event.get("sequence", 0) + 1
         )
         

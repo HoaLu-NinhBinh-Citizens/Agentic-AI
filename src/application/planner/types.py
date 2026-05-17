@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import uuid
 from dataclasses import dataclass, field
-from datetime import datetime
+from datetime import datetime, UTC
 from enum import Enum, auto
 from typing import Any, Callable, Optional
 
@@ -104,7 +104,7 @@ class PlanGraph:
     nodes: list[PlanNode] = field(default_factory=list)
     root_node_id: Optional[str] = None
     definition_version: str = "1.0"
-    created_at: int = field(default_factory=lambda: int(datetime.utcnow().timestamp()))
+    created_at: int = field(default_factory=lambda: int(datetime.now(UTC).timestamp()))
     metadata: dict = field(default_factory=dict)
 
     def add_node(self, node: PlanNode) -> None:
@@ -143,7 +143,7 @@ class PlanInterrupt:
     status: InterruptStatus
     resume_token: str
     user_input: Optional[dict] = None
-    created_at: int = field(default_factory=lambda: int(datetime.utcnow().timestamp()))
+    created_at: int = field(default_factory=lambda: int(datetime.now(UTC).timestamp()))
     expires_at: Optional[int] = None
     expired_at: Optional[int] = None
     resumed_at: Optional[int] = None
@@ -156,7 +156,7 @@ class PlannerEvent:
     session_id: str = ""
     event_type: PlannerEventType = PlannerEventType.DECOMPOSE_START
     data: dict = field(default_factory=dict)
-    timestamp: int = field(default_factory=lambda: int(datetime.utcnow().timestamp()))
+    timestamp: int = field(default_factory=lambda: int(datetime.now(UTC).timestamp()))
 
 
 @dataclass
@@ -166,7 +166,7 @@ class PlanSnapshot:
     definition_version: str
     serialized_graph: dict
     snapshot_events: list[dict]
-    created_at: int = field(default_factory=lambda: int(datetime.utcnow().timestamp()))
+    created_at: int = field(default_factory=lambda: int(datetime.now(UTC).timestamp()))
 
 
 @dataclass
@@ -174,7 +174,7 @@ class PlanRetrySnapshot:
     """Snapshot of plan state before retry."""
     plan_id: str
     snapshot: dict
-    created_at: int = field(default_factory=lambda: int(datetime.utcnow().timestamp()))
+    created_at: int = field(default_factory=lambda: int(datetime.now(UTC).timestamp()))
 
 
 @dataclass
@@ -187,7 +187,7 @@ class HumanAuditEntry:
     source_ip: Optional[str] = None
     action_id: str = field(default_factory=lambda: str(uuid.uuid4()))
     interrupt_id: Optional[str] = None
-    approved_at: int = field(default_factory=lambda: int(datetime.utcnow().timestamp()))
+    approved_at: int = field(default_factory=lambda: int(datetime.now(UTC).timestamp()))
 
 
 @dataclass
@@ -196,7 +196,7 @@ class SchemaDefinition:
     schema_id: str
     version: str
     schema_def: dict
-    created_at: int = field(default_factory=lambda: int(datetime.utcnow().timestamp()))
+    created_at: int = field(default_factory=lambda: int(datetime.now(UTC).timestamp()))
 
 
 @dataclass
@@ -271,7 +271,7 @@ class RetrievedPlan:
     reliability_weight: float
     human_verified: bool
     failure_rate: float
-    retrieved_at: int = field(default_factory=lambda: int(datetime.utcnow().timestamp()))
+    retrieved_at: int = field(default_factory=lambda: int(datetime.now(UTC).timestamp()))
 
 
 @dataclass
@@ -293,7 +293,7 @@ class PlanState:
     task_results: dict = field(default_factory=dict)
     context: dict = field(default_factory=dict)
     current_node_id: Optional[str] = None
-    created_at: int = field(default_factory=lambda: int(datetime.utcnow().timestamp()))
+    created_at: int = field(default_factory=lambda: int(datetime.now(UTC).timestamp()))
 
     def to_dict(self) -> dict:
         """Serialize state to dict."""

@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import secrets
 import uuid
-from datetime import datetime
+from datetime import datetime, timezone
 from typing import Optional
 
 from .types import InterruptStatus, PlanInterrupt, ResumeResult
@@ -101,14 +101,14 @@ class InMemoryPlanInterruptStore(PlanInterruptStore):
             return False, False
         
         interrupt.status = InterruptStatus.RESUMED
-        interrupt.resumed_at = int(datetime.utcnow().timestamp())
+        interrupt.resumed_at = int(datetime.now(timezone.utc).timestamp())
         interrupt.user_input = user_input
         
         return True, False
     
     async def get_expired(self) -> list[PlanInterrupt]:
         """Get all expired interrupts."""
-        now = int(datetime.utcnow().timestamp())
+        now = int(datetime.now(timezone.utc).timestamp())
         return [
             i for i in self._interrupts.values()
             if i.status == InterruptStatus.PENDING
@@ -156,7 +156,7 @@ class ResumeIdempotency:
             task_id=task_id,
             status=InterruptStatus.PENDING,
             resume_token=secrets.token_urlsafe(32),
-            expires_at=int(datetime.utcnow().timestamp()) + timeout,
+            expires_at=int(datetime.now(timezone.utc).timestamp()) + timeout,
         )
         
         await self._store.save(interrupt)
@@ -289,7 +289,7 @@ class ResumeIdempotency:
         return await self._store.update_status(
             interrupt_id,
             InterruptStatus.EXPIRED,
-            expired_at=int(datetime.utcnow().timestamp()),
+            expired_at=int(datetime.now(timezone.utc).timestamp()),
         )
     
     async def get_expired_interrupts(self) -> list[PlanInterrupt]:

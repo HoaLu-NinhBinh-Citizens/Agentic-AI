@@ -344,18 +344,23 @@ class TestPoisonToolDefense:
 
     @pytest.mark.asyncio
     async def test_tool_quarantine_after_poison(self, defense):
-        """Test that tool is quarantined after poisoning."""
+        """Test that tool is quarantined and rejected after poisoning."""
         # First poisoning
         await defense.process_output("bad_tool", "<script>alert(1)</script>")
         
-        # Second attempt should be quarantined
+        # Check tool is quarantined
+        assert defense._trust_manager.is_quarantined("bad_tool") is True
+        assert defense._trust_manager.is_rejected("bad_tool") is True
+        
+        # Second attempt should be rejected (rejection checked before quarantine)
         allowed, output, issues = await defense.process_output(
             "bad_tool",
             {"status": "ok"},
         )
         
         assert allowed is False
-        assert any("quarantined" in issue.lower() for issue in issues)
+        # Tool is rejected due to low trust score
+        assert any("rejected" in issue.lower() for issue in issues)
 
     @pytest.mark.asyncio
     async def test_tool_rejected_at_low_score(self, defense):

@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from datetime import datetime
+from datetime import datetime, timezone
 from typing import Optional
 
 from .types import BranchDecision
@@ -94,7 +94,7 @@ class BranchDecisionRecorder:
             workflow_id=workflow_id,
             task_id=task_id,
             selected_branch=selected_branch,
-            evaluated_at=int(datetime.utcnow().timestamp()),
+            evaluated_at=int(datetime.now(timezone.utc).timestamp()),
             condition_expr=condition_expr,
         )
         

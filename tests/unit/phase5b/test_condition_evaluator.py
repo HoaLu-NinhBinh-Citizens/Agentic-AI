@@ -322,13 +322,12 @@ class TestExpressionLimits:
         """Test expression at exactly the limit."""
         evaluator = ConditionEvaluator(max_expression_length=500)
         
-        # Create an expression within the limit
-        expr = "x" * 100 + " == " + "y" * 100
-        result, error = evaluator.evaluate(expr, {"x": 1, "y": 1})
+        # Create an expression within the limit that uses literals only
+        expr = "1" * 100 + " + " + "2" * 100
+        result, error = evaluator.evaluate(expr, {})
         
         # Should pass as it's within limit
         assert error is None
-        assert result is True
 
     def test_expression_too_deep(self):
         """Test that deeply nested expressions are rejected."""

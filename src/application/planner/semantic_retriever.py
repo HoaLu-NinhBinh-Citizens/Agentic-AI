@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from datetime import datetime
+from datetime import datetime, timezone
 from typing import Optional
 
 from .types import PlanGraph, RetrievedPlan
@@ -222,7 +222,7 @@ class SemanticPlanRetriever:
             quality_score=quality_score,
             human_verified=human_verified,
             failure_rate=failure_rate,
-            created_at=int(datetime.utcnow().timestamp()),
+            created_at=int(datetime.now(timezone.utc).timestamp()),
         )
         
         await self._store.save(stored)

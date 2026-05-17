@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from datetime import datetime
+from datetime import datetime, timezone
 from typing import Optional, Set
 
 from .types import PlanRetrySnapshot, PlanState
@@ -105,7 +105,7 @@ class PlanRetryManager:
         snapshot = PlanRetrySnapshot(
             plan_id=plan_id,
             snapshot=snapshot_data,
-            created_at=int(datetime.utcnow().timestamp()),
+            created_at=int(datetime.now(timezone.utc).timestamp()),
         )
         
         await self._store.save(snapshot)
@@ -183,7 +183,7 @@ class PlanRetryManager:
             await self._store.save(PlanRetrySnapshot(
                 plan_id=plan_id,
                 snapshot=state.to_dict(),
-                created_at=int(datetime.utcnow().timestamp()),
+                created_at=int(datetime.now(timezone.utc).timestamp()),
             ))
             
             return restored_state, True

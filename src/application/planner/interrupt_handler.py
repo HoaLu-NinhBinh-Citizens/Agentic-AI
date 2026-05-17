@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from datetime import datetime
+from datetime import datetime, timezone
 from typing import Any, Callable, Optional
 
 from .types import ExpirationPolicy, ExpirationResult, InterruptStatus, PlanInterrupt
@@ -62,7 +62,7 @@ class InterruptHandler:
                 fallback_available=False,
             )
         
-        now = int(datetime.utcnow().timestamp())
+        now = int(datetime.now(timezone.utc).timestamp())
         is_expired = now >= interrupt.expires_at
         
         return ExpirationResult(
@@ -211,7 +211,7 @@ class EscalationManager:
             "interrupt_id": interrupt.interrupt_id,
             "task_id": interrupt.task_id,
             "reason": reason,
-            "created_at": int(datetime.utcnow().timestamp()),
+            "created_at": int(datetime.now(timezone.utc).timestamp()),
             "status": "pending",
         }
         
@@ -250,7 +250,7 @@ class EscalationManager:
             if event.get("escalation_id") == escalation_id:
                 event["status"] = "resolved"
                 event["resolution"] = resolution
-                event["resolved_at"] = int(datetime.utcnow().timestamp())
+                event["resolved_at"] = int(datetime.now(timezone.utc).timestamp())
                 return True
         return False
 

@@ -80,8 +80,14 @@ class SchemaRegistry:
         to_version: str,
     ) -> list[SchemaMigration]:
         """Get the migration chain from one version to another."""
-        if schema_id not in self._migrations:
+        if from_version == to_version:
             return []
+        
+        if schema_id not in self._migrations or not self._migrations[schema_id]:
+            raise SchemaMigrationError(
+                f"No migration path from {from_version} to {to_version} "
+                f"for schema {schema_id}"
+            )
         
         migrations = self._migrations[schema_id]
         chain = []

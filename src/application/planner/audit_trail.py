@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import uuid
-from datetime import datetime
+from datetime import datetime, timezone
 from typing import Optional
 
 from .types import HumanAction, HumanAuditEntry
@@ -131,7 +131,7 @@ class HumanAuditTrail:
             interrupt_id=interrupt_id,
             action=action,
             approved_by=approved_by,
-            approved_at=int(datetime.utcnow().timestamp()),
+            approved_at=int(datetime.now(timezone.utc).timestamp()),
             reason=reason,
             source_ip=source_ip,
         )

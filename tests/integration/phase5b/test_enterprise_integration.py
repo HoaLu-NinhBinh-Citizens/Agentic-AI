@@ -168,7 +168,8 @@ class TestParallelExecution:
         )
         
         report = await detector.detect_deadlock(plan)
-        assert report.has_deadlock is False
+        # No cycles should be detected
+        assert len(report.cycles) == 0
 
 
 # ============================================================================
@@ -205,25 +206,36 @@ class TestCancellation:
     async def test_compensation_on_failure(self):
         """Test that failed tasks trigger compensation."""
         dlq = DeadLetterQueue()
-        config = CompensationConfig(max_attempts=2, initial_delay_seconds=0.01)
+        config = CompensationConfig(max_attempts=1, initial_delay_seconds=0.01)
         coordinator = SagaCoordinator(dlq, config)
         
         await coordinator.start_saga("saga1", "wf1")
         
+        # Record completed tasks (these will be compensated on failure)
         await coordinator.record_task_completion("saga1", "reserve_hotel")
         await coordinator.record_task_completion("saga1", "book_flight")
         
+        # Fail the saga - this creates compensation tasks from completed tasks
         tasks = await coordinator.fail_saga("saga1", "book_activity")
         
+        # Should have 2 compensation tasks created
         assert len(tasks) == 2
         
+        # Use async functions since execute_compensation awaits the compensation fn
+        async def cancel_hotel(i, o):
+            return {"hotel_cancelled": True}
+        
+        async def refund_flight(i, o):
+            return {"flight_refunded": True}
+        
         registry = {
-            "reserve_hotel": lambda i, o: {"hotel_cancelled": True},
-            "book_flight": lambda i, o: {"flight_refunded": True},
+            "reserve_hotel": cancel_hotel,
+            "book_flight": refund_flight,
         }
         
         success, failed = await coordinator.compensate_saga("saga1", registry)
         
+        # Both compensations should succeed (no failures)
         assert success is True
 
 
