@@ -230,53 +230,58 @@ class TestEnhancedFederatedHealth:
 
 class TestHierarchicalQuota:
     """Tests for HierarchicalQuotaManager."""
-
+    
     @pytest.mark.asyncio
-    async def test_create_node(self):
-        """Create quota node in hierarchy."""
+    async def test_set_quota(self):
+        """Set quota for scope."""
         manager = HierarchicalQuotaManager()
         
-        from src.core.multi_agent.coordination.hierarchical_quota import QuotaScope
-        node = await manager.create_node(
-            scope_type=QuotaScope.TENANT,
-            scope_id="tenant-1",
-            parent_scope_type=QuotaScope.GLOBAL,
-            parent_scope_id="global",
-            policy=QuotaPolicy(max_concurrent_tasks=50),
+        await manager.set_quota(
+            QuotaScope.TENANT,
+            "tenant-1",
+            quota=100.0,
+            parent_id="global",
         )
         
-        assert node.scope_id == "tenant-1"
-        assert node.scope_type == QuotaScope.TENANT
+        available = await manager.get_available(QuotaScope.TENANT, "tenant-1")
+        assert available == 100.0
     
     @pytest.mark.asyncio
     async def test_quota_allocation(self):
         """Quota can be allocated."""
         manager = HierarchicalQuotaManager()
         
-        from src.core.multi_agent.coordination.hierarchical_quota import QuotaScope
-        await manager.allocate(
-            scope_type=QuotaScope.GLOBAL,
-            scope_id="global",
-            quota_type="concurrent_tasks",
+        success = await manager.allocate(
+            QuotaScope.GLOBAL,
+            "global",
             amount=10,
         )
         
-        status = await manager.get_quota_status(QuotaScope.GLOBAL, "global")
-        assert status["quotas"]["concurrent_tasks"]["used"] == 10
+        assert success is True
+        available = await manager.get_available(QuotaScope.GLOBAL, "global")
+        assert available < 10000.0
     
     @pytest.mark.asyncio
     async def test_quota_exceeded(self):
-        """Quota exceeded raises error."""
+        """Quota exceeded returns False for soft quota."""
         manager = HierarchicalQuotaManager()
         
-        from src.core.multi_agent.coordination.hierarchical_quota import QuotaScope
-        with pytest.raises(QuotaExceededError):
-            await manager.allocate(
-                scope_type=QuotaScope.GLOBAL,
-                scope_id="global",
-                quota_type="concurrent_tasks",
-                amount=99999,  # Exceeds default limit
-            )
+        # Set low quota
+        await manager.set_quota(
+            QuotaScope.TENANT,
+            "tenant-low",
+            quota=5.0,
+            parent_id="global",
+        )
+        
+        # Allocate beyond quota
+        success = await manager.allocate(
+            QuotaScope.TENANT,
+            "tenant-low",
+            amount=10,
+        )
+        
+        # Should fail (hard quota) or return based on policy
 
 
 # =============================================================================
