@@ -1,60 +1,77 @@
 """
-KiCad EDA Integration
+KiCad Module
 
 Stub module for KiCad integration.
 """
 
 from dataclasses import dataclass
-from typing import List, Optional
+from typing import List, Optional, Dict, Any
+import json
 
 
-@dataclass
 class KiCadProject:
-    """KiCad project configuration."""
-    name: str
-    path: str
+    """KiCad project representation."""
+    pass
 
 
 class KiCadCliRunner:
     """KiCad CLI runner."""
-    
-    def run(self, command: str) -> dict:
-        return {"success": True, "output": ""}
+
+    def __init__(self, executable: str = "kicad-cli"):
+        self.executable = executable
+
+    def run_erc(self, schematic_path: str) -> dict:
+        return {"status": "tool_missing"}
+
+    def run_drc(self, pcb_path: str) -> dict:
+        return {"status": "tool_missing"}
 
 
 class KiCadFileWriter:
     """KiCad file writer."""
-    
-    def write(self, project: KiCadProject) -> bool:
-        return True
+
+    def write(self, output_path: str, data: dict) -> dict:
+        return {"status": "written"}
 
 
 class KiCadLibraryResolver:
     """KiCad library resolver."""
-    
-    def resolve(self, library: str) -> Optional[str]:
+
+    def resolve_component(self, kb: dict) -> dict:
+        return {"footprint": None, "missing_information": []}
+
+    def resolve_footprint(self, part_number: str) -> Optional[str]:
         return None
 
 
 class KiCadSkeletonGenerator:
     """KiCad skeleton generator."""
-    
-    def generate(self, config: dict) -> KiCadProject:
-        return KiCadProject(name="untitled", path="")
+
+    def generate(self, kb: dict, firmware: dict, validation: dict, **kwargs) -> dict:
+        return {
+            "status": "blocked",
+            "kicad_output": {"connections": []},
+            "validation": {"valid": False, "findings": []},
+        }
 
 
 class KiCadValidator:
-    """KiCad project validator."""
-    
-    def validate(self, project: KiCadProject) -> List[str]:
-        return []
+    """KiCad validator."""
+
+    def validate(self, kicad_output: dict, kb: dict, firmware: dict, validation: dict, **kwargs) -> dict:
+        return {"valid": True, "findings": []}
 
 
-__all__ = [
-    "KiCadCliRunner",
-    "KiCadFileWriter",
-    "KiCadLibraryResolver",
-    "KiCadSkeletonGenerator",
-    "KiCadValidator",
-    "KiCadProject",
-]
+def extract_tables(text: str) -> List[dict]:
+    """Extract tables from text."""
+    return []
+
+
+def parse_pinout(text: str) -> List[dict]:
+    """Parse pinout from text."""
+    return []
+
+
+def extract_registers(text: str) -> List[dict]:
+    """Extract register information from text."""
+    return []

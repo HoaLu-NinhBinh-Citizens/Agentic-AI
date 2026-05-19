@@ -39,70 +39,154 @@ src/
 │   │   ├── reflection.py
 │   │   ├── state.py
 │   │   │
-│   │   ├── prompts/
-│   │   │   ├── system/
-│   │   │   ├── templates/
-│   │   │   ├── versions/
-│   │   │   └── experiments/
-│   │   │
 │   │   ├── memory/
-│   │   │   ├── session_memory.py
-│   │   │   ├── working_memory.py
-│   │   │   ├── episodic_memory.py
-│   │   │   └── long_term_memory.py
+│   │   │   ├── episodic_memory/
+│   │   │   ├── long_term_memory/
+│   │   │   ├── session_memory/
+│   │   │   └── working_memory/
 │   │   │
 │   │   ├── middleware/
-│   │   │   ├── base.py
-│   │   │   ├── logging.py
-│   │   │   ├── metrics.py
 │   │   │   ├── tracing.py
 │   │   │   ├── validation.py
-│   │   │   └── rate_limit.py
+│   │   │   └── metrics.py
 │   │   │
-│   │   └── metrics/
-│   │       ├── counters.py
-│   │       ├── latency.py
-│   │       ├── token_usage.py
-│   │       └── tracing.py
+│   │   ├── metrics/
+│   │   │   ├── counters.py
+│   │   │   ├── latency.py
+│   │   │   ├── token_usage.py
+│   │   │   └── tracing.py
+│   │   │
+│   │   └── prompts/
+│   │       ├── system/
+│   │       ├── templates/
+│   │       ├── versions/
+│   │       └── experiments/
+│   │
+│   ├── multi_agent/                          # Phase 5D-5F Multi-Agent System
+│   │   ├── __init__.py
+│   │   ├── agent.py
+│   │   ├── core.py
+│   │   │
+│   │   └── coordination/                     # Coordination Layer
+│   │       ├── __init__.py
+│   │       ├── types.py
+│   │       ├── config.py
+│   │       ├── coordinator.py
+│   │       ├── governance.py
+│   │       ├── health.py
+│   │       ├── leader_election.py
+│   │       ├── rate_limiter.py
+│   │       ├── quota.py
+│   │       ├── circuit_breaker.py
+│   │       ├── retry_coordination.py
+│   │       ├── backpressure.py
+│   │       ├── batch_idempotency.py
+│   │       ├── message_ordering.py
+│   │       ├── resource_scheduling.py
+│   │       ├── execution_semantics.py
+│   │       ├── schema_evolution.py
+│   │       ├── safe_injection.py
+│   │       ├── injection_explainer.py
+│   │       ├── byzantine_protection.py
+│   │       ├── cdc_consistency.py
+│   │       ├── chaos_secrets.py
+│   │       ├── cross_region_retry.py
+│   │       ├── dead_letter_alert.py
+│   │       ├── deterministic_scheduler.py
+│   │       ├── adaptive_circuit.py
+│   │       ├── archivable_dlq.py
+│   │       ├── automated_mitigation.py
+│   │       ├── consistent_policy_cache.py
+│   │       ├── enhanced_chaos_audit.py
+│   │       ├── enhanced_governance.py
+│   │       ├── enhanced_health.py
+│   │       ├── enhanced_leader_election.py
+│   │       ├── enhanced_saga.py
+│   │       ├── enhanced_sandbox.py
+│   │       ├── fair_share_quota.py
+│   │       ├── hierarchical_quota.py
+│   │       ├── message_ordering.py
+│   │       ├── network_load.py
+│   │       ├── policy_cache.py
+│   │       ├── quorum_failover.py
+│   │       ├── readonly_follower.py
+│   │       ├── saga_compensation.py
+│   │       ├── scalable_rate_limiter.py
+│   │       ├── schema_evolution.py
+│   │       ├── secure_workspace.py
+│   │       ├── sharded_log.py
+│   │       ├── snapshotter.py
+│   │       ├── tenant_isolation.py
+│   │       ├── versioned_claim.py
+│   │       ├── worm_archive.py
+│   │       ├── safety_formal.py
+│   │       └── pdf_knowledge_agent.py
 │   │
 │   ├── runtime/
 │   │   ├── __init__.py           # Phase 1B RuntimeManager + lazy load Phase 15
 │   │   ├── runtime_manager.py
 │   │   ├── dispatcher.py
-│   │   ├── scheduler.py
-│   │   ├── retry_policy.py
-│   │   ├── admission_control.py
-│   │   ├── cancellation.py
-│   │   ├── dead_letter_queue.py
-│   │   └── idempotency.py
+│   │   ├── controller.py
+│   │   ├── kernel.py
+│   │   ├── replayer.py
+│   │   ├── backpressure.py
+│   │   │
+│   │   ├── admission_control/
+│   │   ├── cancellation/
+│   │   ├── dead_letter_queue/
+│   │   ├── enterprise/                      # Enterprise features
+│   │   │   ├── compensation_saga.py
+│   │   │   ├── heartbeat_lease.py
+│   │   │   ├── chaos_tests.py
+│   │   │   ├── deterministic_values.py
+│   │   │   ├── lifecycle_retention.py
+│   │   │   ├── multi_tenant.py
+│   │   │   ├── planner_versioning.py
+│   │   │   ├── poison_defense.py
+│   │   │   ├── sticky_execution.py
+│   │   │   └── resource_governor.py
+│   │   ├── idempotency/
+│   │   ├── retry_policy/
+│   │   ├── scheduler/
+│   │   └── workflow/
+│   │       ├── activity_executor.py
+│   │       ├── cancellation.py
+│   │       ├── migration.py
+│   │       ├── replay_optimizer.py
+│   │       ├── replay_verifier.py
+│   │       ├── signal_manager.py
+│   │       ├── strong_query.py
+│   │       ├── tool_isolation.py
+│   │       └── workflow_context.py
 │   │
 │   ├── execution/
 │   │   ├── executor.py
-│   │   ├── execution_graph.py
-│   │   ├── task_queue.py
-│   │   ├── worker.py
-│   │   ├── worker_pool.py
-│   │   └── code_executor.py
+│   │   ├── execution_graph/
+│   │   ├── task_queue/
+│   │   ├── worker/
+│   │   ├── worker_pool/
+│   │   └── code_executor/
 │   │
 │   ├── workspace/
 │   │   ├── workspace_manager.py
 │   │   ├── workspace_context.py
-│   │   ├── multi_root.py
-│   │   ├── file_watcher.py
-│   │   └── ownership.py
+│   │   ├── multi_root/
+│   │   ├── file_watcher/
+│   │   └── ownership/
 │   │
 │   ├── session/
 │   │   ├── session_manager.py      # Phase 1A in-memory manager
 │   │   ├── session_state.py
-│   │   ├── lifecycle.py
 │   │   ├── session_store.py
+│   │   ├── lifecycle.py
 │   │   └── persistent_manager.py   # Phase 1B SQLite-backed manager
 │   │
 │   ├── checkpoint/
 │   │   ├── checkpoint_manager.py
-│   │   ├── replay.py
-│   │   ├── rollback.py
-│   │   └── snapshot.py
+│   │   ├── checkpoint_manager/
+│   │   ├── replay/
+│   │   ├── rollback/
+│   │   └── snapshot/
 │   │
 │   ├── versioning/
 │   │   ├── schema_version.py
@@ -110,16 +194,47 @@ src/
 │   │   └── transformers/
 │   │
 │   ├── background_jobs/
-│   │   ├── scheduler.py
-│   │   ├── cleanup.py
-│   │   ├── telemetry.py
-│   │   ├── maintenance.py
-│   │   └── heartbeat.py
+│   │   └── scheduler.py
 │   │
 │   ├── health/
-│   │   ├── runtime_health.py
-│   │   ├── readiness.py
-│   │   └── liveness.py
+│   │   ├── runtime_health/
+│   │   ├── readiness/
+│   │   └── liveness/
+│   │
+│   ├── memory/
+│   │   ├── semantic_memory.py
+│   │   ├── store.py
+│   │   ├── chunker.py
+│   │   ├── deduplication.py
+│   │   ├── leak_detector.py
+│   │   ├── chroma_db/
+│   │   ├── compression/
+│   │   │   ├── __init__.py
+│   │   │   ├── types.py
+│   │   │   ├── decompression.py
+│   │   │   ├── migration.py
+│   │   │   └── strategies/
+│   │   └── decision_traces/
+│   │
+│   ├── events/
+│   │   └── event.py
+│   │
+│   ├── parsing/
+│   │   └── output_sanitizer.py
+│   │
+│   ├── config/
+│   │   ├── __init__.py
+│   │   ├── chapter_config.py
+│   │   └── output_policy.py
+│   │
+│   ├── scheduler/
+│   │   └── __init__.py
+│   │
+│   ├── orchestration/
+│   │   └── langgraph_workflow.py
+│   │
+│   ├── middleware/
+│   │   └── (middleware modules)
 │   │
 │   └── ports/                                 # renamed from interfaces
 │       ├── event_bus.py
@@ -166,7 +281,53 @@ src/
 │       ├── artifact.py
 │       ├── message.py
 │       ├── event.py
-│       └── plan.py
+│       ├── plan.py
+│       └── tool_call.py
+│
+├── domains/                                   # Extended domain modules
+│   │
+│   ├── hardware_engine/                       # Hardware Engine v2
+│   │   ├── core/
+│   │   │   ├── peripheral_graph.py
+│   │   │   └── register_schema.py
+│   │   ├── engine/
+│   │   │   ├── allocator.py
+│   │   │   └── pinmux_engine.py
+│   │   ├── parser/
+│   │   │   └── svd_parser.py
+│   │   ├── codegen/
+│   │   ├── validator/
+│   │   └── integration/
+│   │       └── adapter.py
+│   │
+│   ├── firmware/
+│   │   └── (firmware modules)
+│   │
+│   ├── knowledge/
+│   │   └── ocr/
+│   │
+│   ├── models/
+│   │   └── (domain models)
+│   │
+│   ├── runtime/
+│   │   └── journal.py
+│   │
+│   ├── autonomy/
+│   │   ├── fix_mode/
+│   │   ├── memory/
+│   │   ├── planner/
+│   │   └── state/
+│   │
+│   ├── safety/
+│   │
+│   ├── review/
+│   │
+│   ├── schema_validator/
+│   │
+│   ├── validation/
+│   │
+│   └── eda/
+│       └── kicad.py
 │
 ├── application/                               # Use cases & orchestration
 │   │
@@ -182,39 +343,66 @@ src/
 │   │   ├── routing.py
 │   │   ├── coordination.py
 │   │   ├── recovery.py
-│   │
-│   │   ├── supervisor/
-│   │   │   ├── supervisor.py
-│   │   │   ├── autoscaler.py
-│   │   │   ├── escalation.py
-│   │   │   └── monitoring.py
+│   │   ├── routing/
 │   │   │
-│   │   └── agents/
-│   │       ├── planner_agent.py
-│   │       ├── executor_agent.py
-│   │       ├── reviewer_agent.py
-│   │       └── verifier_agent.py
+│   │   ├── supervisor/
+│   │   │   ├── autoscaler/
+│   │   │   ├── escalation/
+│   │   │   ├── monitoring/
+│   │   │   └── supervisor/
+│   │   │
+│   │   ├── agents/
+│   │   │   ├── executor_agent/
+│   │   │   ├── planner_agent/
+│   │   │   ├── reviewer_agent/
+│   │   │   └── verifier_agent/
+│   │   │
+│   │   ├── tool_execution/
+│   │   │   └── middleware.py
+│   │   │
+│   │   └── __init__.py
 │   │
-│   └── planner/
-│       ├── task_planner.py
-│       ├── dependency_graph.py
-│       └── decomposition.py
+│   ├── planner/
+│   │   ├── task_planner.py
+│   │   ├── dependency_graph/
+│   │   ├── decomposition/
+│   │   ├── semantic_retriever.py
+│   │   ├── expansion_guard.py
+│   │   ├── schema_validator.py
+│   │   └── metrics.py
+│   │
+│   ├── services/
+│   │   └── runtime_support.py
+│   │
+│   ├── llm/
+│   │   └── (LLM application services)
+│   │
+│   └── api/
+│       └── app/
+│           ├── api_endpoints.py
+│           ├── api_websocket.py
+│           ├── agent_logging.py
+│           ├── dashboard_api.py
+│           ├── hardware_cli.py
+│           ├── review_ui.py
+│           ├── dashboard/
+│           └── templates/
 │
 ├── infrastructure/                            # External systems & adapters
 │   │
 │   ├── gateway/
 │   │   ├── base.py
-│   │   ├── auth.py
-│   │   ├── retry.py
-│   │   ├── tracing.py
-│   │   ├── rate_limit.py
-│   │   └── telemetry.py
+│   │   ├── auth/
+│   │   ├── retry/
+│   │   ├── tracing/
+│   │   ├── rate_limit/
+│   │   └── telemetry/
 │   │
 │   ├── sandbox/
-│   │   ├── docker.py
-│   │   ├── gvisor.py
-│   │   ├── seccomp.py
-│   │   ├── process_isolation.py
+│   │   ├── docker/
+│   │   ├── gvisor/
+│   │   ├── seccomp/
+│   │   ├── process_isolation/
 │   │   └── factory.py
 │   │
 │   ├── llm/
@@ -222,6 +410,11 @@ src/
 │   │   ├── routing.py
 │   │   ├── tokenizer.py
 │   │   ├── streaming.py
+│   │   ├── structured_output.py
+│   │   ├── token_tracker.py
+│   │   ├── ollama_provider.py
+│   │   ├── groq_provider.py
+│   │   ├── ollama.py
 │   │   │
 │   │   └── providers/
 │   │       ├── openai/
@@ -239,16 +432,43 @@ src/
 │   ├── observability/
 │   │   ├── logging/
 │   │   ├── metrics/
+│   │   │   ├── __init__.py
+│   │   │   ├── metrics_server.py
+│   │   │   └── prometheus_metrics.py
 │   │   ├── tracing/
 │   │   ├── profiling/
-│   │   └── exporters/
+│   │   ├── exporters/
+│   │   └── config_manager.py
 │   │
 │   ├── cache/
 │   │   ├── in_memory/
 │   │   ├── redis/
 │   │   ├── semantic/
 │   │   ├── embeddings/
-│   │   └── disk/
+│   │   ├── disk/
+│   │   └── tool/                           # Phase 4B - Tool Cache System
+│   │       ├── types.py              # KeyState, CacheResponse, VectorClock
+│   │       ├── state_machine.py      # KeyStateMachine (FSM)
+│   │       ├── normalizer.py        # StrictNormalizer
+│   │       ├── key_generator.py     # KeyGenerator (SHA256)
+│   │       ├── single_flight.py     # SingleFlightCoordinator
+│   │       ├── swr_engine.py       # SWREngine
+│   │       ├── rate_limiter.py      # ToolRateLimiter
+│   │       ├── threshold_engine.py   # AdaptiveThresholdEngine
+│   │       ├── load_shedding.py     # LoadSheddingController
+│   │       ├── lru_store.py        # LRUStore + PinManager
+│   │       ├── adaptive_ttl.py     # AdaptiveTTLEngine
+│   │       ├── validation.py        # PoisonValidationEngine
+│   │       ├── warmup.py           # WarmUpManager
+│   │       ├── persistence.py       # PersistentStore
+│   │       ├── write_back.py       # WriteBackQueue
+│   │       ├── metrics.py          # MetricsEngine
+│   │       ├── reconciliation.py    # ReconciliationEngine
+│   │       ├── backpressure.py     # BackpressureManager
+│   │       ├── fragmentation.py    # FragmentationManager + SlabAllocator
+│   │       ├── causality.py        # CausalityTracer + AnomalyDetector
+│   │       ├── cluster.py          # ClusterCoordinator + PartitionManager
+│   │       └── cache.py           # ToolCache (main facade)
 │   │
 │   ├── health/
 │   │   ├── registry.py
@@ -262,10 +482,10 @@ src/
 │   │   └── kafka/
 │   │
 │   ├── plugin_loader/
-│   │   ├── discovery.py
-│   │   ├── registry.py
-│   │   ├── permissions.py
-│   │   └── isolation.py
+│   │   ├── discovery/
+│   │   ├── registry/
+│   │   ├── permissions/
+│   │   └── isolation/
 │   │
 │   ├── mcp/
 │   │   ├── manager.py             # MCPClientManager (Phase 2A)
@@ -276,9 +496,9 @@ src/
 │   │
 │   ├── pty/
 │   │   ├── pty_manager.py
-│   │   ├── pty_session.py
-│   │   ├── streaming.py
-│   │   └── cleanup.py
+│   │   ├── pty_session/
+│   │   ├── streaming/
+│   │   └── cleanup/
 │   │
 │   ├── filesystem/
 │   │   ├── reader.py
@@ -328,7 +548,9 @@ src/
 │   │   ├── resolver.py
 │   │   ├── namespaces.py
 │   │   ├── priority.py
-│   │   └── capabilities.py
+│   │   ├── capabilities.py
+│   │   ├── builtin/
+│   │   └── priority/
 │   │
 │   ├── builtin_tools/
 │   │   ├── filesystem/
@@ -345,21 +567,54 @@ src/
 │   │   ├── conversations/
 │   │   └── migrations/
 │   │
-│   └── workspace_index/
-│       ├── indexing_service.py
-│       ├── invalidation.py
-│       ├── ownership.py
-│       └── synchronization.py
+│   ├── workspace_index/
+│   │   ├── indexing_service.py
+│   │   ├── invalidation/
+│   │   ├── ownership/
+│   │   └── synchronization/
+│   │
+│   ├── embeddings/
+│   │   ├── __init__.py
+│   │   └── embedding_service.py
+│   │
+│   ├── models/
+│   │   ├── __init__.py
+│   │   └── retrieval.py
+│   │
+│   ├── router/
+│   │   ├── __init__.py
+│   │   ├── types.py
+│   │   ├── execution_engine.py
+│   │   ├── observation/
+│   │   │   ├── exactly_once.py
+│   │   │   └── health_monitor.py
+│   │   ├── consistency/
+│   │   │   └── read_after_write.py
+│   │   ├── fairness/
+│   │   └── (other router modules)
+│   │
+│   ├── hardware/
+│   │   ├── hil_agent.py
+│   │   ├── uart_monitor.py
+│   │   └── __init__.py
+│   │
+│   ├── security/
+│   │
+│   ├── metrics/
+│   │   └── (metrics infrastructure)
+│   │
+│   └── tool_execution/
+│       └── (tool execution infrastructure)
 │
 ├── interfaces/                               # User-facing interfaces
 │   │
 │   ├── server/
+│   │   ├── main.py
+│   │   ├── health.py
 │   │   ├── api/
 │   │   ├── websocket/
 │   │   ├── middleware/
-│   │   ├── auth/
-│   │   ├── health.py
-│   │   └── main.py
+│   │   └── auth/
 │   │
 │   ├── cli/
 │   │   ├── commands/
@@ -367,15 +622,21 @@ src/
 │   │   └── main.py
 │   │
 │   ├── tui/
+│   │   ├── app.py
 │   │   ├── screens/
 │   │   ├── widgets/
-│   │   ├── state/
-│   │   └── app.py
+│   │   └── state/
 │   │
-│   └── ide/
-│       └── bridge/
-│           ├── websocket_bridge.py
-│           └── stdio_bridge.py
+│   ├── ide/
+│   │   ├── bridge/
+│   │   │   ├── websocket_bridge.py
+│   │   │   └── stdio_bridge.py
+│   │   ├── peripherals.py
+│   │   ├── interrupts.py
+│   │   ├── reference_manual.py
+│   │   └── __init__.py
+│   │
+│   └── frontend/
 │
 ├── schemas/
 │   ├── api/
@@ -435,7 +696,40 @@ tests/
 │   ├── test_session_manager.py
 │   ├── test_mcp_config.py
 │   ├── test_mcp_manager.py
+│   ├── test_llm_router.py
+│   ├── test_tool_registry.py
+│   ├── test_health.py
+│   ├── test_validation.py
+│   ├── test_metrics.py
+│   ├── test_tool_executor.py
+│   ├── test_tool_accumulator.py
+│   ├── test_state_machine.py
+│   ├── test_normalizer.py
+│   ├── test_idempotency.py
+│   ├── test_cache_types.py
+│   ├── test_lru_store.py
+│   ├── test_rate_limit_store.py
+│   ├── test_middleware.py
+│   ├── test_embedding_service.py
+│   ├── test_chunker.py
+│   ├── test_semantic_memory_error_contract.py
+│   ├── test_tool_schema.py
+│   ├── test_tool_errors.py
+│   ├── test_tool_tracker.py
+│   ├── test_score_engine.py
+│   ├── test_lifecycle.py
+│   ├── test_fairness.py
+│   ├── test_execution_engine.py
+│   ├── compression/
+│   │   ├── test_engine.py
+│   │   ├── test_adaptive.py
+│   │   ├── test_extractive.py
+│   │   ├── test_keyvalue.py
+│   │   ├── test_truncation.py
+│   │   ├── test_worker.py
+│   │   └── test_migration.py
 │   ├── phase5b/                         # Phase 5B detailed tests
+│   │   ├── conftest.py
 │   │   ├── test_condition_evaluator.py
 │   │   ├── test_schema_validator.py
 │   │   ├── test_exactly_once.py
@@ -447,23 +741,54 @@ tests/
 │   │   ├── test_multi_tenant_rbac.py
 │   │   ├── test_poison_defense.py
 │   │   └── test_event_integrity.py
-│   └── phase5c/                        # Phase 5C (Retrieval Engine) tests
-│       ├── test_retrieval_components.py  # Core (73 tests)
-│       └── test_retrieval_resilience.py  # Resilience (50 tests)
+│   ├── phase5c/                        # Phase 5C (Retrieval Engine) tests
+│   │   ├── test_phase5c_components.py  # Core components
+│   │   └── test_phase5c_extended.py    # Extended features
+│   └── workflow/
+│       └── test_workflow_runtime.py
 ├── integration/
 │   ├── test_phase1b_features.py
 │   ├── test_mcp_phase2a.py
 │   ├── test_session_lifecycle.py
 │   ├── test_websocket_chat.py
-│   ├── phase5b/                        # Phase 5B integration tests
+│   ├── test_phase2b_tool_execution.py
+│   ├── test_compression_integration.py
+│   ├── test_phase2c_reliability.py
+│   ├── phase5b/
 │   │   ├── test_enterprise_integration.py
 │   │   ├── test_chaos_scenarios.py
 │   │   └── test_performance_scale.py
 │   └── phase5c/
 ├── e2e/
 ├── performance/
+├── chaos/
+│   └── (chaos engineering tests)
+├── mocks/
 ├── fixtures/
-└── mocks/
+├── architecture/
+├── router/                              # Router test suite
+│   ├── unit/
+│   │   ├── test_exactly_once.py
+│   │   ├── test_execution_engine.py
+│   │   ├── test_fairness.py
+│   │   ├── test_lifecycle.py
+│   │   ├── test_score_engine.py
+│   │   └── test_properties.py
+│   ├── integration/
+│   │   └── test_pipeline.py
+│   ├── chaos/
+│   │   └── test_chaos.py
+│   └── concurrency/
+│       └── test_concurrency.py
+├── phase5d/                            # Phase 5D multi-agent tests
+│   ├── test_coordination.py
+│   └── test_enhanced_coordination.py
+├── phase5e/                            # Phase 5E distributed tests
+│   ├── test_distributed_execution.py
+│   └── test_extended.py
+└── phase5f/                            # Phase 5F reliability tests
+    ├── test_reliability_governance.py
+    └── test_enhanced_reliability.py
 ```
 
 ### `docs/`
@@ -481,7 +806,27 @@ docs/
 ├── phase1a.md
 ├── phase1b.md
 ├── phase2a.md
-└── STRUCTURE_TREE.md
+├── phase2b.md
+├── phase2c.md
+├── phase2d.md
+├── phase2d.1.md
+├── phase3.md
+├── phase4a.md
+├── phase4a_error_handling.md
+├── phase4b_tool_cache.md
+├── phase4c_semantic_router.md
+├── phase4d_compression.md
+├── phase4d1_compression.md
+├── phase5a_workflow_runtime.md
+├── phase5b_planner_enterprise.md
+├── phase5b_v10_enterprise.md
+├── phase5d_multi_agent_coordination.md
+├── phase5d_v2_enhancements.md
+├── phase5e_distributed_execution.md
+├── phase5f_reliability_governance.md
+├── phase5f_v2_reliability_governance.md
+├── STRUCTURE_TREE.md
+└── (other documentation files)
 ```
 
 ### `examples/`
