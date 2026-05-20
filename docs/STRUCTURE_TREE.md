@@ -246,14 +246,19 @@ src/
 │
 ├── domain/                                    # Pure business/domain logic
 │   │
-│   ├── hardware/
+│   ├── hardware/                              # Phase 6 - Embedded Target
 │   │   ├── chips.py
 │   │   ├── peripherals.py
 │   │   ├── registers.py
 │   │   ├── interrupts.py
 │   │   ├── clocks.py
 │   │   ├── pinmux.py
-│   │   └── svd_parser.py
+│   │   ├── svd_parser.py
+│   │   ├── embedded_target.py           # Core target models
+│   │   ├── debug_probe.py               # Probe interfaces (JLink, STLink, CMSIS-DAP)
+│   │   ├── target_registry.py            # YAML config, auto-detect
+│   │   ├── gdb_client.py                # GDB RSP client
+│   │   └── serial_monitor.py             # UART monitor
 │   │
 │   ├── firmware/
 │   │   ├── linker.py
@@ -593,10 +598,16 @@ src/
 │   │   ├── fairness/
 │   │   └── (other router modules)
 │   │
-│   ├── hardware/
+│   ├── hardware/                           # Phase 6 - Hardware debugging
 │   │   ├── hil_agent.py
 │   │   ├── uart_monitor.py
-│   │   └── __init__.py
+│   │   ├── probes/                        # Probe implementations
+│   │   │   ├── jlink.py                 # SEGGER J-Link
+│   │   │   ├── stlink.py                # ST-Link
+│   │   │   └── cmsis_dap.py             # CMSIS-DAP
+│   │   └── gdb/
+│   │       ├── rsp_client.py            # GDB Remote Serial Protocol
+│   │       └── mi_parser.py            # GDB/MI output parser
 │   │
 │   ├── security/
 │   │
@@ -789,6 +800,12 @@ tests/
 └── phase5f/                            # Phase 5F reliability tests
     ├── test_reliability_governance.py
     └── test_enhanced_reliability.py
+├── phase6/                            # Phase 6 embedded target tests
+│   ├── test_embedded_target.py
+│   ├── test_debug_probe.py
+│   ├── test_target_registry.py
+│   ├── test_gdb_client.py
+│   └── test_serial_monitor.py
 ```
 
 ### `docs/`
@@ -825,6 +842,7 @@ docs/
 ├── phase5e_distributed_execution.md
 ├── phase5f_reliability_governance.md
 ├── phase5f_v2_reliability_governance.md
+├── phase6_embedded_target.md
 ├── STRUCTURE_TREE.md
 └── (other documentation files)
 ```
@@ -870,7 +888,11 @@ configs/
 ├── security/
 ├── observability/
 ├── policies/
-└── environments/
+├── environments/
+└── targets/                   # Phase 6 - Target configurations
+    ├── stm32f4-discovery.yaml
+    ├── esp32-devkit.yaml
+    └── riscv-hifive1.yaml
 ```
 
 ### `deploy/`
