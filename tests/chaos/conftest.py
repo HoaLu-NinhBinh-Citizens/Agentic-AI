@@ -1,4 +1,4 @@
-"""Pytest fixtures for flash infrastructure tests.
+"""Pytest fixtures for chaos tests.
 
 Provides mock hardware fixtures and shared utilities for testing.
 """
@@ -6,7 +6,9 @@ Provides mock hardware fixtures and shared utilities for testing.
 from __future__ import annotations
 
 import pytest
-from unittest.mock import AsyncMock, MagicMock
+import asyncio
+import time
+import hashlib
 
 
 # =============================================================================
@@ -15,13 +17,7 @@ from unittest.mock import AsyncMock, MagicMock
 
 @pytest.fixture
 def mock_probe():
-    """Create a mock probe for testing.
-    
-    Simulates:
-    - Memory read/write operations
-    - Flash operations
-    - Reset/halt control
-    """
+    """Create a mock probe for testing."""
     class MockProbe:
         def __init__(self, memory_size=1024*1024, base_address=0x08000000):
             self.memory_size = memory_size
@@ -76,7 +72,6 @@ def mock_probe():
             self._disconnected = False
         
         def get_memory_hash(self, address, size):
-            import hashlib
             offset = address - self.base_address
             return hashlib.sha256(self._memory[offset : offset + size]).hexdigest()
     
@@ -85,13 +80,7 @@ def mock_probe():
 
 @pytest.fixture
 def mock_flash_driver(mock_probe):
-    """Create a mock flash driver for testing.
-    
-    Simulates:
-    - Page write
-    - Sector erase
-    - Verify operations
-    """
+    """Create a mock flash driver for testing."""
     class MockFlashDriver:
         def __init__(self, probe):
             self.probe = probe
@@ -145,27 +134,19 @@ def mock_flash_driver(mock_probe):
 
 @pytest.fixture
 def mock_lock_manager():
-    """Create a mock lock manager for testing.
-    
-    Simulates:
-    - Lock acquisition
-    - Lock release
-    - Lock expiration
-    """
-    import time
-    
+    """Create a mock lock manager for testing."""
     class MockLockManager:
         def __init__(self):
             self._locks = {}
             self._lock_timeout = 60.0
         
         async def acquire(self, target_name, owner_id, timeout_seconds=30.0):
-            await self._async_sleep(0.01)
+            await asyncio.sleep(0.01)
             
             if target_name in self._locks:
                 lock = self._locks[target_name]
                 if time.time() > lock["expires_at"]:
-                    pass  # Expired
+                    pass
                 elif lock["owner_id"] == owner_id:
                     lock["expires_at"] = time.time() + self._lock_timeout
                     lock["version"] += 1
@@ -173,7 +154,7 @@ def mock_lock_manager():
                 else:
                     if timeout_seconds <= 0:
                         return None
-                    await self._async_sleep(0.1)
+                    await asyncio.sleep(0.1)
                     return None
             
             lock = {
@@ -214,34 +195,19 @@ def mock_lock_manager():
             if target_name not in self._locks:
                 return None
             return self._locks[target_name]["owner_id"]
-        
-        async def _async_sleep(self, seconds):
-            import asyncio
-            await asyncio.sleep(seconds)
     
     return MockLockManager()
 
 
 @pytest.fixture
 def mock_snapshotter():
-    """Create a mock snapshot manager for testing.
-    
-    Simulates:
-    - Snapshot capture
-    - State restoration
-    """
-    import time
-    
+    """Create a mock snapshot manager for testing."""
     class MockSnapshotter:
         def __init__(self):
             self._snapshots = {}
-            self._capture_delay_ms = 50
-            self._restore_delay_ms = 50
         
         async def capture(self, target_name, name, registers=None, memory_regions=None):
-            import asyncio
-            await asyncio.sleep(self._capture_delay_ms / 1000)
-            
+            await asyncio.sleep(0.05)
             snapshot_id = f"snap_{name}_{int(time.time() * 1000)}"
             self._snapshots[snapshot_id] = {
                 "target_name": target_name,
@@ -253,51 +219,37 @@ def mock_snapshotter():
             return snapshot_id
         
         async def restore(self, snapshot_id, target_name=None):
-            import asyncio
+            await asyncio.sleep(0.05)
             if snapshot_id not in self._snapshots:
                 raise ValueError(f"Snapshot not found: {snapshot_id}")
-            await asyncio.sleep(self._restore_delay_ms / 1000)
             return True
         
         def get_snapshot(self, snapshot_id):
             return self._snapshots.get(snapshot_id)
-        
-        def list_snapshots(self, target_name=None):
-            if target_name:
-                return [
-                    sid for sid, snap in self._snapshots.items()
-                    if snap["target_name"] == target_name
-                ]
-            return list(self._snapshots.keys())
     
     return MockSnapshotter()
 
 
-# =============================================================================
-# Async Iterator Helper
-# =============================================================================
-
 @pytest.fixture
-def async_stream_helper():
-    """Helper for creating async streaming iterators."""
-    class AsyncIterator:
-        def __init__(self, data, chunk_size=4096, delay_ms=10):
-            self.data = data
-            self.chunk_size = chunk_size
-            self.delay_ms = delay_ms
-            self.offset = 0
+def mock_remote_storage():
+    """Create a mock remote storage for testing."""
+    class MockRemoteStorage:
+        def __init__(self):
+            self._data = {}
+            self._inject_error = False
         
-        def __aiter__(self):
-            return self
+        async def put_object(self, key, data):
+            self._data[key] = data
         
-        async def __anext__(self):
-            import asyncio
-            if self.offset >= len(self.data):
-                raise StopAsyncIteration
-            chunk = self.data[self.offset : self.offset + self.chunk_size]
-            self.offset += len(chunk)
-            if self.delay_ms > 0:
-                await asyncio.sleep(self.delay_ms / 1000)
-            return chunk
+        async def get_object(self, key):
+            if self._inject_error:
+                raise ConnectionError("Simulated error")
+            return self._data.get(key)
+        
+        def inject_error(self):
+            self._inject_error = True
+        
+        def clear_error(self):
+            self._inject_error = False
     
-    return AsyncIterator
+    return MockRemoteStorage()
