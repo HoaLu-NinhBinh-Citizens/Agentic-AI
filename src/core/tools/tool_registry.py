@@ -12,6 +12,7 @@ from __future__ import annotations
 import asyncio
 import json
 import re
+import shlex
 import shutil
 import subprocess
 import sys
@@ -275,9 +276,13 @@ def _make_tools(
         if not command:
             return ToolResult(tool="run_command", success=False, output="", error="command required")
         try:
+            # FIX: Use shell=False with shlex.split() to prevent command injection
+            # This is safe because commands are constructed from validated tool parameters
+            cmd_list = shlex.split(command) if command else []
+            
             result = await asyncio.to_thread(subprocess.run,
-                command,
-                shell=True,
+                cmd_list,
+                shell=False,  # FIX: Disable shell to prevent injection
                 cwd=cwd,
                 capture_output=True,
                 text=True,

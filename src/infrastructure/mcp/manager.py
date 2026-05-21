@@ -20,6 +20,7 @@ from typing import Any
 import structlog
 
 from infrastructure.mcp.config import MCPServerConfig, MCPConfigLoader
+from infrastructure.resilience.circuit_breaker import CircuitBreaker, CircuitBreakerOpenError
 from shared.exceptions.tool_errors import ToolNotFoundError
 
 logger = structlog.get_logger(__name__)
@@ -102,6 +103,9 @@ class MCPClientManager:
         self._servers: dict[str, ConnectedServer] = {}
         self._global_tools: dict[str, ToolInfo] = {}
         self._initialized = False
+        
+        # FIX: Add circuit breakers for each server
+        self._server_breakers: dict[str, CircuitBreaker] = {}
 
     async def initialize(self) -> None:
         """Initialize all enabled MCP servers.
@@ -230,6 +234,14 @@ class MCPClientManager:
                 tools=tools,
                 stdio_context=stdio_context,
             )
+            
+            # FIX: Create circuit breaker for this server
+            self._server_breakers[name] = CircuitBreaker(
+                name=f"mcp_{name}",
+                failure_threshold=3,
+                window_seconds=60,
+                timeout_seconds=30,
+            )
 
             logger.info(
                 "MCP server started successfully",
@@ -353,6 +365,14 @@ class MCPClientManager:
 
         server = self._servers.get(server_name)
         if not server or not server.session:
+            # FIX: Check circuit breaker before failing
+            breaker = self._server_breakers.get(server_name)
+            if breaker:
+                breaker.record_failure()
+                raise RuntimeError(
+                    f"Server not connected: {server_name}. "
+                    f"Circuit breaker state: {breaker.state.value}"
+                )
             raise RuntimeError(f"Server not connected: {server_name}")
 
         logger.debug(
@@ -362,8 +382,19 @@ class MCPClientManager:
             server=server_name,
         )
 
-        result = await server.session.call_tool(original_name, arguments)
-        return result
+        try:
+            result = await server.session.call_tool(original_name, arguments)
+            # Record success in circuit breaker
+            breaker = self._server_breakers.get(server_name)
+            if breaker:
+                breaker.record_success()
+            return result
+        except Exception as e:
+            # Record failure in circuit breaker
+            breaker = self._server_breakers.get(server_name)
+            if breaker:
+                breaker.record_failure()
+            raise
 
     async def shutdown(self) -> None:
         """Gracefully shut down all MCP servers.

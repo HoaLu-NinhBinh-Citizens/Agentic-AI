@@ -133,7 +133,7 @@ class StrategyMigration:
             import json
             try:
                 metadata = json.loads(metadata)
-            except:
+            except json.JSONDecodeError:
                 metadata = None
         
         stored = self.parse_strategy_version(metadata)

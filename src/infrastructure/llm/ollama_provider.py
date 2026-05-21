@@ -28,6 +28,7 @@ class OllamaProvider(LLMProvider):
         temperature: float = 0.1,
         max_tokens: int = 4096,
         timeout: float = 120.0,
+        config: LLMProviderConfig | None = None,
     ) -> None:
         """Initialize Ollama provider.
 
@@ -37,20 +38,36 @@ class OllamaProvider(LLMProvider):
             model: Model name to use.
             temperature: Sampling temperature.
             max_tokens: Maximum tokens to generate.
-            timeout: Request timeout in seconds.
+            timeout: Request timeout in seconds (DEPRECATED: use config instead).
+            config: Provider configuration with timeouts.
         """
-        super().__init__(name)
+        # Use config or create one from timeout
+        if config is None:
+            config = LLMProviderConfig(
+                connect_timeout=min(15.0, timeout / 4),
+                read_timeout=timeout,
+                total_timeout=timeout * 1.5,
+            )
+        super().__init__(name, config)
         self._base_url = base_url.rstrip("/")
         self._model = model
         self._temperature = temperature
         self._max_tokens = max_tokens
-        self._timeout = timeout
         self._client: httpx.AsyncClient | None = None
 
     def _get_client(self) -> httpx.AsyncClient:
-        """Get or create HTTP client."""
+        """Get or create HTTP client with timeout configuration."""
         if self._client is None:
-            self._client = httpx.AsyncClient(timeout=self._timeout)
+            # FIX: Use configurable timeouts from LLMProviderConfig
+            connect_timeout, read_timeout = self.get_timeout()
+            self._client = httpx.AsyncClient(
+                timeout=httpx.Timeout(
+                    connect=connect_timeout,
+                    read=read_timeout,
+                    write=30.0,
+                    pool=60.0,
+                )
+            )
         return self._client
 
     async def close(self) -> None:

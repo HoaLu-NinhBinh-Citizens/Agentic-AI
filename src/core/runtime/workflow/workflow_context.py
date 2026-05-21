@@ -88,6 +88,9 @@ class WorkflowContext:
     # Side effect cache for replay
     _side_effect_cache: dict[str, Any] = field(default_factory=dict)
     
+    # Signal handlers for await_signal
+    _signal_handlers: dict[str, asyncio.Future] = field(default_factory=dict)
+    
     async def execute_activity(
         self,
         activity_name: str,
@@ -638,12 +641,23 @@ class WorkflowContext:
             await self._event_store._runtime.start_child(child)
     
     def _register_signal_handler(self, name: str, future: asyncio.Future) -> None:
-        """Register signal handler (runtime implementation)."""
-        pass
+        """Register signal handler (runtime implementation).
+        
+        This is a stub that should be overridden by concrete runtime.
+        Logs a warning if called without being overridden.
+        """
+        logger.warning(
+            f"Signal handler '{name}' registered but not implemented. "
+            "This is a stub - override _register_signal_handler in concrete runtime."
+        )
+        self._signal_handlers[name] = future
     
     def _unregister_signal_handler(self, name: str) -> None:
-        """Unregister signal handler (runtime implementation)."""
-        pass
+        """Unregister signal handler (runtime implementation).
+        
+        This is a stub that should be overridden by concrete runtime.
+        """
+        self._signal_handlers.pop(name, None)
 
 
 class ActivityContext:

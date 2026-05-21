@@ -606,18 +606,18 @@ class SubprocessSandbox:
             # Remove modification capabilities from env
             env = {k: v for k, v in env.items() if not k.startswith("_")}
 
-        return {
-            "args": command,
-            "shell": True,
-            "cwd": str(cwd or self.config.working_directory or Path.cwd()),
-            "env": env,
-            "stdout": subprocess.PIPE,
-            "stderr": subprocess.PIPE,
-            "text": True,
-            "timeout": timeout
-            or self.config.resource_limits.get(ResourceLimitType.WALL_TIME)
-            .soft_limit,  # type: ignore
-        }
+            return {
+                "args": command,
+                "shell": False,  # FIX: Disable shell=True to prevent command injection
+                "cwd": str(cwd or self.config.working_directory or Path.cwd()),
+                "env": env,
+                "stdout": subprocess.PIPE,
+                "stderr": subprocess.PIPE,
+                "text": True,
+                "timeout": timeout
+                or self.config.resource_limits.get(ResourceLimitType.WALL_TIME)
+                .soft_limit,  # type: ignore
+            }
 
     def get_resource_limits(self) -> Dict[int, tuple[int, int]]:
         """

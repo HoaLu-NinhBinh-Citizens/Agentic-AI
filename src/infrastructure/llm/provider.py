@@ -147,21 +147,49 @@ class ToolResult:
     retry_count: int = 0
 
 
+@dataclass
+class LLMProviderConfig:
+    """Configuration for LLM providers with timeout and retry settings."""
+    
+    # Timeout settings (in seconds)
+    connect_timeout: float = 15.0
+    read_timeout: float = 120.0
+    total_timeout: float = 180.0  # Max total time for a request
+    
+    # Retry settings
+    max_retries: int = 3
+    retry_backoff_base: float = 1.0  # Exponential backoff base
+    retry_jitter: float = 0.1  # Random jitter factor
+    
+    # Rate limiting
+    requests_per_minute: int = 60
+    requests_per_second: int = 10
+
+
 class LLMProvider(ABC):
     """Abstract base class for LLM providers.
 
     All providers must implement streaming and tool call support.
+    
+    FIX: Added timeout configuration and timeout enforcement.
     """
 
-    def __init__(self, name: str) -> None:
+    def __init__(self, name: str, config: LLMProviderConfig | None = None) -> None:
         """Initialize the provider.
 
         Args:
             name: Unique identifier for this provider.
+            config: Provider configuration with timeouts.
         """
         self._name = name
         self._circuit_state = "closed"
-
+        self._config = config or LLMProviderConfig()
+    
+    @property
+    def config(self) -> LLMProviderConfig:
+        """Get provider configuration."""
+        return self._config
+    
     @property
     def name(self) -> str:
         """Get provider name."""
@@ -176,6 +204,19 @@ class LLMProvider(ABC):
     def circuit_state(self, value: str) -> None:
         """Set circuit breaker state."""
         self._circuit_state = value
+    
+    def get_timeout(self, prompt_length: int = 0) -> tuple[float, float]:
+        """Get connect and read timeouts.
+        
+        Can be overridden by providers to adjust based on request size.
+        
+        Args:
+            prompt_length: Length of prompt in characters.
+            
+        Returns:
+            Tuple of (connect_timeout, read_timeout) in seconds.
+        """
+        return self._config.connect_timeout, self._config.read_timeout
 
     @abstractmethod
     async def stream_chat(

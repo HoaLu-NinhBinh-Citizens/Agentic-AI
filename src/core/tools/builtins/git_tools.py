@@ -5,6 +5,7 @@ Built-in tools for Git operations.
 """
 
 import logging
+import shlex
 import subprocess
 from pathlib import Path
 from typing import Any, Dict
@@ -22,11 +23,18 @@ logger = logging.getLogger(__name__)
 
 
 def run_git_command(command: str, cwd: Path) -> Dict[str, Any]:
-    """Run a git command."""
+    """Run a git command.
+    
+    FIX: Use shell=False and shlex.split() to prevent command injection.
+    Commands are still safe because they're constructed from validated tool parameters.
+    """
     try:
+        # FIX: Parse command string into list for shell=False
+        cmd_list = shlex.split(command)
+        
         result = subprocess.run(
-            command,
-            shell=True,
+            cmd_list,
+            shell=False,  # FIX: Disable shell to prevent injection
             cwd=str(cwd),
             capture_output=True,
             text=True,

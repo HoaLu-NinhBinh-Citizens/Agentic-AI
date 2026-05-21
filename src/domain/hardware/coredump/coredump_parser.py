@@ -1,0 +1,568 @@
+"""Core Dump Parser - ELF core dump analysis for ARM Cortex-M.
+
+Phase 6.6: Core Dump Parser
+- Parse ELF core dump files
+- Extract stack trace (backtrace)
+- Extract register values
+- Extract memory regions
+- Generate crash report
+"""
+
+from __future__ import annotations
+
+import struct
+from dataclasses import dataclass, field
+from enum import Enum
+from pathlib import Path
+from typing import Any, BinaryIO
+
+logger = __import__("structlog").get_logger(__name__)
+
+
+class CoreDumpFormat(Enum):
+    ELF_CORE = "elf_core"
+    RAW_MEMORY = "raw_memory"
+    HEX_DUMP = "hex_dump"
+    MINIDUMP = "minidump"
+
+
+class ExceptionType(Enum):
+    NONE = "none"
+    HARD_FAULT = "hard_fault"
+    MEM_MANAGE_FAULT = "mem_manage_fault"
+    BUS_FAULT = "bus_fault"
+    USAGE_FAULT = "usage_fault"
+    SVCALL = "svcall"
+    PENDSV = "pendsv"
+    DEBUG_MONITOR = "debug_monitor"
+    UNKNOWN = "unknown"
+
+
+@dataclass
+class RegisterSet:
+    """ARM Cortex-M register set (R0-R12, SP, LR, PC, xPSR)."""
+    
+    r0: int = 0
+    r1: int = 0
+    r2: int = 0
+    r3: int = 0
+    r4: int = 0
+    r5: int = 0
+    r6: int = 0
+    r7: int = 0
+    r8: int = 0
+    r9: int = 0
+    r10: int = 0
+    r11: int = 0
+    r12: int = 0
+    sp: int = 0  # Stack Pointer (PSP or MSP)
+    lr: int = 0  # Link Register
+    pc: int = 0  # Program Counter
+    xpsr: int = 0  # Program Status Register
+    
+    def to_dict(self) -> dict[str, int]:
+        """Convert to dictionary."""
+        return {
+            "r0": self.r0, "r1": self.r1, "r2": self.r2, "r3": self.r3,
+            "r4": self.r4, "r5": self.r5, "r6": self.r6, "r7": self.r7,
+            "r8": self.r8, "r9": self.r9, "r10": self.r10, "r11": self.r11,
+            "r12": self.r12, "sp": self.sp, "lr": self.lr, "pc": self.pc,
+            "xpsr": self.xpsr,
+        }
+    
+    @classmethod
+    def from_bytes(cls, data: bytes, format: str = "<17I") -> RegisterSet:
+        """Parse from bytes (little-endian)."""
+        values = struct.unpack(format, data[:68])  # 17 * 4 bytes
+        return cls(
+            r0=values[0], r1=values[1], r2=values[2], r3=values[3],
+            r4=values[4], r5=values[5], r6=values[6], r7=values[7],
+            r8=values[8], r9=values[9], r10=values[10], r11=values[11],
+            r12=values[12], sp=values[13], lr=values[14], pc=values[15],
+            xpsr=values[16],
+        )
+
+
+@dataclass
+class StackFrame:
+    """Single frame in a stack trace."""
+    
+    address: int
+    function_name: str = ""
+    offset: int = 0
+    source_file: str = ""
+    source_line: int = 0
+    
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "address": f"0x{self.address:08X}",
+            "function": self.function_name,
+            "offset": f"+0x{self.offset:X}",
+            "source": f"{self.source_file}:{self.source_line}" if self.source_file else "",
+        }
+
+
+@dataclass
+class MemoryRegion:
+    """Memory region from core dump."""
+    
+    start: int
+    end: int
+    data: bytes
+    name: str = ""
+    
+    @property
+    def size(self) -> int:
+        return len(self.data)
+    
+    @property
+    def address_range(self) -> str:
+        return f"0x{self.start:08X}-0x{self.end:08X}"
+    
+    def read_word(self, offset: int) -> int:
+        """Read 32-bit word at offset."""
+        return struct.unpack("<I", self.data[offset:offset+4])[0]
+    
+    def read_halfword(self, offset: int) -> int:
+        """Read 16-bit halfword at offset."""
+        return struct.unpack("<H", self.data[offset:offset+2])[0]
+
+
+@dataclass
+class CoreDumpInfo:
+    """Complete core dump information."""
+    
+    format: CoreDumpFormat
+    timestamp: float
+    exception_type: ExceptionType = ExceptionType.NONE
+    exception_address: int = 0
+    
+    registers: RegisterSet = field(default_factory=RegisterSet)
+    stack_trace: list[StackFrame] = field(default_factory=list)
+    memory_regions: list[MemoryRegion] = field(default_factory=list)
+    
+    # Parsed info
+    fault_status: dict[str, Any] = field(default_factory=dict)
+    stack_usage: dict[str, Any] = field(default_factory=dict)
+    
+    # Raw data
+    raw_data: bytes = field(default_factory=b"")
+    
+    def to_dict(self) -> dict[str, Any]:
+        """Convert to dictionary for JSON serialization."""
+        return {
+            "format": self.format.value,
+            "timestamp": self.timestamp,
+            "exception": {
+                "type": self.exception_type.value,
+                "address": f"0x{self.exception_address:08X}",
+            },
+            "registers": self.registers.to_dict(),
+            "stack_trace": [f.to_dict() for f in self.stack_trace],
+            "fault_status": self.fault_status,
+            "stack_usage": self.stack_usage,
+        }
+
+
+class CoreDumpParser:
+    """Parser for ARM Cortex-M core dump files.
+    
+    Supports:
+    - ELF core files (generated by GDB)
+    - Raw memory dumps
+    - Custom crash log format
+    """
+    
+    def __init__(
+        self,
+        elf_file: str | Path | None = None,
+        symbol_table: dict[int, str] | None = None,
+    ):
+        self._elf_file = elf_file
+        self._symbol_table = symbol_table or {}
+    
+    def parse_file(self, path: str | Path) -> CoreDumpInfo:
+        """Parse core dump file.
+        
+        Args:
+            path: Path to core dump file
+            
+        Returns:
+            CoreDumpInfo with parsed data
+        """
+        path = Path(path)
+        
+        if not path.exists():
+            raise FileNotFoundError(f"Core dump not found: {path}")
+        
+        with open(path, "rb") as f:
+            data = f.read()
+        
+        # Detect format
+        if data.startswith(b"\x7FELF"):
+            return self._parse_elf_core(data)
+        elif data.startswith(b"ARM_COREDUMP"):
+            return self._parse_custom_format(data)
+        else:
+            return self._parse_raw_dump(data)
+    
+    def _parse_elf_core(self, data: bytes) -> CoreDumpInfo:
+        """Parse ELF core dump format."""
+        import io
+        
+        info = CoreDumpInfo(
+            format=CoreDumpFormat.ELF_CORE,
+            timestamp=0.0,
+            raw_data=data,
+        )
+        
+        try:
+            # Basic ELF header parsing
+            # EI_CLASS (byte 4): 1=32-bit, 2=64-bit
+            ei_class = data[4]
+            # EI_DATA (byte 5): 1=little-endian, 2=big-endian
+            ei_data = data[5]
+            
+            if ei_class == 1:  # 32-bit
+                # ELF32 header
+                e_type = struct.unpack("<H", data[16:18])[0]
+                
+                if e_type == 4:  # ET_CORE
+                    # Parse program headers for memory regions
+                    e_phoff = struct.unpack("<I", data[28:32])[0]  # Program header offset
+                    e_phentsize = struct.unpack("<H", data[36:38])[0]  # PH entry size
+                    e_phnum = struct.unpack("<H", data[38:40])[0]  # Number of PHs
+                    
+                    for i in range(e_phnum):
+                        ph_offset = e_phoff + i * e_phentsize
+                        if ph_offset + e_phentsize > len(data):
+                            break
+                        
+                        p_type = struct.unpack("<I", data[ph_offset:ph_offset+4])[0]
+                        
+                        if p_type == 1:  # PT_LOAD
+                            p_offset = struct.unpack("<I", data[ph_offset+4:ph_offset+8])[0]
+                            p_vaddr = struct.unpack("<I", data[ph_offset+8:ph_offset+12])[0]
+                            p_filesz = struct.unpack("<I", data[ph_offset+16:ph_offset+20])[0]
+                            
+                            if p_filesz > 0 and p_offset + p_filesz <= len(data):
+                                region_data = data[p_offset:p_offset+p_filesz]
+                                info.memory_regions.append(MemoryRegion(
+                                    start=p_vaddr,
+                                    end=p_vaddr + p_filesz,
+                                    data=region_data,
+                                ))
+                        
+                        elif p_type == 0x70000000:  # NT_PRSTATUS (registers)
+                            # Register data at offset + 24 (after header)
+                            reg_offset = ph_offset + e_phentsize + 24
+                            if reg_offset + 68 <= len(data):
+                                reg_data = data[reg_offset:reg_offset+68]
+                                info.registers = RegisterSet.from_bytes(reg_data)
+            
+            # Try to identify exception type
+            self._identify_exception(info)
+            
+        except Exception as e:
+            logger.error("elf_parse_error", error=str(e))
+        
+        return info
+    
+    def _parse_custom_format(self, data: bytes) -> CoreDumpInfo:
+        """Parse custom ARM_COREDUMP format."""
+        info = CoreDumpInfo(
+            format=CoreDumpFormat.ELF_CORE,  # Reuse enum
+            timestamp=0.0,
+            raw_data=data,
+        )
+        
+        try:
+            lines = data.decode("utf-8", errors="replace").split("\n")
+            current_region = None
+            
+            for line in lines:
+                line = line.strip()
+                
+                if line.startswith("REGISTERS:"):
+                    # Parse register block
+                    continue
+                elif line.startswith("REG:"):
+                    # REG:R0=XXXXXXXX
+                    parts = line[4:].split("=")
+                    if len(parts) == 2:
+                        reg_name = parts[0].strip()
+                        reg_value = int(parts[1].strip(), 16)
+                        setattr(info.registers, reg_name.lower(), reg_value)
+                
+                elif line.startswith("EXCEPTION:"):
+                    exc_name = line[10:].strip()
+                    try:
+                        info.exception_type = ExceptionType(exc_name.lower().replace("_", "_"))
+                    except ValueError:
+                        info.exception_type = ExceptionType.UNKNOWN
+                
+                elif line.startswith("MEMORY:"):
+                    addr_str = line[7:].strip()
+                    addr = int(addr_str, 16)
+                    current_region = MemoryRegion(start=addr, end=addr, data=b"")
+                    info.memory_regions.append(current_region)
+                
+                elif current_region and line.startswith("DATA:"):
+                    hex_data = line[5:].strip().replace(" ", "")
+                    current_region.data += bytes.fromhex(hex_data)
+                    current_region.end = current_region.start + len(current_region.data)
+                
+                elif line.startswith("END:"):
+                    current_region = None
+            
+            # Identify exception from registers
+            self._identify_exception(info)
+            
+        except Exception as e:
+            logger.error("custom_parse_error", error=str(e))
+        
+        return info
+    
+    def _parse_raw_dump(self, data: bytes) -> CoreDumpInfo:
+        """Parse raw memory dump."""
+        return CoreDumpInfo(
+            format=CoreDumpFormat.RAW_MEMORY,
+            timestamp=0.0,
+            raw_data=data,
+            memory_regions=[MemoryRegion(
+                start=0x20000000,  # Default SRAM start
+                end=0x20000000 + len(data),
+                data=data,
+            )],
+        )
+    
+    def _identify_exception(self, info: CoreDumpInfo) -> None:
+        """Identify exception type from register state."""
+        pc = info.registers.pc
+        
+        # Check for exception patterns
+        if pc == 0xFFFFFFFE or pc == 0xFFFFFFFF:
+            info.exception_type = ExceptionType.UNKNOWN
+            return
+        
+        # Check CFSR (Configurable Fault Status Register) if available
+        # This would typically be at a known address in the debug zone
+        # For now, infer from LR (Link Register)
+        lr = info.registers.lr
+        
+        # Check for exception return values in LR
+        if lr & 0xF0000000 == 0xF0000000:
+            # Exception return
+            exc_num = (lr >> 8) & 0xF
+            exception_map = {
+                1: ExceptionType.MEM_MANAGE_FAULT,
+                2: ExceptionType.BUS_FAULT,
+                3: ExceptionType.USAGE_FAULT,
+                4: ExceptionType.HARD_FAULT,
+                5: ExceptionType.DEBUG_MONITOR,
+                6: ExceptionType.SVCALL,
+                7: ExceptionType.PENDSV,
+                11: ExceptionType.SVCALL,
+            }
+            info.exception_type = exception_map.get(exc_num, ExceptionType.UNKNOWN)
+            info.exception_address = pc
+        else:
+            info.exception_type = ExceptionType.UNKNOWN
+    
+    def generate_stack_trace(
+        self,
+        sp: int,
+        lr: int,
+        pc: int,
+        memory: MemoryRegion | None = None,
+    ) -> list[StackFrame]:
+        """Generate stack trace from registers.
+        
+        Args:
+            sp: Stack pointer
+            lr: Link register (return address)
+            pc: Program counter (fault address)
+            memory: Stack memory region for unwinding
+            
+        Returns:
+            List of StackFrame objects
+        """
+        frames = []
+        
+        # First frame is the faulting instruction
+        frames.append(StackFrame(
+            address=pc,
+            function_name=self._lookup_symbol(pc),
+        ))
+        
+        # Try to unwind stack if memory available
+        if memory:
+            try:
+                # ARM Cortex-M uses stack frame chaining
+                # Each frame: R0-R3, R12, LR, PC (saved on stack), xPSR
+                # FP: Frame pointer at SP + 0x18
+                pass  # Simplified unwinding
+            except Exception:
+                pass
+        
+        # Second frame is the caller (LR points to return address)
+        if lr != 0 and lr != 0xFFFFFFFF:
+            frames.append(StackFrame(
+                address=lr & ~1,  # Clear Thumb bit
+                function_name=self._lookup_symbol(lr),
+            ))
+        
+        return frames
+    
+    def _lookup_symbol(self, address: int) -> str:
+        """Look up symbol for address."""
+        # Exact match
+        if address in self._symbol_table:
+            return self._symbol_table[address]
+        
+        # Find nearest symbol below address
+        best_match = ""
+        best_distance = float("inf")
+        
+        for sym_addr, sym_name in self._symbol_table.items():
+            distance = address - sym_addr
+            if 0 < distance < best_distance:
+                best_distance = distance
+                best_match = f"{sym_name}+0x{distance:X}"
+        
+        return best_match
+    
+    def generate_crash_report(self, info: CoreDumpInfo) -> str:
+        """Generate human-readable crash report.
+        
+        Args:
+            info: Parsed core dump info
+            
+        Returns:
+            Formatted crash report string
+        """
+        lines = [
+            "=" * 60,
+            "CORE DUMP ANALYSIS REPORT",
+            "=" * 60,
+            "",
+            f"Format: {info.format.value}",
+            f"Exception: {info.exception_type.value}",
+            "",
+            "REGISTER DUMP:",
+            "-" * 40,
+        ]
+        
+        # Print registers
+        regs = info.registers
+        for i in range(4):
+            r0 = getattr(regs, f"r{i*4}")
+            r1 = getattr(regs, f"r{i*4+1}")
+            r2 = getattr(regs, f"r{i*4+2}")
+            r3 = getattr(regs, f"r{i*4+3}")
+            lines.append(f"  R{i*4}: 0x{r0:08X}  R{i*4+1}: 0x{r1:08X}  R{i*4+2}: 0x{r2:08X}  R{i*4+3}: 0x{r3:08X}")
+        
+        lines.append(f"  R12: 0x{regs.r12:08X}")
+        lines.append(f"  SP:  0x{regs.sp:08X}")
+        lines.append(f"  LR:  0x{regs.lr:08X}")
+        lines.append(f"  PC:  0x{regs.pc:08X}")
+        lines.append(f"  xPSR: 0x{regs.xpsr:08X}")
+        
+        if info.exception_type != ExceptionType.NONE:
+            lines.extend([
+                "",
+                "STACK TRACE:",
+                "-" * 40,
+            ])
+            
+            for i, frame in enumerate(info.stack_trace):
+                lines.append(f"  #{i}: 0x{frame.address:08X} {frame.function_name}")
+        
+        if info.memory_regions:
+            lines.extend([
+                "",
+                "MEMORY REGIONS:",
+                "-" * 40,
+            ])
+            
+            for region in info.memory_regions:
+                lines.append(f"  {region.address_range} ({region.size} bytes)")
+        
+        lines.extend([
+            "",
+            "=" * 60,
+        ])
+        
+        return "\n".join(lines)
+    
+    def analyze_stack_usage(
+        self,
+        sp: int,
+        stack_size: int,
+        memory: MemoryRegion | None = None,
+    ) -> dict[str, Any]:
+        """Analyze stack usage from core dump.
+        
+        Args:
+            sp: Current stack pointer
+            stack_size: Total stack size
+            memory: Stack memory region
+            
+        Returns:
+            Stack usage analysis
+        """
+        analysis = {
+            "total_size": stack_size,
+            "used_bytes": 0,
+            "used_percent": 0.0,
+            "watermark_bytes": 0,
+            "watermark_percent": 0.0,
+            "overflow_detected": False,
+        }
+        
+        if memory:
+            # Scan stack for used pattern (typically 0xBE or 0xAB)
+            used_pattern = b"\xBE"
+            used_bytes = memory.data.count(used_pattern)
+            analysis["used_bytes"] = used_bytes
+            analysis["used_percent"] = (used_bytes / stack_size) * 100 if stack_size > 0 else 0
+        
+        # Calculate watermark (lowest address used)
+        if sp < stack_size:
+            analysis["watermark_bytes"] = sp
+            analysis["watermark_percent"] = (sp / stack_size) * 100
+            analysis["overflow_detected"] = sp < 0x20000000  # Below SRAM start
+        
+        return analysis
+
+
+def create_mock_core_dump() -> bytes:
+    """Create a mock core dump for testing.
+    
+    Returns:
+        Binary mock core dump data
+    """
+    import time
+    
+    # Register values
+    registers = struct.pack(
+        "<17I",
+        0x12345678,  # R0
+        0x87654321,  # R1
+        0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,  # R2-R12
+        0x20002000,  # SP (Stack Pointer)
+        0x08001234,  # LR
+        0x08001000,  # PC (fault address)
+        0x01000000,  # xPSR
+    )
+    
+    # Build custom format
+    header = b"ARM_COREDUMP_v1\n"
+    timestamp = f"TIMESTAMP:{time.time():.3f}\n".encode()
+    exc = b"EXCEPTION:hard_fault\n"
+    reg_header = b"REGISTERS:\n"
+    
+    # Assemble
+    dump = header + timestamp + exc + reg_header + registers + b"END:\n"
+    
+    return dump
