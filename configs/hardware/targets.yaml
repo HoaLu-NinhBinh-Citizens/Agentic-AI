@@ -1,0 +1,30 @@
+# Phase 6.1 — Target configurations for AI_SUPPORT hardware debug
+targets:
+  EngineCar:
+    chip_family: STM32F4
+    jlink_device: STM32F407VG
+    jlink_interface: SWD
+    jlink_speed_khz: 4000
+    flash_base: 0x08000000
+    ram_base: 0x20000000
+    rtt_base: 0x20000000
+    description: Engine car MCU (main/software)
+
+  RemoteControl:
+    chip_family: STM32F4
+    jlink_device: STM32F407VG
+    jlink_interface: SWD
+    jlink_speed_khz: 4000
+    flash_base: 0x08000000
+    ram_base: 0x20000000
+    rtt_base: 0x20000000
+    description: Remote control MCU
+
+  Generic_STM32F407:
+    chip_family: STM32F4
+    jlink_device: STM32F407VG
+    jlink_interface: SWD
+    jlink_speed_khz: 4000
+    flash_base: 0x08000000
+    ram_base: 0x20000000
+    rtt_base: 0x20000000

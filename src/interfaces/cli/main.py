@@ -1,15 +1,39 @@
-"""CLI main entry point."""
+"""CLI entry point for AI_SUPPORT (Phase 7)."""
 
+from __future__ import annotations
+
+import argparse
 import asyncio
 import sys
-from typing import Any
+from typing import Any, Callable, Coroutine
+
+from src.interfaces.cli.commands import debug, flash, health, trace
+
+Handler = Callable[[argparse.Namespace], Coroutine[Any, Any, int]]
 
 
-async def main() -> int:
-    """Main CLI entry point."""
-    print("AI_support CLI")
-    print("Usage: ai-support <command> [options]")
-    return 0
+def build_parser() -> argparse.ArgumentParser:
+    parser = argparse.ArgumentParser(
+        prog="ai-support",
+        description="AI_SUPPORT embedded intelligence CLI",
+    )
+    parser.add_argument("-v", "--verbose", action="store_true")
+    sub = parser.add_subparsers(dest="command", required=True)
+    health.register(sub)
+    debug.register(sub)
+    flash.register(sub)
+    trace.register(sub)
+    return parser
+
+
+async def main(argv: list[str] | None = None) -> int:
+    parser = build_parser()
+    args = parser.parse_args(argv)
+    handler: Handler | None = getattr(args, "handler", None)
+    if handler is None:
+        parser.print_help()
+        return 1
+    return await handler(args)
 
 
 if __name__ == "__main__":

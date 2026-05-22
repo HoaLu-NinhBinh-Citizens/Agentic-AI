@@ -1,0 +1,47 @@
+{
+  "name": "ai-support-embedded",
+  "displayName": "AI_SUPPORT Embedded",
+  "description": "Embedded debug, flash, and register views for AI_SUPPORT",
+  "version": "0.1.0",
+  "publisher": "ai-support",
+  "engines": {
+    "vscode": "^1.85.0"
+  },
+  "categories": ["Debuggers", "Other"],
+  "activationEvents": ["onStartupFinished"],
+  "main": "./out/extension.js",
+  "contributes": {
+    "commands": [
+      {
+        "command": "aiSupport.openFlashPanel",
+        "title": "AI_SUPPORT: Open Flash Panel"
+      },
+      {
+        "command": "aiSupport.openRegisterView",
+        "title": "AI_SUPPORT: Open Register View"
+      },
+      {
+        "command": "aiSupport.connectTarget",
+        "title": "AI_SUPPORT: Connect Target"
+      }
+    ],
+    "views": {
+      "explorer": [
+        {
+          "id": "aiSupportTargets",
+          "name": "AI_SUPPORT Targets"
+        }
+      ]
+    }
+  },
+  "scripts": {
+    "compile": "tsc -p .",
+    "watch": "tsc -watch -p .",
+    "package": "vsce package"
+  },
+  "devDependencies": {
+    "@types/node": "^20.0.0",
+    "@types/vscode": "^1.85.0",
+    "typescript": "^5.3.0"
+  }
+}

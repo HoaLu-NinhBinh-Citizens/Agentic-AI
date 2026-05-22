@@ -1,0 +1,12 @@
+"""J-Link configuration constants (Phase 6.1)."""
+
+from __future__ import annotations
+
+import os
+
+DEFAULT_JLINK_DEVICE = os.getenv("AI_SUPPORT_JLINK_DEVICE", "STM32F407VG")
+DEFAULT_JLINK_INTERFACE = os.getenv("AI_SUPPORT_JLINK_INTERFACE", "SWD")
+DEFAULT_JLINK_SPEED_KHZ = int(os.getenv("AI_SUPPORT_JLINK_SPEED_KHZ", "4000"))
+DEFAULT_RTT_UP_CHANNEL = int(os.getenv("AI_SUPPORT_RTT_UP_CHANNEL", "0"))
+DEFAULT_RTT_BUFFER_SIZE = int(os.getenv("AI_SUPPORT_RTT_BUFFER_SIZE", "1024"))
+JLINK_EXE_ENV = "AI_SUPPORT_JLINK_EXE"

@@ -139,8 +139,8 @@ class WebSocketClient:
                 raise
             except asyncio.CancelledError:
                 raise
-            except Exception:
-                continue
+            except Exception as e:
+                logger.debug(f"Pong wait error for session {self.session_id}: {e}")
 
     async def send_event(self, event: dict[str, Any]) -> bool:
         """Send an event to the client with backpressure handling.

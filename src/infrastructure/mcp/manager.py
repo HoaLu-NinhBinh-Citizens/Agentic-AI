@@ -297,23 +297,24 @@ class MCPClientManager:
             write_stream: Output stream to close.
             stdio_context: The async context manager to exit.
         """
+        # FIX: Log cleanup errors instead of silently swallowing them
         try:
             if write_stream is not None:
                 await write_stream.aclose()
-        except Exception:
-            pass
+        except Exception as e:
+            logger.warning(f"Failed to close write stream for {name}: {e}")
 
         try:
             if read_stream is not None:
                 await read_stream.aclose()
-        except Exception:
-            pass
+        except Exception as e:
+            logger.warning(f"Failed to close read stream for {name}: {e}")
 
         try:
             if stdio_context is not None:
                 await stdio_context.__aexit__(None, None, None)
-        except Exception:
-            pass
+        except Exception as e:
+            logger.warning(f"Failed to cleanup stdio context for {name}: {e}")
 
         self._servers.pop(name, None)
 
