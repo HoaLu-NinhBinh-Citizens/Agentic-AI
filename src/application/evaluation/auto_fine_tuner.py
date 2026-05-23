@@ -82,7 +82,7 @@ class DatasetAccumulator:
     def get_dataset(self) -> dict[str, Any]:
         """Get accumulated dataset."""
         if not self._samples:
-            return {"samples": [], "quality_score": 0.0}
+            return {"samples": [], "count": 0, "quality_score": 0.0}
         
         avg_quality = sum(self._quality_scores) / len(self._quality_scores)
         
