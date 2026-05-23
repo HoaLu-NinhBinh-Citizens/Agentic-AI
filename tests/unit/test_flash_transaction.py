@@ -200,7 +200,7 @@ class TestFlashTransactionManager:
         started = await manager.start_transaction(tx.transaction_id)
         
         assert started is not None
-        assert started.status == TransactionStatus.FLASING
+        assert started.status == TransactionStatus.FLASHING
         assert started.started_at is not None
     
     @pytest.mark.asyncio

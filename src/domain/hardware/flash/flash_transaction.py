@@ -28,7 +28,7 @@ class TransactionStatus(Enum):
     """Flash transaction status."""
     
     PENDING = "pending"           # Created, not started
-    FLASING = "flashing"         # Flash in progress
+    FLASHING = "flashing"         # Flash in progress
     VERIFYING = "verifying"      # Verification in progress
     COMMITTED = "committed"       # Successfully completed
     FAILED = "failed"           # Flash failed
@@ -256,7 +256,7 @@ class FlashTransactionManager:
             if not transaction:
                 return None
             
-            transaction.status = TransactionStatus.FLASING
+            transaction.status = TransactionStatus.FLASHING
             transaction.started_at = datetime.now()
             await self._save_transaction(transaction)
             

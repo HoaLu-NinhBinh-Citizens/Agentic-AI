@@ -1,5 +1,7 @@
 """Unit tests for Secure Boot."""
 
+import asyncio
+
 import pytest
 from src.domain.hardware.flash.secure_boot import (
     BootState,

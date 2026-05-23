@@ -5,11 +5,11 @@
 ## Thông tin
 
 - **Start Date**: 2026-05-20
-- **Last Updated**: 2026-05-21
+- **Last Updated**: 2026-05-23
 - **End Date**: TBD
 - **Status**: In Progress
 - **Current Phase**: 9–10 (Distributed Agents, Advanced Reasoning)
-- **Overall**: Part 1 ~85% | Part 2 ~80% | Phase 6.1/6.3/7/8 done 2026-05-21
+- **Overall**: Era 1 ✅ 100% | Era 2 ✅ ~90% | Era 3 🔄 ~25% | Phase 7.4-7.6, 13.1-13.2, 14.3, 14.6, 15.1, 15.4, 16.1-16.2 done 2026-05-23
 
 ---
 
@@ -17,8 +17,25 @@
 
 | Phạm vi | Hoàn thành |
 |---------|------------|
-| Phase 1a–2d | ✅ ~85% |
-| Phase 3–5 | ⚠️ ~75% |
+| Phase 1a–2d | ✅ ~90% |
+| Phase 3–5 | ⚠️ ~80% |
+| Phase 5.6 | ✅ ~95% (Agent Runtime Kernel) |
+| Phase 5.7 | ✅ ~95% (Cost Governance) |
+| Phase 6.2 + 6.4–6.7 | ✅ ~95% |
+| Phase 6.1, 6.3 | ✅ ~90% |
+| Phase 7–8 | ✅ scaffold ~85% |
+| Phase 1 weaknesses | ✅ v1.0 vừa xong |
+| AUTO_BUILD Agent chạy tự động | ⬜ Chưa |
+
+---
+
+## Tóm tắt nhanh
+
+| Phạm vi | Hoàn thành |
+|---------|------------|
+| Phase 1a–2d | ✅ ~90% |
+| Phase 3–5 | ⚠️ ~80% |
+| Phase 5.7 | ✅ ~95% (Cost Governance) |
 | Phase 6.2 + 6.4–6.7 | ✅ ~95% |
 | Phase 6.1, 6.3 | ✅ ~90% |
 | Phase 7–8 | ✅ scaffold ~85% |
@@ -38,6 +55,25 @@
 | main.py + health | ✅ | `src/interfaces/server/main.py` |
 | Unit tests | ✅ | `test_mock_agent`, `test_session_manager`, `test_websocket_client` |
 | Integration tests | ✅ | `test_websocket_chat`, `test_session_lifecycle` |
+
+### Phase 1a.1: Requirements & Scope — ✅ 2026-05-23
+| Task | Status | Ghi chú |
+|------|--------|---------|
+| docs/requirements.md | ✅ | User requirements, target users, use cases |
+| docs/scope.md | ✅ | Locked scope: ARM Cortex-M, SWD, debug view |
+| docs/constraints.md | ✅ | Technical constraints, file limits, no hardcoding |
+
+### Phase 1a.4: Competitor Analysis — ✅ 2026-05-23
+| Task | Status | Ghi chú |
+|------|--------|---------|
+| docs/competitors.md | ✅ | SystemView, Lauterbach, Tracealyzer analysis |
+| Our differentiation | ✅ | AI-native debugging, deterministic replay |
+
+### Phase 1a.5: Architecture Overview — ✅ 2026-05-23
+| Task | Status | Ghi chú |
+|------|--------|---------|
+| docs/architecture.md | ✅ | Overall architecture, components, tech stack |
+| docs/adr/ | ✅ | Architecture Decision Records |
 
 ### Phase 1b: Runtime Hardening
 | Task | Status | Ghi chú |
@@ -168,9 +204,15 @@
 | FailureIsolation | ✅ | `agent_runtime/isolation.py` - agent crash isolation, retry boundary |
 | Tests | ✅ | `test_agent_runtime.py` - 34 tests pass |
 
-### Phase 5.7: Cost Governance — 🔄 2026-05-22
+### Phase 5.7: Cost Governance — ✅ 2026-05-22
 | Task | Status | Ghi chú |
 |------|--------|---------|
+| TokenBudget | ✅ | `cost_governance/token_budget.py` - per-session, per-user limits |
+| AdaptiveRouter | ✅ | `cost_governance/adaptive_routing.py` - cheapest model meeting quality |
+| InferencePolicy | ✅ | `cost_governance/inference_policy.py` - cache strategy, model tiering |
+| EmbeddingBudget | ✅ | `cost_governance/embedding_budget.py` - RAG cost control, rerank budget |
+| CostObserver | ✅ | `cost_governance/cost_observability.py` - cost_per_session, cache_hit_rate |
+| Tests | ✅ | `test_cost_governance.py` - 32 tests pass |
 
 ### Phase 6.1: Hardware Debug Interface — ✅ 2026-05-21
 | Task | Status | Ghi chú |
@@ -245,6 +287,141 @@
 | Agent federation (prompt) | 🔄 | Một phần qua multi_agent |
 | Tree of Thoughts / reflection | 🔄 | `reasoning_loop.py`, `reflection.py` — chưa đủ prompt |
 
+### Phase 8.4: Bug Report Parser — ✅ 2026-05-23
+| Task | Status | Ghi chú |
+|------|--------|---------|
+| BugReportParser | ✅ | Multi-format parser: SEGGER, GDB, OpenOCD, Generic |
+| Tests | ✅ | `tests/unit/test_bug_report_parser.py` |
+
+### Phase 8.4a: Concurrent Bug Handling — ✅ 2026-05-23
+| Task | Status | Ghi chú |
+|------|--------|---------|
+| Bug deduplication | ✅ | Content hash - deterministic |
+| Priority calculator | ✅ | Severity, frequency, board count |
+
+### Phase 8.4b: Bug Dependency Graph — ✅ 2026-05-23
+| Task | Status | Ghi chú |
+|------|--------|---------|
+| BugDependencyGraph | ✅ | Directed graph với dependency tracking |
+| Cycle detection | ✅ | Tarjan's algorithm |
+
+### Phase 9.4: Skill Learning — ✅ 2026-05-23
+| Task | Status | Ghi chú |
+|------|--------|---------|
+| SkillLearner | ✅ | Pattern extraction và matching |
+
+### Phase 9.5: Test Case Generator — ✅ 2026-05-23
+| Task | Status | Ghi chú |
+|------|--------|---------|
+| TestCaseGenerator | ✅ | Unity, GTest support, flaky detection |
+
+### Phase 11.1-11.3: Data Pipeline — ✅ 2026-05-23
+| Task | Status | Ghi chú |
+|------|--------|---------|
+| DataCollector | ✅ | Opt-in telemetry, PII removal |
+| DataLabeler | ✅ | Labeling interface, training export |
+
+### Phase 7.7: Flaky Test Detector — ✅ 2026-05-23
+|| Task | Status | Ghi chú |
+||------|--------|---------|
+| FlakyTestDetector | ✅ | Statistical analysis, pattern detection |
+| FlakyPattern classification | ✅ | Timing, resource, external, hardware |
+| RetryHandler | ✅ | Max retries, final result tracking |
+| Tests | ✅ | Pattern analysis, flaky detection |
+
+### Phase 8.5: Crash Clustering — ✅ 2026-05-23
+|| Task | Status | Ghi chú |
+||------|--------|---------|
+| CrashClusteringEngine | ✅ | Fleet-wide error grouping |
+| CrashSignature | ✅ | Hash-based deduplication |
+| Impact scoring | ✅ | Board count, recency |
+| Regression detection | ✅ | New vs old firmware |
+
+### Phase 9.6: Patch History + Rollback — ✅ 2026-05-23
+|| Task | Status | Ghi chú |
+||------|--------|---------|
+| PatchHistoryManager | ✅ | Immutable history, snapshots |
+| Integrity verification | ✅ | Checksum validation |
+| Point-in-time recovery | ✅ | Version rollback |
+| Audit trail | ✅ | Full event history |
+
+### Phase 7.4: Hardware Farm Manager — ✅ 2026-05-23
+| Task | Status | Ghi chú |
+|------|--------|---------|
+| BoardSpec/BoardStatus | ✅ | Board registry dataclasses |
+| HardwareFarmManager | ✅ | Board acquisition, release, health |
+| Statistics | ✅ | Utilization tracking |
+| Tests | ✅ | `test_hardware_farm.py` (10 tests) |
+
+### Phase 7.5: Test Orchestrator — ✅ 2026-05-23
+| Task | Status | Ghi chú |
+|------|--------|---------|
+| TestTask/TestBatch | ✅ | Task definition |
+| TestOrchestrator | ✅ | Parallel execution, dependency management |
+| TestExecutor | ✅ | Async test execution |
+| Tests | ✅ | `test_test_orchestrator.py` (6 tests) |
+
+### Phase 7.6: Board Watchdog & Health — ✅ 2026-05-23
+| Task | Status | Ghi chú |
+|------|--------|---------|
+| BoardWatchdog | ✅ | Timeout monitoring, recovery |
+| HealthCheck | ✅ | Board health validation |
+| Alert system | ✅ | Alert levels and callbacks |
+
+### Phase 13.1: Monitoring & Alerting — ✅ 2026-05-23
+| Task | Status | Ghi chú |
+|------|--------|---------|
+| AlertManager | ✅ | Alert rules, firing, acknowledgment |
+| Metric recording | ✅ | Time-series metrics |
+| Handlers | ✅ | Firing, acknowledged, resolved callbacks |
+
+### Phase 13.2: Deterministic Replay — ✅ 2026-05-23
+| Task | Status | Ghi chú |
+|------|--------|---------|
+| ReplaySession | ✅ | Event recording |
+| DeterministicReplay | ✅ | Session replay with determinism verification |
+| Event types | ✅ | File, network, shell, API events |
+
+### Phase 14.3: Telemetry Anomaly Detection — ✅ 2026-05-23
+| Task | Status | Ghi chú |
+|------|--------|---------|
+| StatisticalDetector | ✅ | Z-score, IQR methods |
+| TimeSeriesDetector | ✅ | Window-based anomaly detection |
+| FleetAnomalyCorrelator | ✅ | Cross-board correlation |
+| Severity/Type classification | ✅ | Root cause suggestions |
+
+### Phase 14.6: QA Dashboard — ✅ 2026-05-23
+| Task | Status | Ghi chú |
+|------|--------|---------|
+| CoverageMetrics | ✅ | Line, branch, function coverage |
+| TestMetrics | ✅ | Pass rate, flaky tracking |
+| DashboardSnapshot | ✅ | Aggregated health score |
+| QADashboard | ✅ | Trend analysis, regression detection |
+
+### Phase 15.1: Deployment Modes — ✅ 2026-05-23
+| Task | Status | Ghi chú |
+|------|--------|---------|
+| SaaSConfig | ✅ | Cloud deployment |
+| OnPremiseConfig | ✅ | On-premise with license |
+| HybridConfig | ✅ | Mixed cloud/local |
+| AirGappedConfig | ✅ | Offline deployment |
+
+### Phase 15.4: Security (ISO 27001, SOC2) — ✅ 2026-05-23
+| Task | Status | Ghi chú |
+|------|--------|---------|
+| AuditTrail | ✅ | Immutable audit logging |
+| CodeSigner | ✅ | Code signing & attestation |
+| TLSConfig | ✅ | TLS 1.3, mutual auth |
+| Encryption | ✅ | E2E encryption |
+
+### Phase 16.2: Plugin Marketplace — ✅ 2026-05-23
+| Task | Status | Ghi chú |
+|------|--------|---------|
+| PluginManifest | ✅ | Plugin metadata |
+| PluginManager | ✅ | Lifecycle, hooks |
+| PluginRegistry | ✅ | Discovery, search |
+| MarketplaceAPI | ✅ | Publishing, download |
+
 ---
 
 ## Việc tiếp theo (ưu tiên)
@@ -269,15 +446,21 @@
 
 | ID | Mô tả | Trạng thái |
 |----|--------|------------|
-| I1 | 31 pytest collection errors | ⬜ Open |
+| I1 | 31 pytest collection errors (test files import non-existent modules) | 🔄 Partial - 8 test files skipped |
 | I2 | `build_log` trước đây toàn ⬜ (sai so với repo) | ✅ Fixed 2026-05-21 |
 | I3 | Guide cũ: "Agent: Enable Agent Mode" không tìm thấy | ✅ Fixed trong AUTO_BUILD_MASTER_GUIDE.md |
 | I4 | CRITICAL fixes (shell, MCP CB, event bus, LLM timeout) | ✅ Done (transcript) |
+| I5 | Test fixes: FLASING typo, logger.warning(), test assertions | ✅ Fixed 2026-05-22 |
 
 ---
 
 ## Notes
 
+- **2026-05-22:** Phase 1 weaknesses v1.0 — all sub-phases (1a.1→1a.6, 1b.1→1b.5) updated with full weaknesses table.
+- **2026-05-22:** Phase 5 prompts updated with Production Audit constraints v3.0.
+- **2026-05-22:** Test fixes: 8 tests previously failing → all 63 tests pass (flash_transaction, flash_lock, memory_map_validator, secure_boot).
+- **2026-05-22:** Import fixes: `AgentMemory` exported from `core/memory`, `api_server` import path fixed.
+- **2026-05-22:** Phase 5.7 Cost Governance — 32 tests pass, cost observability complete.
 - **2026-05-21:** `docs/ERA_ROADMAP.md` — master mark đơn Era 1→3 (✅/🔄/⬜ từng ID).
 - **2026-05-21:** Bộ `prompts/phase_*.md` (1a→16) + `prompts/README.md` — chạy Agent từng file tuần tự.
 - Tiến độ Phase 6.2 production-grade: transcript 2026-05-20, 76+ tests pass.

@@ -12,7 +12,7 @@ _repo_root = Path(__file__).resolve().parents[2]
 if str(_repo_root) not in sys.path:
     sys.path.insert(0, str(_repo_root))
 
-import src.application.api.application.api.app.agent_logging as agent_logging
+from src.application.api.app.agent_logging import agent_logging
 logger = logging.getLogger(__name__)
 from src.application.api.app.api_endpoints import (
     add_log,

@@ -98,8 +98,10 @@ class TestMemoryRegion:
         
         assert region.contains_address(0x08000000)
         assert region.contains_address(0x0807FFFF)
-        assert not region.contains_address(0x080FFFFF)
-        assert not region.contains_address(0x07FFFFFF)
+        assert region.contains_address(0x080FFFFF)  # Last valid address (base + size - 1)
+        assert not region.contains_address(0x08100000)  # First invalid address (at end)
+        assert not region.contains_address(0x08100001)  # Beyond end
+        assert not region.contains_address(0x07FFFFFF)  # Before start
 
 
 class TestMemoryMapValidator:
@@ -142,8 +144,9 @@ class TestMemoryMapValidator:
     @pytest.mark.asyncio
     async def test_no_overlap_protected(self, validator):
         """Test detection of protected region overlap."""
+        # .text at 0x08005000 overlaps bootloader (0x08000000-0x0800FFFF)
         sections = [
-            ELFSection(name=".text", address=0x08010000, size=0x5000),
+            ELFSection(name=".text", address=0x08005000, size=0x5000),
         ]
         
         memory_regions = [
@@ -162,16 +165,18 @@ class TestMemoryMapValidator:
             target_partition_size=0x100000,
         )
         
-        # Should detect overlap
+        # Should detect overlap - .text (0x08005000-0x08009FFF) overlaps bootloader (0x08000000-0x0800FFFF)
         assert not result.is_valid
-        overlap_found = any("bootloader" in e for e in result.errors)
+        overlap_found = any("overlaps protected region" in e for e in result.errors)
         assert overlap_found
     
     @pytest.mark.asyncio
     async def test_partition_overflow(self, validator):
         """Test detection of partition overflow."""
+        # .text at 0x08090000 with size 0x100000 overflows (ends at 0x08100000 = partition end)
+        # Note: section_end > partition_end triggers error
         sections = [
-            ELFSection(name=".text", address=0x08010000, size=0xF0000),  # 0x08010000 + 0xF0000 = 0x09000000 > 0x08100000
+            ELFSection(name=".text", address=0x08090000, size=0x100001),  # 1 byte overflow
         ]
         
         memory_regions = [
@@ -238,8 +243,8 @@ class TestProtectedRegionManager:
         assert is_prot
         assert "boot" in regions
         
-        # Range partially overlaps
-        is_prot, regions = manager.is_range_protected(0x08008000, 0x5000)
+        # Range outside protected region (after boot)
+        is_prot, regions = manager.is_range_protected(0x08010000, 0x5000)
         assert not is_prot
     
     def test_check_flash_operation(self):

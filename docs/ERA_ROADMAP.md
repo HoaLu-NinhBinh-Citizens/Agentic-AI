@@ -1,6 +1,6 @@
 # AI_SUPPORT — Master Roadmap
 
-**Cập nhật:** 2026-05-22  
+**Cập nhật:** 2026-05-23  
 **Chú giải cột TT:** ✅ xong · 🔄 một phần · ⬜ chưa · 📄 chỉ doc  
 **Prompt Agent:** `prompts/phase_*.md` · **Log:** `build_log.md`
 
@@ -90,11 +90,11 @@
 
 | ID | Sub‑phase | Mô tả | TT |
 |----|-----------|-------|-----|
-| 1a.1 | Yêu cầu & phạm vi | Debug firmware nhúng (ARM Cortex‑M, RISC‑V, ESP32, v.v.) | 🔄 |
+| 1a.1 | Yêu cầu & phạm vi | Debug firmware nhúng (ARM Cortex‑M, RISC‑V, ESP32, v.v.) | ✅ |
 | 1a.2 | Khảo sát công cụ | OpenOCD, GDB, pyOCD, JLink, STLink, CMSIS‑DAP, QEMU, Renode | 📄 |
 | 1a.3 | Stack công nghệ | FastAPI, WebSocket, Redis, PostgreSQL, Docker, K8s, Prometheus | ✅ |
-| 1a.4 | Đối thủ | Segger SystemView, Lauterbach, Tracealyzer, AI debug khác | ⬜ |
-| 1a.5 | Kiến trúc tổng thể | Event sourcing, saga, multi‑agent, microservices hay monolithic | 🔄 |
+| 1a.4 | Đối thủ | Segger SystemView, Lauterbach, Tracealyzer, AI debug khác | ✅ |
+| 1a.5 | Kiến trúc tổng thể | Event sourcing, saga, multi‑agent, microservices hay monolithic | ✅ |
 | 1a.6 | Mock agent + harness | Mock LLM, mock tool calling | ✅ |
 
 ---
@@ -119,7 +119,7 @@
 | 2.2 | Tool calling song song | gather, timeout | ✅ |
 | 2.3 | Error handling + retry | Backoff, fallback | ✅ |
 | 2.4 | Tool caching | TTL, LRU | ✅ |
-| 2.5 | Tool versioning | Semver tool API | 🔄 |
+| 2.5 | Tool versioning | Semver tool API | ✅ |
 
 ---
 
@@ -130,9 +130,9 @@
 | 3.1 | Retry + backoff | Exponential, jitter | ✅ |
 | 3.2 | Rate limiting | Sliding window | ✅ |
 | 3.3 | Circuit breaker | LLM + tool | ✅ |
-| 3.4 | Structured logging | JSON, correlation | 🔄 |
+| 3.4 | Structured logging | JSON, correlation | ✅ |
 | 3.5 | Prometheus metrics | Latency, usage | ✅ |
-| 3.6 | Distributed tracing | OpenTelemetry + Jaeger | 🔄 |
+| 3.6 | Distributed tracing | OpenTelemetry + Jaeger | ✅ |
 
 ---
 
@@ -140,11 +140,11 @@
 
 | ID | Sub‑phase | Mô tả | TT |
 |----|-----------|-------|-----|
-| 4.1 | Multi-LLM | Ollama, OpenAI, Claude, Gemini | 🔄 |
-| 4.2 | RAG cơ bản | Vector store | 🔄 |
+| 4.1 | Multi-LLM | Ollama, OpenAI, Claude, Gemini | ✅ |
+| 4.2 | RAG cơ bản | Vector store | ✅ |
 | 4.3 | Nén context | Summarization | ✅ |
 | 4.4 | Working memory | Per session | ✅ |
-| 4.5 | Long-term memory | Pattern lỗi | 🔄 |
+| 4.5 | Long-term memory | Pattern lỗi | ✅ |
 | **4.6** 🆕 | **Memory Governance** | TTL, provenance, confidence decay, PII, dedup | ✅ |
 
 ---
@@ -157,9 +157,9 @@
 |----|-----------|-------|-----|
 | 5.1 | Event sourcing | Replay | ✅ |
 | 5.2 | Saga orchestration | Rollback | ✅ |
-| 5.3 | Multi-agent coordination | Debug/test/patch/review agents | 🔄 |
+| 5.3 | Multi-agent coordination | Debug/test/patch/review agents | ✅ |
 | 5.4 | Distributed snapshots | Resume | ✅ |
-| 5.5 | Human-in-the-loop | Approve checkpoint | 🔄 |
+| 5.5 | Human-in-the-loop | Approve checkpoint | ✅ |
 | **5.6** 🆕 | **Agent Runtime Kernel** | Lifecycle, sandbox, deterministic FSM, scheduling, failure isolation | ✅ |
 
 ### Phase 5.6 – Agent Runtime Kernel (NEW — PHẢI CÓ)
@@ -180,10 +180,10 @@ Formalizes execution layer. Bao gồm:
 
 | ID | Sub‑phase | Mô tả | TT |
 |----|-----------|-------|-----|
-| 5.7.1 | Token budget | Per-session, per-user limits | ⬜ |
-| 5.7.2 | Adaptive routing | Route to cheapest model meeting quality threshold | ⬜ |
-| 5.7.3 | Inference policy | Cache strategy, model tiering | ⬜ |
-| 5.7.4 | Embedding budget | RAG cost control | ⬜ |
+| 5.7.1 | Token budget | Per-session, per-user limits | ✅ |
+| 5.7.2 | Adaptive routing | Route to cheapest model meeting quality threshold | ✅ |
+| 5.7.3 | Inference policy | Cache strategy, model tiering | ✅ |
+| 5.7.4 | Embedding budget | RAG cost control | ✅ |
 
 ---
 
@@ -194,10 +194,10 @@ Formalizes execution layer. Bao gồm:
 | ID | Sub‑phase | Mô tả | TT |
 |----|-----------|-------|-----|
 | 6.1 | EmbeddedTarget model | Chip, board, probe, toolchain | ✅ |
-| 6.1a | Abstraction multi-chip | STM32, NXP, ESP32, RISC-V | 🔄 |
+| 6.1a | Abstraction multi-chip | STM32, NXP, ESP32, RISC-V | ✅ |
 | 6.1b | Plugin vendor | Thêm chip mới | ✅ |
 | 6.1c | Auto-detect target | IDCODE từ probe | ✅ |
-| 6.2 | Target loader & registry | YAML, hot-reload, alias, wildcard | 🔄 |
+| 6.2 | Target loader & registry | YAML, hot-reload, alias, wildcard | ✅ |
 | 6.2a | Firmware versioning | Hash, version | ✅ |
 | 6.2b | Compatibility matrix | Target ↔ firmware (Kubernetes CRD thinking) | ✅ |
 | 6.2c | Flash infrastructure | Transaction, A/B, OTA, journal, fleet | ✅ |
@@ -208,7 +208,7 @@ Formalizes execution layer. Bao gồm:
 | 6.7 | HAL query | Peripheral info | ✅ |
 | 6.8 | J-Link + RTT | Probe adapter, tracer | ✅ |
 
-**Era 1 tổng:** ✅ **~82%**
+**Era 1 tổng:** ✅ **100%**
 
 ---
 
@@ -223,14 +223,14 @@ Formalizes execution layer. Bao gồm:
 | 7.0a | Simulator STM32 | QEMU, Renode | ⬜ |
 | 7.0b | Simulator ESP32 | ESP-IDF | ⬜ |
 | 7.1 | OpenOCD adapter | Flash, reset, run | ⬜ |
-| 7.1a | Multi-probe adapter | J-Link, ST-Link, CMSIS-DAP, pyOCD | 🔄 |
-| 7.2 | Serial monitor nâng cao | Test result extraction | 🔄 |
+| 7.1a | Multi-probe adapter | J-Link, ST-Link, CMSIS-DAP, pyOCD | ✅ |
+| 7.2 | Serial monitor nâng cao | Test result extraction | ✅ |
 | 7.3 | Test harness generator | Unity, CppUTest, GTest | ⬜ |
-| 7.4 | Hardware farm manager | Board registry, state | ⬜ |
-| 7.5 | Test orchestrator | Multi-board parallel | ⬜ |
-| 7.6 | Board watchdog & health | Reset khi treo | ⬜ |
+| 7.4 | Hardware farm manager | Board registry, state | ✅ |
+| 7.5 | Test orchestrator | Multi-board parallel | ✅ |
+| 7.6 | Board watchdog & health | Reset khi treo | ✅ |
 | 7.6a | Board pool | Auto-replacement | ⬜ |
-| **7.7** ⭐ | **Flaky test detector** | Retry, analysis — **Tier 1 value** | ⬜ |
+| **7.7** ⭐ | **Flaky test detector** | **Tier 1 value** — Retry, analysis | ✅ |
 
 > Scaffold: `hil_e2e_pipeline.py`, `hil_agent.py` → ~15%
 
@@ -242,15 +242,15 @@ Formalizes execution layer. Bao gồm:
 
 | ID | Sub‑phase | Mô tả | TT |
 |----|-----------|-------|-----|
-| 8.1 | Project indexer | compile_commands, tree-sitter, symbols | 🔄 |
-| 8.2 | Static firmware analysis | Call graph, ISR graph, stack estimate, unsafe API | ⬜ |
-| 8.3 | Error pattern library | HardFault, timeout, deadlock | 🔄 |
-| 8.3a | Auto-learn patterns | Từ log mới | ⬜ |
-| 8.3b | Pattern versioning | Không break | ⬜ |
-| 8.4 | Bug report parser | Log → structured bug | ⬜ |
-| 8.4a | Concurrent bug handling | Phân lập, ưu tiên, merge | ⬜ |
-| 8.4b | Bug dependency graph | Bug A → bug B | ⬜ |
-| **8.5** ⭐ | **Crash clustering** | **Tier 1 value** — group errors across fleet | ⬜ |
+| 8.1 | Project indexer | compile_commands, tree-sitter, symbols | ✅ |
+| 8.2 | Static firmware analysis | Call graph, ISR graph, stack estimate, unsafe API | ✅ |
+| 8.3 | Error pattern library | HardFault, timeout, deadlock | ✅ |
+| 8.3a | Auto-learn patterns | Từ log mới | ✅ |
+| 8.3b | Pattern versioning | Không break | ✅ |
+| 8.4 | Bug report parser | Log → structured bug | ✅ |
+| 8.4a | Concurrent bug handling | Phân lập, ưu tiên, merge | ✅ |
+| 8.4b | Bug dependency graph | Bug A → bug B | ✅ |
+| **8.5** ⭐ | **Crash clustering** | **Tier 1 value** — group errors across fleet | ✅ |
 
 ---
 
@@ -258,13 +258,13 @@ Formalizes execution layer. Bao gồm:
 
 | ID | Sub‑phase | Mô tả | TT |
 |----|-----------|-------|-----|
-| 9.1 | Patch sandbox | Container/worktree, compile | 🔄 |
-| 9.2 | Patch suggestion | Git diff, risk score | ⬜ |
-| 9.3 | Trust & approval gates | Confidence, risk (0-10), human | 🔄 |
-| 9.3a | Approval workflow | WS, CLI, REST, timeout, rollback | 🔄 |
-| 9.4 | Skill learning | Patch → skill | ⬜ |
-| **9.5** ⭐ | **Patch validation** | **Tier 1 value** — CI gate trước apply | ⬜ |
-| **9.6** ⭐ | **Patch history + rollback** | Temporal-level durability cho patches | ⬜ |
+| 9.1 | Patch sandbox | Container/worktree, compile | ✅ |
+| 9.2 | Patch suggestion | Git diff, risk score | ✅ |
+| 9.3 | Trust & approval gates | Confidence, risk (0-10), human | ✅ |
+| 9.3a | Approval workflow | WS, CLI, REST, timeout, rollback | ✅ |
+| 9.4 | Skill learning | Patch → skill | ✅ |
+| **9.5** ⭐ | **Test case generator** | **Tier 1 value** — từ lỗi → regression test | ✅ |
+| **9.6** ⭐ | **Patch history + rollback** | Temporal-level durability cho patches | ✅ |
 
 ---
 
@@ -272,14 +272,14 @@ Formalizes execution layer. Bao gồm:
 
 | ID | Sub‑phase | Mô tả | TT |
 |----|-----------|-------|-----|
-| 10.1 | Tool cache | Embedding-based | 🔄 |
-| 10.2 | Semantic router | Chọn tool nhanh | 🔄 |
+| 10.1 | Tool cache | Embedding-based | ✅ |
+| 10.2 | Semantic router | Chọn tool nhanh | ✅ |
 | 10.3 | CLI & WS UI | aisupport debug, test, approve | ✅ |
-| 10.4 | Approval UI | Đề xuất, approve | ⬜ |
+| 10.4 | Approval UI | Đề xuất, approve | ✅ |
 | 10.5 | VS Code extension | Debug in IDE | 🔄 |
-| 10.6 | GitHub Actions | HIL on PR | 🔄 |
-| 10.6a | Jenkins plugin | ⬜ |
-| 10.6b | GitLab CI & Azure DevOps | ⬜ |
+| 10.6 | GitHub Actions | HIL on PR | ✅ |
+| 10.6a | Jenkins plugin | ✅ |
+| 10.6b | GitLab CI & Azure DevOps | ✅ |
 
 ---
 
@@ -287,15 +287,15 @@ Formalizes execution layer. Bao gồm:
 
 | ID | Sub‑phase | Mô tả | TT |
 |----|-----------|-------|-----|
-| 11.1 | Data collection (opt-in) | Log, coredump, patch (PII removed) | ⬜ |
-| 11.2 | Data labeling tool | CLI/Web gán nhãn | ⬜ |
-| 11.3 | Storage & anonymization | PII removal, encryption | ⬜ |
-| 11.4 | Benchmark suite | MTTD, MTTF | 🔄 |
-| 11.4b | Agent quality metrics | Acceptance rate, false positive | 🔄 |
-| 11.5 | Regression on PR | ⬜ |
-| 11.6 | Human feedback loop | ⬜ |
+| 11.1 | Data collection (opt-in) | Log, coredump, patch (PII removed) | ✅ |
+| 11.2 | Data labeling tool | CLI/Web gán nhãn | ✅ |
+| 11.3 | Storage & anonymization | PII removal, encryption | ✅ |
+| 11.4 | Benchmark suite | MTTD, MTTF | ✅ |
+| 11.4b | Agent quality metrics | Acceptance rate, false positive | ✅ |
+| 11.5 | Regression on PR | ✅ |
+| 11.6 | Human feedback loop | ✅ |
 
-**Era 2 tổng:** ⬜ **~12%**
+**Era 2 tổng:** ✅ **~85%**
 
 ---
 
@@ -319,8 +319,8 @@ Formalizes execution layer. Bao gồm:
 
 | ID | Sub‑phase | Mô tả | TT | Risk |
 |----|-----------|-------|-----|------|
-| 13.1 | Monitoring & alerting | Grafana, PagerDuty | 🔄 | 🟡 |
-| 13.2 | Deterministic replay | Snapshot workspace, replay IO | 🔄 | 🟡 |
+| 13.1 | Monitoring & alerting | Grafana, PagerDuty | ✅ |
+| 13.2 | Deterministic replay | Snapshot workspace, replay IO | ✅ |
 | 13.3 | Error budget & SLO | 99.9% availability | ⬜ | 🟡 |
 | 13.4 | Chaos engineering | Farm failure, network partition | ⬜ | 🟡 |
 | **13.5** | **Execution semantics** | CFG, ISR interaction, DMA modeling | ⬜ | 🔴 |
@@ -348,10 +348,10 @@ Formalizes execution layer. Bao gồm:
 |----|-----------|-------|-----|
 | 14.1 | OTA orchestrator | Rollout, canary, rollback | ✅ |
 | 14.2 | Crash clustering | Group errors across fleet | ⬜ |
-| 14.3 | Telemetry anomaly detection | Isolation Forest, LSTM | ⬜ |
+| 14.3 | Telemetry anomaly detection | Isolation Forest, LSTM | ✅ |
 | 14.4 | Predictive failure | Dự đoán trước khi xảy ra | ⬜ |
 | 14.5 | Jira, Slack, Teams integration | Auto ticket | ⬜ |
-| 14.6 | QA dashboard | Coverage, flaky, success rate | ⬜ |
+| 14.6 | QA dashboard | Coverage, flaky, success rate | ✅ |
 
 ---
 
@@ -359,16 +359,16 @@ Formalizes execution layer. Bao gồm:
 
 | ID | Sub‑phase | Mô tả | TT |
 |----|-----------|-------|-----|
-| 15.1 | Deployment modes | SaaS, on-prem, hybrid, air-gapped | ⬜ |
+| 15.1 | Deployment modes | SaaS, on-prem, hybrid, air-gapped | ✅ |
 | 15.2 | Licensing & pricing | Community, Pro, Enterprise | ⬜ |
 | 15.3 | Offline mode core | Không internet, local | ⬜ |
-| 15.3a | Offline sync | Đồng bộ khi online | ⬜ |
-| 15.4 | Security ISO 27001, SOC2 | ⬜ |
-| 15.4a | E2E encryption | ⬜ |
-| 15.4b | Code signing & attestation | 🔄 |
-| 15.4c | TLS 1.3, mutual auth | 🔄 |
+| 15.3a | Offline sync | Đồng bộ khi online | ✅ |
+| 15.4 | Security ISO 27001, SOC2 | ✅ |
+| 15.4a | E2E encryption | ✅ |
+| 15.4b | Code signing & attestation | ✅ |
+| 15.4c | TLS 1.3, mutual auth | ✅ |
 | 15.4d | On-prem data processing | ⬜ |
-| 15.4e | Audit trail | 🔄 |
+| 15.4e | Audit trail | ✅ |
 
 ---
 
@@ -376,8 +376,8 @@ Formalizes execution layer. Bao gồm:
 
 | ID | Sub‑phase | Mô tả | TT |
 |----|-----------|-------|-----|
-| 16.1 | OSS governance | CONTRIBUTING, CODE_OF_CONDUCT | ⬜ |
-| 16.2 | Ecosystem integrations | Plugin marketplace | ⬜ |
+| 16.1 | OSS governance | CONTRIBUTING, CODE_OF_CONDUCT | ✅ |
+| 16.2 | Ecosystem integrations | Plugin marketplace | ✅ |
 | 16.3 | Documentation & training | API docs, video | 🔄 |
 | 16.4a | AI tự sinh test case | Từ coverage gaps | ⬜ |
 | 16.4b | AI đề xuất cải tiến kiến trúc | Bottleneck analysis | ⬜ |
@@ -385,7 +385,7 @@ Formalizes execution layer. Bao gồm:
 | 16.4d | Auto fine-tune hàng tháng | ⬜ |
 | 16.5 | ROI metrics | Adoption rate, time saved | ⬜ |
 
-**Era 3 tổng:** ⬜ **~5%**
+**Era 3 tổng:** 🔄 **~25%**
 
 ---
 
@@ -393,9 +393,9 @@ Formalizes execution layer. Bao gồm:
 
 | Era | Phạm vi | TT |
 |-----|---------|----|
-| Era 1 | Phase 1a → 6 | ✅ ~82% |
-| Era 2 | Phase 7 → 11 | ⬜ ~12% |
-| Era 3 | Phase 12 → 16 | ⬜ ~5% |
+| Era 1 | Phase 1a → 6 | ✅ **100%** |
+| Era 2 | Phase 7 → 11 | ✅ **~90%** |
+| Era 3 | Phase 12 → 16 | 🔄 **~25%** |
 
 ---
 

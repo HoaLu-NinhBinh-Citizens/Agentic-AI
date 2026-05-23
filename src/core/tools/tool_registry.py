@@ -2,9 +2,16 @@
 
 Each tool has:
 - name: unique identifier
+- version: semver version string (e.g., "1.0.0")
 - description: what the tool does
 - parameters: JSON schema for arguments
 - execute: async function
+
+Versioning:
+- Tools follow semver (MAJOR.MINOR.PATCH)
+- Breaking changes bump MAJOR
+- Backward-compatible additions bump MINOR
+- Bug fixes bump PATCH
 """
 
 from __future__ import annotations
@@ -17,6 +24,7 @@ import shutil
 import subprocess
 import sys
 from dataclasses import dataclass, field
+from datetime import datetime
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple, Union
 
@@ -28,22 +36,116 @@ from src.core.tools.file_tools import FileTools
 # Data classes
 # ---------------------------------------------------------------------------
 
+SEMVER_REGEX = re.compile(
+    r"^(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)"
+    r"(?:-((?:0|[1-9]\d*|\d*[a-zA-Z-][0-9a-zA-Z-]*)"
+    r"(?:\.(?:0|[1-9]\d*|\d*[a-zA-Z-][0-9a-zA-Z-]*))*))?"
+    r"(?:\+([0-9a-zA-Z-]+(?:\.[0-9a-zA-Z-]+)*))?$"
+)
+
+
+def parse_semver(version: str) -> Tuple[int, int, int]:
+    """Parse semver string to (major, minor, patch)."""
+    match = SEMVER_REGEX.match(version)
+    if not match:
+        raise ValueError(f"Invalid semver: {version}")
+    return int(match.group(1)), int(match.group(2)), int(match.group(3))
+
+
+@dataclass
+class ToolVersion:
+    """Version information for a tool."""
+    version: str
+    changelog: str = ""
+    deprecated: bool = False
+    replacement: Optional[str] = None
+
+    def __post_init__(self):
+        self.major, self.minor, self.patch = parse_semver(self.version)
+
+    def is_compatible_with(self, other: "ToolVersion") -> bool:
+        """Check if this version is backward-compatible with other."""
+        return self.major == other.major
+
+    def to_dict(self) -> dict:
+        return {
+            "version": self.version,
+            "changelog": self.changelog,
+            "deprecated": self.deprecated,
+            "replacement": self.replacement,
+        }
+
+
 @dataclass
 class ToolDefinition:
     name: str
-    description: str
-    parameters: Dict[str, Any]
+    version: str = "1.0.0"
+    description: str = ""
+    parameters: Dict[str, Any] = field(default_factory=dict)
     execute: Any = field(default=None, repr=False)
+    metadata: Dict[str, Any] = field(default_factory=dict)
+    tags: List[str] = field(default_factory=list)
+    deprecated: bool = False
+    replacement: Optional[str] = None
+
+    def __post_init__(self):
+        self.tool_version = ToolVersion(version=self.version)
+        if self.deprecated and not self.replacement:
+            self.replacement = self._suggest_replacement()
+
+    def _suggest_replacement(self) -> Optional[str]:
+        """Suggest replacement tool if deprecated."""
+        return None
+
+    def to_schema(self) -> Dict[str, Any]:
+        """Return OpenAI-style function schema."""
+        schema = {
+            "name": self.name,
+            "description": self.description,
+            "parameters": self.parameters,
+        }
+        if self.deprecated:
+            schema["deprecated"] = True
+            if self.replacement:
+                schema["replacement"] = self.replacement
+        return schema
+
+    def to_dict(self) -> Dict[str, Any]:
+        """Return full tool definition as dict."""
+        return {
+            "name": self.name,
+            "version": self.version,
+            "description": self.description,
+            "parameters": self.parameters,
+            "metadata": self.metadata,
+            "tags": self.tags,
+            "deprecated": self.deprecated,
+            "replacement": self.replacement,
+            "version_info": self.tool_version.to_dict(),
+        }
 
 
 @dataclass
 class ToolResult:
     """Result from a tool execution."""
     tool: str
-    success: bool
-    output: str
+    tool_version: Optional[str] = None
+    success: bool = True
+    output: str = ""
     error: Optional[str] = None
     duration_ms: float = 0.0
+    deprecated: bool = False
+
+    def to_dict(self) -> Dict[str, Any]:
+        return {
+            "tool": self.tool,
+            "tool_version": self.tool_version,
+            "success": self.success,
+            "output": self.output,
+            "error": self.error,
+            "duration_ms": self.duration_ms,
+            "deprecated": self.deprecated,
+        }
 
 
 # ---------------------------------------------------------------------------
@@ -397,46 +499,59 @@ def _make_tools(
 
 
 # ---------------------------------------------------------------------------
-# Registry
+# Registry with versioning
 # ---------------------------------------------------------------------------
 
 class ToolRegistry:
-    """Central registry for all agent tools."""
+    """Central registry for all agent tools with version support."""
 
     def __init__(self):
         self._tools: Dict[str, ToolDefinition] = {}
+        self._versions: Dict[str, List[ToolVersion]] = {}
         self._initialized = False
 
     def register(self, tools: Dict[str, ToolDefinition]):
         for name, tool in tools.items():
             self._tools[name] = tool
+            if name not in self._versions:
+                self._versions[name] = []
+            self._versions[name].append(tool.tool_version)
         self._initialized = True
 
-    def get(self, name: str) -> Optional[ToolDefinition]:
-        return self._tools.get(name)
+    def get(self, name: str, version: Optional[str] = None) -> Optional[ToolDefinition]:
+        tool = self._tools.get(name)
+        if tool and version:
+            if tool.version != version:
+                return None
+        return tool
 
-    def list_names(self) -> List[str]:
-        return sorted(self._tools.keys())
+    def list_names(self, include_deprecated: bool = False) -> List[str]:
+        if include_deprecated:
+            return sorted(self._tools.keys())
+        return sorted(k for k, v in self._tools.items() if not v.deprecated)
 
-    def get_schemas(self) -> List[Dict]:
+    def list_versions(self, name: str) -> List[ToolVersion]:
+        """List all versions of a tool."""
+        return sorted(self._versions.get(name, []), key=lambda v: (v.major, v.minor, v.patch))
+
+    def get_schemas(self, include_deprecated: bool = False) -> List[Dict]:
         """Return OpenAI-style tool schemas for LLM function calling."""
         schemas = []
         for name, tool in sorted(self._tools.items()):
-            schemas.append({
-                "type": "function",
-                "function": {
-                    "name": tool.name,
-                    "description": tool.description,
-                    "parameters": tool.parameters,
-                },
-            })
+            if tool.deprecated and not include_deprecated:
+                continue
+            schemas.append(tool.to_schema())
         return schemas
 
-    def get_tools_md(self) -> str:
+    def get_tools_md(self, include_deprecated: bool = False) -> str:
         """Return a markdown description of all tools for prompts without function calling."""
         lines = ["Available tools:"]
         for name, tool in sorted(self._tools.items()):
-            lines.append(f"\n## {tool.name}")
+            if tool.deprecated and not include_deprecated:
+                continue
+            lines.append(f"\n## {tool.name} (v{tool.version})")
+            if tool.deprecated:
+                lines.append(f"⚠️ **DEPRECATED** - Use `{tool.replacement}` instead")
             lines.append(f"{tool.description}")
             props = tool.parameters.get("properties", {})
             if props:
@@ -446,3 +561,24 @@ class ToolRegistry:
                     req_str = "(required)" if required else "(optional)"
                     lines.append(f"  - {pname} {req_str}: {pinfo.get('description', '')}")
         return "\n".join(lines)
+
+    def get_version_info(self, name: str) -> Optional[Dict]:
+        """Get version history for a tool."""
+        if name not in self._tools:
+            return None
+        tool = self._tools[name]
+        return {
+            "current": tool.version,
+            "versions": [v.to_dict() for v in self.list_versions(name)],
+            "deprecated": tool.deprecated,
+            "replacement": tool.replacement,
+        }
+
+    def deprecate(self, name: str, replacement: Optional[str] = None, changelog: str = "") -> bool:
+        """Mark a tool as deprecated."""
+        if name not in self._tools:
+            return False
+        tool = self._tools[name]
+        tool.deprecated = True
+        tool.replacement = replacement
+        return True

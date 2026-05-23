@@ -178,10 +178,8 @@ class TargetFlashLock:
             
             if lock.owner_id != owner_id:
                 logger.warning(
-                    "flash_lock_release_denied",
-                    target=target_name,
-                    requested_by=owner_id,
-                    owned_by=lock.owner_id,
+                    "flash_lock_release_denied: target=%s, requested_by=%s, owned_by=%s",
+                    target_name, owner_id, lock.owner_id,
                 )
                 return False
             
@@ -279,7 +277,7 @@ class TargetFlashLock:
             
             if target_name in self._locks:
                 del self._locks[target_name]
-                logger.warning("flash_lock_force_released", target=target_name)
+                logger.warning("flash_lock_force_released: target=%s", target_name)
                 return True
             
             return False

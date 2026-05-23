@@ -3,6 +3,7 @@
 from .semantic_memory import SemanticMemory, MemoryRecord, MemoryResult
 from .chunker import Chunker, Chunk
 from .deduplication import DeduplicationEngine
+from .store import AgentMemory
 
 __all__ = [
     "SemanticMemory",
@@ -11,4 +12,5 @@ __all__ = [
     "Chunker",
     "Chunk",
     "DeduplicationEngine",
+    "AgentMemory",
 ]

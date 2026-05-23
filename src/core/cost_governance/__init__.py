@@ -9,8 +9,8 @@ This module provides cost governance for AI operations:
 """
 
 from .token_budget import TokenBudget, BudgetConfig, BudgetResult
-from .adaptive_routing import AdaptiveRouter, RoutingPolicy, ModelTier
-from .inference_policy import InferencePolicy, CacheStrategy, TierConfig
+from .adaptive_routing import AdaptiveRouter, RoutingPolicy, ModelTier, ModelInfo, RoutingDecision
+from .inference_policy import InferencePolicy, CacheStrategy, TierConfig, InferencePolicyManager
 from .embedding_budget import EmbeddingBudget, EmbeddingCostConfig
 from .cost_observability import CostObserver, CostMetrics
 
