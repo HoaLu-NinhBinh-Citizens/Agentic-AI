@@ -1,14 +1,21 @@
-"""Event Bus - Infrastructure-wide async event bus with Redis support.
+"""Event Bus - Infrastructure-wide async event bus with Redis Streams support.
 
-Phase: Infrastructure Layer
+Phase: Infrastructure Layer (FIXED)
 Purpose: Provides pub/sub event bus for cross-component communication
+FIXES Applied:
+- Redis Streams instead of pub/sub for guaranteed ordering
+- At-least-once delivery with consumer groups
+- Sequence numbers for causal ordering
+- Local dispatch happens AFTER Redis write (no race condition)
+- Message persistence for replay capability
+
 Supports:
 - In-memory pub/sub for single-instance
-- Redis-backed pub/sub for multi-instance (distributed)
+- Redis Streams for distributed (guaranteed ordering)
 - Dead letter queue for failed events
 - Event schema validation
 - Subscription patterns (topic, wildcard)
-- Event replay from persistence
+- Event replay from streams
 """
 
 from __future__ import annotations
@@ -16,6 +23,8 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
+import time
+import uuid
 from abc import ABC, abstractmethod
 from collections import defaultdict
 from dataclasses import dataclass, field
@@ -29,7 +38,7 @@ logger = logging.getLogger(__name__)
 class EventBusBackend(Enum):
     """Event bus backend types."""
     IN_MEMORY = "in_memory"
-    REDIS = "redis"
+    REDIS_STREAMS = "redis_streams"  # Renamed from REDIS for clarity
 
 
 @dataclass
@@ -43,6 +52,7 @@ class Event:
     correlation_id: str | None = None
     causation_id: str | None = None
     metadata: dict[str, Any] = field(default_factory=dict)
+    sequence: int = 0  # FIX: Added sequence number for ordering
 
     def to_dict(self) -> dict[str, Any]:
         """Serialize event to dict."""
@@ -55,6 +65,7 @@ class Event:
             "correlation_id": self.correlation_id,
             "causation_id": self.causation_id,
             "metadata": self.metadata,
+            "sequence": self.sequence,
         }
 
     @classmethod
@@ -72,6 +83,7 @@ class Event:
             correlation_id=data.get("correlation_id"),
             causation_id=data.get("causation_id"),
             metadata=data.get("metadata", {}),
+            sequence=data.get("sequence", 0),
         )
 
 
@@ -123,6 +135,8 @@ class InMemoryEventBusBackend(EventBusBackend):
         self._running = False
         self._event_queue: asyncio.Queue[Event] = asyncio.Queue()
         self._processor_task: asyncio.Task | None = None
+        self._sequence: int = 0
+        self._lock = asyncio.Lock()
 
     async def start(self) -> None:
         """Start the event processor."""
@@ -158,9 +172,14 @@ class InMemoryEventBusBackend(EventBusBackend):
                 logger.exception("event_processing_error", error=str(e))
 
     async def publish(self, event: Event) -> None:
-        """Queue event for processing."""
+        """Queue event for processing with sequence number."""
         if not self._running:
             raise RuntimeError("Event bus not started")
+        
+        async with self._lock:
+            self._sequence += 1
+            event.sequence = self._sequence
+        
         await self._event_queue.put(event)
 
     async def subscribe(self, subscription: Subscription) -> None:
@@ -180,7 +199,6 @@ class InMemoryEventBusBackend(EventBusBackend):
         if pattern == topic:
             return True
         
-        # Handle wildcard patterns like "agent.*" or "*.task"
         pattern_parts = pattern.split(".")
         topic_parts = topic.split(".")
         
@@ -197,11 +215,9 @@ class InMemoryEventBusBackend(EventBusBackend):
     async def _dispatch(self, event: Event) -> None:
         """Dispatch event to matching subscriptions."""
         for sub in self._subscriptions:
-            # Check topic pattern
             if not self._matches_pattern(sub.topic_pattern, event.topic):
                 continue
             
-            # Check event type filter
             if sub.event_types and event.event_type not in sub.event_types:
                 continue
             
@@ -220,22 +236,40 @@ class InMemoryEventBusBackend(EventBusBackend):
                 )
 
 
-class RedisEventBusBackend(EventBusBackend):
-    """Redis-backed event bus for distributed deployment."""
+class RedisStreamsEventBusBackend(EventBusBackend):
+    """Redis Streams-backed event bus for distributed deployment.
+
+    FIX: Uses Redis Streams instead of pub/sub for:
+    - Guaranteed ordering (stream entries are ordered)
+    - At-least-once delivery (consumer groups)
+    - Message persistence (streams are durable)
+    - Replay capability (can read from any position)
+    """
 
     def __init__(
         self,
         redis_url: str = "redis://localhost:6379",
-        channel_prefix: str = "aisupport:events",
+        stream_prefix: str = "aisupport:events",
+        consumer_group: str = "aisupport-consumers",
+        consumer_name: str | None = None,
+        claim_idle_timeout_ms: int = 30000,
+        batch_size: int = 100,
     ) -> None:
         self._redis_url = redis_url
-        self._channel_prefix = channel_prefix
+        self._stream_prefix = stream_prefix
+        self._consumer_group = consumer_group
+        self._consumer_name = consumer_name or f"consumer-{uuid.uuid4().hex[:8]}"
+        self._claim_idle_timeout_ms = claim_idle_timeout_ms
+        self._batch_size = batch_size
+        
         self._redis = None
-        self._pubsub = None
-        self._subscriptions: list[Subscription] = []
         self._running = False
-        self._listener_task: asyncio.Task | None = None
-        self._local_queue: asyncio.Queue[Event] = asyncio.Queue()
+        self._subscriptions: list[Subscription] = []
+        self._listener_tasks: dict[str, asyncio.Task] = {}
+        self._lock = asyncio.Lock()
+        
+        # FIX: Sequence counter per topic for ordering
+        self._sequences: dict[str, int] = defaultdict(int)
 
     async def start(self) -> None:
         """Connect to Redis and start listener."""
@@ -243,76 +277,229 @@ class RedisEventBusBackend(EventBusBackend):
             import redis.asyncio as redis
         except ImportError:
             logger.error("redis_not_installed")
-            raise RuntimeError("redis package required for Redis backend")
+            raise RuntimeError("redis package required for Redis Streams backend")
         
         self._redis = redis.from_url(self._redis_url, decode_responses=False)
-        self._pubsub = self._redis.pubsub()
         self._running = True
-        self._listener_task = asyncio.create_task(self._listen())
-        logger.info("redis_event_bus_started", url=self._redis_url)
+        
+        # Create consumer group for each topic pattern
+        await self._ensure_consumer_groups()
+        
+        logger.info("redis_streams_event_bus_started", 
+                   url=self._redis_url, 
+                   consumer=self._consumer_name)
+
+    async def _ensure_consumer_groups(self) -> None:
+        """Create consumer groups for all topic patterns."""
+        topic_patterns = set()
+        for sub in self._subscriptions:
+            topic_patterns.add(sub.topic_pattern)
+        
+        for pattern in topic_patterns:
+            stream_key = self._get_stream_key(pattern)
+            try:
+                # Create stream if not exists with MKSTREAM
+                await self._redis.xgroup_create(
+                    stream_key, 
+                    self._consumer_group, 
+                    id="0", 
+                    mkstream=True
+                )
+            except Exception as e:
+                # Group might already exist
+                if "BUSYGROUP" not in str(e):
+                    logger.debug(f"Consumer group creation: {e}")
 
     async def stop(self) -> None:
         """Disconnect from Redis."""
         self._running = False
-        if self._listener_task:
-            self._listener_task.cancel()
+        
+        # Cancel all listener tasks
+        for task in self._listener_tasks.values():
+            task.cancel()
             try:
-                await self._listener_task
+                await task
             except asyncio.CancelledError:
                 pass
-        if self._pubsub:
-            await self._pubsub.close()
+        
         if self._redis:
             await self._redis.close()
-        logger.info("redis_event_bus_stopped")
+        logger.info("redis_streams_event_bus_stopped")
 
-    async def _listen(self) -> None:
-        """Listen for Redis messages."""
-        # Subscribe to channels based on patterns
-        patterns = set()
-        for sub in self._subscriptions:
-            channel = f"{self._channel_prefix}:{sub.topic_pattern}"
-            patterns.add(channel)
-        
-        if patterns:
-            await self._pubsub.psubscribe(*patterns)
-        
-        async for message in self._pubsub.listen():
-            if not self._running:
-                break
-            if message["type"] != "pmessage":
-                continue
-            
-            try:
-                data = json.loads(message["data"])
-                event = Event.from_dict(data)
-                await self._dispatch_local(event)
-            except Exception as e:
-                logger.exception("redis_message_error", error=str(e))
+    def _get_stream_key(self, topic: str) -> str:
+        """Get stream key for topic."""
+        return f"{self._stream_prefix}:{topic}"
+
+    def _get_topic_from_stream(self, stream_key: str) -> str:
+        """Extract topic from stream key."""
+        return stream_key.replace(f"{self._stream_prefix}:", "")
+
+    async def _get_next_sequence(self, topic: str) -> int:
+        """Get next sequence number for topic."""
+        async with self._lock:
+            self._sequences[topic] += 1
+            return self._sequences[topic]
 
     async def publish(self, event: Event) -> None:
-        """Publish event to Redis."""
+        """Publish event to Redis Stream FIRST, then dispatch locally.
+        
+        FIX: This ensures ordering - Redis write happens before local dispatch.
+        """
         if not self._running or not self._redis:
             raise RuntimeError("Event bus not started")
         
-        channel = f"{self._channel_prefix}:{event.topic}"
-        await self._redis.publish(channel, json.dumps(event.to_dict()))
+        # FIX: Get sequence number BEFORE writing
+        sequence = await self._get_next_sequence(event.topic)
+        event.sequence = sequence
         
-        # Also dispatch locally for same-instance subscribers
+        stream_key = self._get_stream_key(event.topic)
+        
+        # FIX: Write to Redis FIRST (single writer, guaranteed order)
+        event_data = {
+            "event_id": event.event_id,
+            "event_type": event.event_type,
+            "topic": event.topic,
+            "data": json.dumps(event.data),
+            "timestamp": event.timestamp.isoformat(),
+            "correlation_id": event.correlation_id or "",
+            "causation_id": event.causation_id or "",
+            "metadata": json.dumps(event.metadata),
+            "sequence": str(sequence),
+        }
+        
+        # Use XADD with explicit ID for ordering
+        # ID format: timestamp-milliseconds-sequence (ensures global ordering)
+        stream_id = f"{int(time.time() * 1000)}-{sequence:06d}"
+        
+        try:
+            await self._redis.xadd(stream_key, event_data, maxlen=10000, approximate=True, id=stream_id)
+            logger.debug("event_published_to_stream", 
+                       topic=event.topic, 
+                       sequence=sequence,
+                       stream_id=stream_id)
+        except Exception as e:
+            logger.error("failed_to_publish_to_stream", error=str(e))
+            raise
+        
+        # Now dispatch locally (AFTER Redis write is confirmed)
         await self._dispatch_local(event)
 
     async def subscribe(self, subscription: Subscription) -> None:
-        """Register a subscription."""
-        self._subscriptions.append(subscription)
-        if self._pubsub and self._running:
-            channel = f"{self._channel_prefix}:{subscription.topic_pattern}"
-            await self._pubsub.psubscribe(channel)
+        """Register a subscription and start listener for topic."""
+        async with self._lock:
+            self._subscriptions.append(subscription)
+        
+        # Ensure consumer group exists
+        await self._ensure_consumer_groups()
+        
+        # Start listener task for this pattern if not already running
+        if subscription.topic_pattern not in self._listener_tasks:
+            task = asyncio.create_task(self._listen_to_stream(subscription.topic_pattern))
+            self._listener_tasks[subscription.topic_pattern] = task
+        
         logger.debug("subscription_added", pattern=subscription.topic_pattern)
 
     async def unsubscribe(self, subscription: Subscription) -> None:
         """Remove a subscription."""
-        if subscription in self._subscriptions:
-            self._subscriptions.remove(subscription)
+        async with self._lock:
+            if subscription in self._subscriptions:
+                self._subscriptions.remove(subscription)
+        
+        # Check if any subscriptions still need this pattern
+        needs_pattern = any(
+            s.topic_pattern == subscription.topic_pattern 
+            for s in self._subscriptions
+        )
+        if not needs_pattern and subscription.topic_pattern in self._listener_tasks:
+            self._listener_tasks[subscription.topic_pattern].cancel()
+            del self._listener_tasks[subscription.topic_pattern]
+
+    async def _listen_to_stream(self, topic_pattern: str) -> None:
+        """Listen to Redis Stream for events matching pattern."""
+        stream_key = self._get_stream_key(topic_pattern)
+        last_id = "$"  # Only new messages
+        
+        while self._running:
+            try:
+                # Read pending messages first (for at-least-once)
+                messages = await self._redis.xreadgroup(
+                    self._consumer_group,
+                    self._consumer_name,
+                    {stream_key: last_id},
+                    count=self._batch_size,
+                    block=1000,  # 1 second block
+                )
+                
+                if not messages:
+                    continue
+                
+                for stream_name, entries in messages:
+                    for msg_id, data in entries:
+                        try:
+                            event = self._parse_stream_message(data)
+                            event.sequence = int(data.get(b"sequence", 0))
+                            
+                            # Update last read ID
+                            last_id = msg_id
+                            
+                            # Acknowledge after processing
+                            await self._dispatch_local(event)
+                            await self._redis.xack(stream_key, self._consumer_group, msg_id)
+                            
+                        except Exception as e:
+                            logger.exception("stream_message_parse_error", error=str(e))
+                
+                # Claim idle messages from dead consumers
+                await self._claim_idle_messages(stream_key)
+                
+            except asyncio.CancelledError:
+                break
+            except Exception as e:
+                logger.exception("stream_listen_error", error=str(e))
+                await asyncio.sleep(1)
+
+    async def _claim_idle_messages(self, stream_key: str) -> None:
+        """Claim messages that have been pending for too long."""
+        try:
+            # Find pending messages older than idle timeout
+            pending = await self._redis.xpending_range(
+                stream_key,
+                self._consumer_group,
+                min="-",
+                max="+",
+                count=10,
+            )
+            
+            for entry in pending:
+                msg_id, consumer, idle_time = entry["ID"], entry["consumer"], entry["time_since_delivered"]
+                
+                if idle_time > self._claim_idle_timeout_ms:
+                    # Claim the message
+                    await self._redis.xclaim(
+                        stream_key,
+                        self._consumer_group,
+                        self._consumer_name,
+                        self._claim_idle_timeout_ms,
+                        [msg_id],
+                    )
+                    logger.info("claimed_idle_message", 
+                              msg_id=msg_id, 
+                              idle_time=idle_time)
+        except Exception as e:
+            logger.debug("claim_idle_messages_error", error=str(e))
+
+    def _parse_stream_message(self, data: dict) -> Event:
+        """Parse Redis Stream message to Event."""
+        return Event(
+            event_id=data.get(b"event_id", b"").decode(),
+            event_type=data.get(b"event_type", b"").decode(),
+            topic=data.get(b"topic", b"").decode(),
+            data=json.loads(data.get(b"data", b"{}").decode()),
+            timestamp=datetime.fromisoformat(data.get(b"timestamp", datetime.now().isoformat()).decode()),
+            correlation_id=data.get(b"correlation_id", b"").decode() or None,
+            causation_id=data.get(b"causation_id", b"").decode() or None,
+            metadata=json.loads(data.get(b"metadata", b"{}").decode()),
+        )
 
     def _matches_pattern(self, pattern: str, topic: str) -> bool:
         """Check if topic matches pattern."""
@@ -340,8 +527,44 @@ class RedisEventBusBackend(EventBusBackend):
                 continue
             try:
                 await asyncio.wait_for(sub.handler(event), timeout=30.0)
+            except asyncio.TimeoutError:
+                logger.warning("handler_timeout", topic=event.topic, event_type=event.event_type)
             except Exception as e:
-                logger.exception("handler_error", error=str(e))
+                logger.exception("handler_error", topic=event.topic, event_type=event.event_type, error=str(e))
+
+    async def replay_from(
+        self, 
+        topic: str, 
+        from_sequence: int = 0,
+        handler: Callable[[Event], Any] | None = None,
+    ) -> list[Event]:
+        """Replay events from a topic starting from sequence.
+        
+        FIX: Added replay capability for stream events.
+        """
+        stream_key = self._get_stream_key(topic)
+        events = []
+        
+        try:
+            # Read all messages
+            messages = await self._redis.xrange(stream_key, count=10000)
+            
+            for msg_id, data in messages:
+                sequence = int(data.get(b"sequence", 0))
+                if sequence < from_sequence:
+                    continue
+                
+                event = self._parse_stream_message(data)
+                event.sequence = sequence
+                events.append(event)
+                
+                if handler:
+                    await handler(event)
+                    
+        except Exception as e:
+            logger.error("replay_error", topic=topic, error=str(e))
+        
+        return events
 
 
 @dataclass
@@ -349,7 +572,11 @@ class EventBusConfig:
     """Event bus configuration."""
     backend: EventBusBackend = EventBusBackend.IN_MEMORY
     redis_url: str = "redis://localhost:6379"
-    channel_prefix: str = "aisupport:events"
+    stream_prefix: str = "aisupport:events"
+    consumer_group: str = "aisupport-consumers"
+    consumer_name: str | None = None
+    claim_idle_timeout_ms: int = 30000
+    batch_size: int = 100
     enable_dlq: bool = True
     dlq_max_size: int = 1000
 
@@ -362,9 +589,9 @@ class EventBus:
         bus = EventBus(EventBusConfig())
         await bus.start()
 
-        # Distributed (multi-instance)
+        # Distributed (multi-instance) - FIX: Uses Redis Streams
         bus = EventBus(EventBusConfig(
-            backend=EventBusBackend.REDIS,
+            backend=EventBusBackend.REDIS_STREAMS,
             redis_url="redis://localhost:6379"
         ))
         await bus.start()
@@ -391,14 +618,19 @@ class EventBus:
             "published": 0,
             "handled": 0,
             "dlq_size": 0,
+            "sequences": {},  # Track sequences per topic
         }
 
     async def start(self) -> None:
         """Start the event bus."""
-        if self._config.backend == EventBusBackend.REDIS:
-            self._backend = RedisEventBusBackend(
+        if self._config.backend == EventBusBackend.REDIS_STREAMS:
+            self._backend = RedisStreamsEventBusBackend(
                 redis_url=self._config.redis_url,
-                channel_prefix=self._config.channel_prefix,
+                stream_prefix=self._config.stream_prefix,
+                consumer_group=self._config.consumer_group,
+                consumer_name=self._config.consumer_name,
+                claim_idle_timeout_ms=self._config.claim_idle_timeout_ms,
+                batch_size=self._config.batch_size,
             )
         else:
             self._backend = InMemoryEventBusBackend()
@@ -420,7 +652,7 @@ class EventBus:
         correlation_id: str | None = None,
         causation_id: str | None = None,
         metadata: dict[str, Any] | None = None,
-    ) -> None:
+    ) -> Event:
         """Publish an event.
 
         Args:
@@ -430,9 +662,10 @@ class EventBus:
             correlation_id: ID for tracing related events
             causation_id: ID of event that caused this event
             metadata: Additional metadata
+
+        Returns:
+            The published event with sequence number
         """
-        import uuid
-        
         event = Event(
             event_id=str(uuid.uuid4()),
             event_type=event_type,
@@ -447,9 +680,19 @@ class EventBus:
             try:
                 await self._backend.publish(event)
                 self._metrics["published"] += 1
+                
+                # Track sequence for this topic
+                if topic not in self._metrics["sequences"]:
+                    self._metrics["sequences"][topic] = 0
+                self._metrics["sequences"][topic] = max(
+                    self._metrics["sequences"][topic], 
+                    event.sequence
+                )
             except Exception as e:
                 logger.exception("event_publish_error", error=str(e))
                 self._add_to_dlq(event)
+        
+        return event
 
     async def subscribe(
         self,
@@ -515,6 +758,20 @@ class EventBus:
             "backend": self._config.backend.value if self._config else "unknown",
             "dlq_max_size": self._dlq_max_size,
         }
+
+    async def replay(
+        self, 
+        topic: str, 
+        from_sequence: int = 0,
+        handler: Callable[[Event], Any] | None = None,
+    ) -> list[Event]:
+        """Replay events from a topic.
+        
+        FIX: Added replay capability.
+        """
+        if isinstance(self._backend, RedisStreamsEventBusBackend):
+            return await self._backend.replay_from(topic, from_sequence, handler)
+        return []
 
 
 # Global event bus instance

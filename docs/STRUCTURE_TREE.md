@@ -69,58 +69,34 @@ src/
 │   │   │
 │   │   └── coordination/                     # Coordination Layer
 │   │       ├── __init__.py
-│   │       ├── types.py
-│   │       ├── config.py
-│   │       ├── coordinator.py
-│   │       ├── governance.py
-│   │       ├── health.py
-│   │       ├── leader_election.py
-│   │       ├── rate_limiter.py
-│   │       ├── quota.py
-│   │       ├── circuit_breaker.py
-│   │       ├── retry_coordination.py
-│   │       ├── backpressure.py
-│   │       ├── batch_idempotency.py
-│   │       ├── message_ordering.py
-│   │       ├── resource_scheduling.py
-│   │       ├── execution_semantics.py
-│   │       ├── schema_evolution.py
-│   │       ├── safe_injection.py
-│   │       ├── injection_explainer.py
-│   │       ├── byzantine_protection.py
-│   │       ├── cdc_consistency.py
-│   │       ├── chaos_secrets.py
-│   │       ├── cross_region_retry.py
-│   │       ├── dead_letter_alert.py
-│   │       ├── deterministic_scheduler.py
-│   │       ├── adaptive_circuit.py
-│   │       ├── archivable_dlq.py
-│   │       ├── automated_mitigation.py
-│   │       ├── consistent_policy_cache.py
-│   │       ├── enhanced_chaos_audit.py
-│   │       ├── enhanced_governance.py
-│   │       ├── enhanced_health.py
-│   │       ├── enhanced_leader_election.py
-│   │       ├── enhanced_saga.py
-│   │       ├── enhanced_sandbox.py
-│   │       ├── fair_share_quota.py
-│   │       ├── hierarchical_quota.py
-│   │       ├── message_ordering.py
-│   │       ├── network_load.py
-│   │       ├── policy_cache.py
-│   │       ├── quorum_failover.py
-│   │       ├── readonly_follower.py
-│   │       ├── saga_compensation.py
-│   │       ├── scalable_rate_limiter.py
-│   │       ├── schema_evolution.py
-│   │       ├── secure_workspace.py
-│   │       ├── sharded_log.py
-│   │       ├── snapshotter.py
-│   │       ├── tenant_isolation.py
-│   │       ├── versioned_claim.py
-│   │       ├── worm_archive.py
-│   │       ├── safety_formal.py
-│   │       └── pdf_knowledge_agent.py
+│   │       ├── types.py                  # Shared types
+│   │       ├── config.py                 # Configuration
+│   │       ├── coordinator.py              # Main facade
+│   │       ├── governance.py              # Agent governance
+│   │       ├── health.py                 # Health monitoring
+│   │       ├── leader_election.py        # HA leader election
+│   │       ├── rate_limiter.py           # Rate limiting
+│   │       ├── quota.py                  # Resource quotas
+│   │       ├── circuit_breaker.py        # Failure isolation
+│   │       ├── backpressure.py            # Load protection
+│   │       ├── batch_idempotency.py      # Idempotent processing
+│   │       ├── message_ordering.py       # Causal ordering
+│   │       ├── schema_evolution.py        # API versioning
+│   │       ├── dead_letter_alert.py      # DLQ alerting
+│   │       ├── tenant_isolation.py       # Multi-tenancy
+│   │       ├── deterministic_scheduler.py # Deterministic execution
+│   │       │
+│   │       └── DEPRECATION_NOTICE.py    # Module cleanup plan
+│   │
+│   │       # DEPRECATED - Will be removed in cleanup:
+│   │       # - byzantine_protection.py
+│   │       # - saga_compensation.py
+│   │       # - worm_archive.py
+│   │       # - safety_formal.py
+│   │       # - chaos_secrets.py
+│   │       # - cdc_consistency.py
+│   │       # - injection_explainer.py
+│   │       # - enhanced_*.py modules
 │   │
 │   ├── runtime/
 │   │   ├── __init__.py           # Phase 1B RuntimeManager + lazy load Phase 15
