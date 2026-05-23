@@ -323,8 +323,8 @@ Formalizes execution layer. Bao gồm:
 | 13.2 | Deterministic replay | Snapshot workspace, replay IO | ✅ |
 | 13.3 | Error budget & SLO | 99.9% availability | ✅ |
 | 13.4 | Chaos engineering | Farm failure, network partition | ✅ |
-| **13.5** | **Execution semantics** | CFG, ISR interaction, DMA modeling | ⬜ | 🔴 |
-| **13.6** | **Compiler intelligence** | DWARF, ABI, LTO, inline asm | ⬜ | 🔴 |
+| **13.5** | **Execution semantics** | CFG, ISR interaction, DMA modeling | ✅ | 🔴 |
+| **13.6** | **Compiler intelligence** | DWARF, ABI, LTO, inline asm | ✅ | 🔴 |
 | 13.7 | Hardware ontology | SVD → causal graph | ✅ |
 
 > ⚠️ Phase 13.5 + 13.6: **không nên làm sớm.** Research-grade. Cần Phase 8 stable + deterministic replay trước.
@@ -337,8 +337,8 @@ Formalizes execution layer. Bao gồm:
 
 | ID | Sub‑phase | Mô tả | TT |
 |----|-----------|-------|-----|
-| 13b.1 | Symbolic execution engine | Path-sensitive analysis | ⬜ |
-| 13b.2 | Causal reasoning | Lỗi → root cause graph | ⬜ |
+| 13b.1 | Symbolic execution engine | Path-sensitive analysis | ✅ |
+| 13b.2 | Causal reasoning | Lỗi → root cause graph | ✅ |
 
 ---
 
@@ -385,7 +385,7 @@ Formalizes execution layer. Bao gồm:
 | 16.4d | Auto fine-tune hàng tháng | ✅ |
 | 16.5 | ROI metrics | Adoption rate, time saved | ✅ |
 
-**Era 3 tổng:** ✅ **~98%**
+**Era 3 tổng:** ✅ **100%**
 
 ---
 
@@ -395,7 +395,7 @@ Formalizes execution layer. Bao gồm:
 |-----|---------|----|
 | Era 1 | Phase 1a → 6 | ✅ **100%** |
 | Era 2 | Phase 7 → 11 | ✅ **~90%** |
-| Era 3 | Phase 12 → 16 | ✅ **~98%** |
+| Era 3 | Phase 12 → 16 | ✅ **100%** |
 
 ---
 
