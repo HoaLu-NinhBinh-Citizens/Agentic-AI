@@ -80,7 +80,7 @@ class AdmissionController:
                 
                 if self._limits.reject_policy == "fail":
                     logger.warning(f"Admission rejected: {reason}")
-                    self._trigger_backpressure()
+                    await self._trigger_backpressure()
                 return False, reason
             
             self._total_accepted += 1
@@ -226,3 +226,7 @@ class AdmissionController:
             self._total_rejected = 0
             self._total_accepted = 0
             self._backpressure_events = 0
+            # Also reset usage to ensure clean state
+            self._usage.pending_workflows = 0
+            self._usage.pending_tasks = 0
+            self._usage.running_activities = 0

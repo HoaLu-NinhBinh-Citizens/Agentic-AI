@@ -85,14 +85,15 @@ class SignalManager:
             SignalBackpressureError: If max pending signals exceeded.
         """
         # Check for duplicate (deduplication)
-        key = idempotency_key or f"{workflow_id}:{name}"
-        async with self._dedupe_lock:
-            if key in self._dedupe_cache:
-                dedupe_time = self._dedupe_cache[key]
-                if time.time() - dedupe_time < self._dedupe_ttl_seconds:
-                    logger.debug(f"Duplicate signal ignored: {key}")
-                    return ""  # Return empty to indicate duplicate
-            self._dedupe_cache[key] = time.time()
+        # Only deduplicate if an explicit idempotency_key was provided
+        if idempotency_key:
+            async with self._dedupe_lock:
+                if idempotency_key in self._dedupe_cache:
+                    dedupe_time = self._dedupe_cache[idempotency_key]
+                    if time.time() - dedupe_time < self._dedupe_ttl_seconds:
+                        logger.debug(f"Duplicate signal ignored: {idempotency_key}")
+                        return ""  # Return empty to indicate duplicate
+                self._dedupe_cache[idempotency_key] = time.time()
         
         # Backpressure check
         pending = await self._store.get_pending_count(workflow_id)
@@ -294,6 +295,8 @@ class InMemorySignalStore(SignalStore):
             signals = self._signals.get(workflow_id, [])
             if name:
                 signals = [s for s in signals if s.name == name]
+            # Sort by sequence for deterministic ordering
+            signals = sorted(signals, key=lambda s: s.sequence)
             return signals[-limit:]
 
     async def get_pending(self, workflow_id: str) -> list[Signal]:

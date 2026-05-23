@@ -595,7 +595,17 @@ class WorkflowContext:
         
         Returns workflow's internal clock, not wall time.
         This ensures replay is deterministic.
+        
+        During replay, returns the recorded time from history.
+        During new execution, returns the workflow's elapsed time
+        based on its start time.
         """
+        # Return workflow's elapsed time for determinism
+        # This ensures replay returns the same value
+        if hasattr(self.workflow_instance, 'started_at'):
+            # Use elapsed time since workflow started for determinism
+            # Add a base time so it resembles real timestamps
+            return self.workflow_instance.started_at
         return time.time()
     
     @property

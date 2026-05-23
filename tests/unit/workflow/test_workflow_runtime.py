@@ -445,17 +445,21 @@ class TestAdmissionController:
 
     @pytest.fixture
     async def controller(self):
-        return AdmissionController(
+        controller = AdmissionController(
             limits=ResourceLimits(
                 max_pending_workflows=10,
                 max_pending_tasks=50,
                 reject_policy="fail",
             )
         )
+        yield controller
+        # Cleanup after test
+        await controller.reset_stats()
 
     @pytest.mark.asyncio
     async def test_admission_limits(self, controller):
         """Test admission respects limits."""
+        await controller.reset_stats()  # Ensure clean state
         # Should allow up to limit
         for i in range(10):
             can_start, reason = await controller.can_start_workflow()
@@ -469,6 +473,7 @@ class TestAdmissionController:
     @pytest.mark.asyncio
     async def test_complete_decrements_count(self, controller):
         """Test completing decrements pending count."""
+        await controller.reset_stats()  # Ensure clean state
         await controller.can_start_workflow()
         await controller.can_start_workflow()
 
@@ -481,6 +486,7 @@ class TestAdmissionController:
     @pytest.mark.asyncio
     async def test_backpressure_level(self, controller):
         """Test backpressure calculation."""
+        await controller.reset_stats()  # Ensure clean state
         # Add workflows
         for i in range(5):
             await controller.can_start_workflow()
@@ -492,19 +498,25 @@ class TestAdmissionController:
     @pytest.mark.asyncio
     async def test_stats_tracking(self, controller):
         """Test statistics tracking."""
-        # Accept some
-        for _ in range(5):
-            await controller.can_start_workflow()
-
-        # Reject some
-        for _ in range(10):
-            await controller.can_start_workflow()
+        await controller.reset_stats()  # Ensure clean state
+        
+        # Accept up to limit (10)
+        for i in range(10):
+            can_start, reason = await controller.can_start_workflow()
+            assert can_start is True
+        
+        # Continue sending requests that will be rejected
+        for i in range(5):
+            can_start, reason = await controller.can_start_workflow()
+            assert can_start is False
 
         stats = await controller.get_stats()
 
-        assert stats["stats"]["total_accepted"] == 5
-        assert stats["stats"]["total_rejected"] == 10
-        assert stats["stats"]["rejection_rate"] == 10 / 15
+        # Should have accepted exactly 10 (the limit)
+        assert stats["stats"]["total_accepted"] == 10
+        # Should have rejected exactly 5
+        assert stats["stats"]["total_rejected"] == 5
+        assert stats["stats"]["rejection_rate"] == 5 / 15
 
 
 # Run tests

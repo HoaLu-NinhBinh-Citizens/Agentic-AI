@@ -72,8 +72,11 @@ class FairScheduler:
 
     @property
     def pending_count(self) -> int:
-        """Number of pending workflows."""
-        return len(self._ready)
+        """Number of pending (runnable) workflows.
+        
+        Only counts workflows that are runnable and not blocked.
+        """
+        return sum(1 for task in self._workflows.values() if task.is_runnable and not task.is_blocked)
 
     async def add_workflow(
         self,
