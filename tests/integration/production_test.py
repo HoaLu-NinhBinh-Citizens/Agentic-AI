@@ -420,10 +420,10 @@ class TestPerformance:
 
 
 # Performance markers
-pytest.mark.slow = pytest.mark.skipif(
-    not pytest.config.getoption("--run-slow", default=False),
-    reason="Skipping slow test (use --run-slow to run)"
-)
+def pytest_configure(config):
+    config.addinivalue_line(
+        "markers", "slow: marks tests as slow (deselect with '-m \"not slow\"')"
+    )
 
 
 if __name__ == "__main__":

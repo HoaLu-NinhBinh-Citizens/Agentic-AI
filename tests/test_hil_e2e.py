@@ -10,7 +10,7 @@ import asyncio
 from pathlib import Path
 from unittest.mock import Mock, patch, AsyncMock
 
-from src.hardware.hil_e2e_pipeline import (
+from src.infrastructure.hardware.hil_e2e_pipeline import (
     E2EHILPipeline,
     TestConfig,
     TestPhase,

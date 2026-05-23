@@ -106,7 +106,7 @@ class BoardWatchdog:
             try:
                 callback(data)
             except Exception as e:
-                logger.error("Callback error", event=event, error=str(e))
+                logger.error(f"Callback error: event={event}, error={e}")
     
     def start_watchdog(
         self,
@@ -285,12 +285,10 @@ class BoardWatchdog:
         self._alerts.append(alert)
         
         self._emit("alert", alert)
+        log_level = logging.WARNING if level == AlertLevel.WARNING else logging.ERROR
         logger.log(
-            logging.WARNING if level == AlertLevel.WARNING else logging.ERROR,
-            "Alert created",
-            alert_id=alert.alert_id,
-            board_id=board_id,
-            level=level.value,
+            log_level,
+            f"Alert created: alert_id={alert.alert_id}, board_id={board_id}, level={level.value}"
         )
         
         return alert

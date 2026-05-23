@@ -99,7 +99,7 @@ class FlakyTestDetector:
     
     # Thresholds for flaky detection
     MIN_RUNS_FOR_ANALYSIS = 3
-    FLaky_THRESHOLD = 0.95  # Pass rate below this = flaky
+    FLAKY_THRESHOLD = 0.95  # Pass rate below this = flaky
     
     # Timing sensitivity thresholds
     TIMING_SENSITIVE_CV = 0.3  # Coefficient of variation
@@ -126,6 +126,7 @@ class FlakyTestDetector:
         duration_ms: float,
         board_id: str = "",
         error_message: str = "",
+        firmware_version: str = "",
     ) -> FlakyTestResult | None:
         """Convenience method to record a result."""
         run = TestRun(
@@ -135,6 +136,7 @@ class FlakyTestDetector:
             timestamp=datetime.now(),
             board_id=board_id,
             error_message=error_message,
+            firmware_version=firmware_version,
         )
         self.record_run(run)
         return self._flaky_tests.get(test_id)
@@ -157,7 +159,7 @@ class FlakyTestDetector:
         cv = std_dev / avg_duration if avg_duration > 0 else 0.0  # Coefficient of variation
         
         # Determine if flaky
-        is_flaky = pass_rate < self.FLAKy_THRESHOLD and passes > 0 and passes < total
+        is_flaky = pass_rate < self.FLAKY_THRESHOLD and passes > 0 and passes < total
         
         if is_flaky:
             # Analyze pattern

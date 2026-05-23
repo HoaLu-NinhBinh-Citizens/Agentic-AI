@@ -98,7 +98,7 @@ class STLinkAdapter(BaseProbe):
     
     async def connect(self) -> None:
         """Connect to ST-Link probe."""
-        logger.info("Connecting to ST-Link probe", serial=self.serial)
+        logger.info(f"Connecting to ST-Link probe serial={self.serial}")
         
         if self._use_mock:
             self._connected = True
@@ -211,18 +211,18 @@ flash write_image erase "{binary}" {hex(address)}
         result = subprocess.run(cmd, capture_output=True, text=True)
         return result.returncode == 0
     
-    async def reset(self, mode: ResetMode = ResetMode.SYSTEM) -> None:
+    async def reset(self, mode: ResetMode = ResetMode.RUN_AFTER_RESET) -> None:
         """Reset the target."""
-        logger.info("ST-Link reset", mode=mode.value)
+        logger.info(f"ST-Link reset mode={mode.value}")
         
         if self._use_mock:
             await asyncio.sleep(0.05)
             return
         
         mode_map = {
-            ResetMode.SYSTEM: "reset run",
-            ResetMode.HALT: "reset halt",
-            ResetMode.SWITCH: "reset run",
+            ResetMode.RUN_AFTER_RESET: "reset run",
+            ResetMode.HALT_AFTER_RESET: "reset halt",
+            ResetMode.SOFT_RESET: "soft_reset",
         }
         
         script = f"init\n{mode_map.get(mode, 'reset run')}\nexit"
@@ -286,20 +286,61 @@ flash write_image erase "{binary}" {hex(address)}
         """Get target IDCODE."""
         if self._use_mock:
             return IDCODE(
-                value=0x2BA01477,
-                manufacturer=0x23B,
-                part=0xBA01,
-                revision=0x477,
+                manufacturer_id=0x23B,
+                part_id=0xBA01,
+                device_id=0x477,
+                revision=0x7,
             )
         
         script = "init\nscan_chain\nreg\ncpu reg\nhalt\nreg pc\nexit"
         # Parse IDCODE from output
         return IDCODE(
-            value=0x2BA01477,
-            manufacturer=0x23B,
-            part=0xBA01,
-            revision=0x477,
+            manufacturer_id=0x23B,
+            part_id=0xBA01,
+            device_id=0x477,
+            revision=0x7,
         )
+    
+    async def get_target_idcode(self) -> IDCODE | None:
+        """Get target IDCODE (alias for get_idcode)."""
+        return await self.get_idcode()
+    
+    def get_capabilities(self) -> ProbeCapabilities:
+        """Get probe capabilities."""
+        return self.CAPABILITIES
+    
+    async def get_probe_info(self) -> ProbeInfo:
+        """Get probe info."""
+        return self.info
+    
+    async def read_dp(self, address: int) -> int:
+        """Read debug port register."""
+        if self._use_mock:
+            return 0xDEADBEEF
+        return 0
+    
+    async def write_dp(self, address: int, value: int) -> bool:
+        """Write debug port register."""
+        if self._use_mock:
+            return True
+        return False
+    
+    async def read_ap(self, address: int) -> int:
+        """Read access port register."""
+        if self._use_mock:
+            return 0xDEADBEEF
+        return 0
+    
+    async def write_ap(self, address: int, value: int) -> bool:
+        """Write access port register."""
+        if self._use_mock:
+            return True
+        return False
+    
+    async def set_speed(self, speed_khz: int) -> bool:
+        """Set interface speed."""
+        self.speed_khz = speed_khz
+        return True
 
 
 def create_stlink_probe(
