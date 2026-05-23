@@ -276,7 +276,7 @@ Formalizes execution layer. Bao gồm:
 | 10.2 | Semantic router | Chọn tool nhanh | ✅ |
 | 10.3 | CLI & WS UI | aisupport debug, test, approve | ✅ |
 | 10.4 | Approval UI | Đề xuất, approve | ✅ |
-| 10.5 | VS Code extension | Debug in IDE | 🔄 |
+| 10.5 | VS Code extension | Debug in IDE | ✅ |
 | 10.6 | GitHub Actions | HIL on PR | ✅ |
 | 10.6a | Jenkins plugin | ✅ |
 | 10.6b | GitLab CI & Azure DevOps | ✅ |
@@ -347,10 +347,10 @@ Formalizes execution layer. Bao gồm:
 | ID | Sub‑phase | Mô tả | TT |
 |----|-----------|-------|-----|
 | 14.1 | OTA orchestrator | Rollout, canary, rollback | ✅ |
-| 14.2 | Crash clustering | Group errors across fleet | ⬜ |
+| 14.2 | Crash clustering | Group errors across fleet | ✅ |
 | 14.3 | Telemetry anomaly detection | Isolation Forest, LSTM | ✅ |
-| 14.4 | Predictive failure | Dự đoán trước khi xảy ra | ⬜ |
-| 14.5 | Jira, Slack, Teams integration | Auto ticket | ⬜ |
+| 14.4 | Predictive failure | Dự đoán trước khi xảy ra | ✅ |
+| 14.5 | Jira, Slack, Teams integration | Auto ticket | ✅ |
 | 14.6 | QA dashboard | Coverage, flaky, success rate | ✅ |
 
 ---
@@ -382,10 +382,10 @@ Formalizes execution layer. Bao gồm:
 | 16.4a | AI tự sinh test case | Từ coverage gaps | ✅ |
 | 16.4b | AI đề xuất cải tiến kiến trúc | Bottleneck analysis | ✅ |
 | 16.4c | Học từ từ chối của user | Confidence calibration | ✅ |
-| 16.4d | Auto fine-tune hàng tháng | ⬜ |
+| 16.4d | Auto fine-tune hàng tháng | ✅ |
 | 16.5 | ROI metrics | Adoption rate, time saved | ✅ |
 
-**Era 3 tổng:** ✅ **~95%**
+**Era 3 tổng:** ✅ **~98%**
 
 ---
 
@@ -395,7 +395,7 @@ Formalizes execution layer. Bao gồm:
 |-----|---------|----|
 | Era 1 | Phase 1a → 6 | ✅ **100%** |
 | Era 2 | Phase 7 → 11 | ✅ **~90%** |
-| Era 3 | Phase 12 → 16 | ✅ **~95%** |
+| Era 3 | Phase 12 → 16 | ✅ **~98%** |
 
 ---
 
