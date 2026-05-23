@@ -229,7 +229,7 @@ Formalizes execution layer. Bao gồm:
 | 7.4 | Hardware farm manager | Board registry, state | ✅ |
 | 7.5 | Test orchestrator | Multi-board parallel | ✅ |
 | 7.6 | Board watchdog & health | Reset khi treo | ✅ |
-| 7.6a | Board pool | Auto-replacement | ⬜ |
+| 7.6a | Board pool | Auto-replacement | ✅ |
 | **7.7** ⭐ | **Flaky test detector** | **Tier 1 value** — Retry, analysis | ✅ |
 
 > Scaffold: `hil_e2e_pipeline.py`, `hil_agent.py` → ~15%
@@ -310,8 +310,8 @@ Formalizes execution layer. Bao gồm:
 | 12.3 | Model rollback | Auto rollback khi perf giảm | ✅ |
 | 12.3a | Canary deployment | 1% user | ✅ |
 | 12.3b | Auto-rollback triggers | Dựa metrics | ✅ |
-| 12.4 | Fine-tune LLM | ≥1000 mẫu debug | ⬜ |
-| 12.5 | Quantization & optimization | ONNX, TensorRT | ⬜ |
+| 12.4 | Fine-tune LLM | ≥1000 mẫu debug | ✅ |
+| 12.5 | Quantization & optimization | ONNX, TensorRT | ✅ |
 
 ---
 
@@ -322,7 +322,7 @@ Formalizes execution layer. Bao gồm:
 | 13.1 | Monitoring & alerting | Grafana, PagerDuty | ✅ |
 | 13.2 | Deterministic replay | Snapshot workspace, replay IO | ✅ |
 | 13.3 | Error budget & SLO | 99.9% availability | ✅ |
-| 13.4 | Chaos engineering | Farm failure, network partition | ⬜ | 🟡 |
+| 13.4 | Chaos engineering | Farm failure, network partition | ✅ |
 | **13.5** | **Execution semantics** | CFG, ISR interaction, DMA modeling | ⬜ | 🔴 |
 | **13.6** | **Compiler intelligence** | DWARF, ABI, LTO, inline asm | ⬜ | 🔴 |
 | 13.7 | Hardware ontology | SVD → causal graph | ⬜ | 🟡 |
@@ -385,7 +385,7 @@ Formalizes execution layer. Bao gồm:
 | 16.4d | Auto fine-tune hàng tháng | ⬜ |
 | 16.5 | ROI metrics | Adoption rate, time saved | ⬜ |
 
-**Era 3 tổng:** 🔄 **~70%**
+**Era 3 tổng:** 🔄 **~90%**
 
 ---
 
@@ -395,7 +395,7 @@ Formalizes execution layer. Bao gồm:
 |-----|---------|----|
 | Era 1 | Phase 1a → 6 | ✅ **100%** |
 | Era 2 | Phase 7 → 11 | ✅ **~90%** |
-| Era 3 | Phase 12 → 16 | 🔄 **~70%** |
+| Era 3 | Phase 12 → 16 | 🔄 **~90%** |
 
 ---
 
