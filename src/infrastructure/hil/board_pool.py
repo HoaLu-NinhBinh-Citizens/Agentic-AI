@@ -120,7 +120,7 @@ class BoardPool:
     def acquire_board(self, user: str, purpose: str = "") -> str | None:
         """Acquire board from pool."""
         if not self._available:
-            logger.warning("No boards available", user=user)
+            logger.warning(f"No boards available for user {user}")
             return None
         
         board_id = self._available.pop(0)
@@ -163,7 +163,7 @@ class BoardPool:
             self._trigger_replacement(board_id, reason)
         
         self._update_state()
-        logger.warning("Board marked failed", board_id=board_id, reason=reason)
+        logger.warning(f"Board {board_id} marked failed: {reason}")
     
     def mark_maintenance(self, board_id: str) -> bool:
         """Mark board for maintenance."""

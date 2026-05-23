@@ -57,12 +57,12 @@ class ChaosExperiment:
     
     # Target
     target: ChaosTarget
-    target_ids: list[str] = field(default_factory=list)  # Specific boards
-    
-    # Failure
     failure_type: FailureType
+    target_ids: list[str] = field(default_factory=list)
+    
+    # Timing
     duration_seconds: int = 60
-    intensity: float = 1.0  # 0.0 - 1.0
+    intensity: float = 1.0
     
     # Rollback
     auto_rollback: bool = True
@@ -184,6 +184,7 @@ class ChaosEngineer:
         description: str,
         target: ChaosTarget,
         failure_type: FailureType,
+        target_ids: list[str] | None = None,
         duration_seconds: int = 60,
         intensity: float = 1.0,
     ) -> ChaosExperiment:
@@ -197,6 +198,7 @@ class ChaosEngineer:
             description=description,
             target=target,
             failure_type=failure_type,
+            target_ids=target_ids or [],
             duration_seconds=duration_seconds,
             intensity=intensity,
         )
