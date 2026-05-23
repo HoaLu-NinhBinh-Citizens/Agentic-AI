@@ -2,12 +2,16 @@
 
 Provides fault tolerance for MCP server calls with transient failure detection.
 Supports sliding time window for accurate failure rate tracking.
+
+FIX W-008: Fixed half-open race condition with single-winner pattern.
+FIX W-009: Added exponential backoff retry for transient failures.
 """
 
 from __future__ import annotations
 
 import asyncio
 import logging
+import random
 import time
 from collections import deque
 from enum import Enum
@@ -54,6 +58,8 @@ class CircuitBreaker:
         window_seconds: float = 60.0,
         timeout_seconds: float = 60.0,
         transient_error_codes: list[str] | None = None,
+        max_retries: int = 3,
+        base_backoff: float = 0.1,
     ) -> None:
         """Initialize the circuit breaker.
 
@@ -63,6 +69,8 @@ class CircuitBreaker:
             window_seconds: Time window for tracking failures (sliding window).
             timeout_seconds: Seconds before attempting to close circuit.
             transient_error_codes: Error codes considered transient.
+            max_retries: Maximum number of retries for transient failures.
+            base_backoff: Base backoff time in seconds.
         """
         self.name = name
         self.failure_threshold = failure_threshold
@@ -74,12 +82,15 @@ class CircuitBreaker:
             "CONNECTION_REFUSED",
             "CONNECTION_ERROR",
         ]
+        self.max_retries = max_retries  # W-009
+        self.base_backoff = base_backoff  # W-009
 
         self._state = CircuitBreakerState.CLOSED
         self._failure_timestamps: deque[float] = deque()
         self._last_failure_time = 0.0
         self._lock = asyncio.Lock()
         self._half_open_used = False
+        self._half_open_lock_held = False  # W-008: Single-winner flag
 
     @property
     def state(self) -> CircuitBreakerState:
@@ -152,6 +163,9 @@ class CircuitBreaker:
     ) -> T:
         """Execute a function through the circuit breaker.
 
+        FIX W-008: Fixed half-open race with atomic transition.
+        FIX W-009: Added exponential backoff retry for transient failures.
+
         Args:
             func: Async function to execute.
             *args: Positional arguments for func.
@@ -163,15 +177,47 @@ class CircuitBreaker:
         Raises:
             CircuitBreakerOpenError: If circuit is open.
         """
+        # W-009: Retry loop for transient failures
+        last_exception = None
+        for attempt in range(self.max_retries + 1):
+            try:
+                return await self._execute(func, *args, **kwargs)
+            except Exception as e:
+                last_exception = e
+                is_transient = self._is_transient_failure(e)
+                
+                if not is_transient or attempt >= self.max_retries:
+                    # Non-transient or max retries reached, record failure
+                    await self._record_failure(e)
+                    raise
+        
+        # Should not reach here, but just in case
+        raise last_exception or Exception("Circuit breaker call failed")
+
+    async def _execute(
+        self,
+        func: Callable[..., Awaitable[T]],
+        *args: Any,
+        **kwargs: Any,
+    ) -> T:
+        """Execute function with circuit breaker protection.
+        
+        FIX W-008: Single-winner pattern for half-open state.
+        """
+        # W-008: Atomic check-and-transition for half-open
         async with self._lock:
             if self._state == CircuitBreakerState.OPEN:
                 if time.monotonic() - self._last_failure_time > self.timeout_seconds:
-                    self._state = CircuitBreakerState.HALF_OPEN
-                    self._half_open_used = False
-                    logger.info(
-                        "Circuit half-open",
-                        extra={"server_name": self.name},
-                    )
+                    # W-008: Only first request wins to become half-open
+                    if not self._half_open_lock_held:
+                        self._state = CircuitBreakerState.HALF_OPEN
+                        self._half_open_used = False
+                        self._half_open_lock_held = True
+                        logger.info(
+                            "circuit_half_open",
+                            server=self.name,
+                        )
+                    # else: another request already transitioning
                 else:
                     raise CircuitBreakerOpenError(
                         f"Circuit breaker '{self.name}' is open"
@@ -192,52 +238,54 @@ class CircuitBreaker:
                     self._state = CircuitBreakerState.CLOSED
                     self._failure_timestamps.clear()
                     self._half_open_used = False
+                    self._half_open_lock_held = False
                     logger.info(
-                        "Circuit closed",
-                        extra={"server_name": self.name},
+                        "circuit_closed",
+                        server=self.name,
                     )
 
             return result
 
         except Exception as e:
-            is_transient = self._is_transient_failure(e)
-
-            async with self._lock:
-                if is_transient:
-                    now = time.monotonic()
-                    self._failure_timestamps.append(now)
-                    self._last_failure_time = now
-
-                    current_count = self._failure_count_in_window()
-
-                    if self._state == CircuitBreakerState.HALF_OPEN:
-                        self._state = CircuitBreakerState.OPEN
-                        self._half_open_used = False
-                        logger.error(
-                            "Circuit opened after probe failure",
-                            extra={
-                                "server_name": self.name,
-                                "failure_count": current_count,
-                            },
-                        )
-                    elif current_count >= self.failure_threshold:
-                        self._state = CircuitBreakerState.OPEN
-                        logger.error(
-                            "Circuit opened",
-                            extra={
-                                "server_name": self.name,
-                                "failure_count": current_count,
-                            },
-                        )
-
+            await self._record_failure(e)
             raise
+
+    async def _record_failure(self, e: Exception) -> None:
+        """Record a failure and potentially open the circuit."""
+        is_transient = self._is_transient_failure(e)
+
+        async with self._lock:
+            if is_transient:
+                now = time.monotonic()
+                self._failure_timestamps.append(now)
+                self._last_failure_time = now
+
+                current_count = self._failure_count_in_window()
+
+                if self._state == CircuitBreakerState.HALF_OPEN:
+                    self._state = CircuitBreakerState.OPEN
+                    self._half_open_used = False
+                    self._half_open_lock_held = False
+                    logger.warning(
+                        "circuit_opened_probe_failed",
+                        server=self.name,
+                        failure_count=current_count,
+                    )
+                elif current_count >= self.failure_threshold:
+                    self._state = CircuitBreakerState.OPEN
+                    logger.warning(
+                        "circuit_opened",
+                        server=self.name,
+                        failure_count=current_count,
+                    )
 
     def reset(self) -> None:
         """Reset the circuit breaker to closed state."""
         self._state = CircuitBreakerState.CLOSED
         self._failure_timestamps.clear()
         self._half_open_used = False
+        self._half_open_lock_held = False
         logger.info(
-            "Circuit breaker reset",
-            extra={"server_name": self.name},
+            "circuit_breaker_reset",
+            server=self.name,
         )

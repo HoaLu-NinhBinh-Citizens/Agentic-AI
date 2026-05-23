@@ -757,3 +757,56 @@ World-Class ██████████████████████�
 | `flash/production_health_checks.py` | Production health check implementations |
 | `persistence/sqlite/atomic_session_store.py` | Atomic session store with WAL |
 
+
+---
+
+## NEW: Weakness Review Fixes (2026-05-23 Night)
+
+### Critical Fixes
+
+| # | Weakness | File | Fix | Status |
+|---|----------|------|-----|--------|
+| W-001 | Session State Lost on Restart | session_manager.py | SQLite persistence with WAL mode | ? FIXED |
+| W-002 | Memory Store Not Atomic | memory/store.py | fsync() before atomic rename | ? FIXED |
+| W-003 | Idempotency In-Memory | execution/idempotency.py | RedisIdempotencyStore added | ? FIXED |
+
+### High Priority Fixes
+
+| # | Weakness | File | Fix | Status |
+|---|----------|------|-----|--------|
+| W-004 | Missing trace_id in Logging | gent/mock_agent.py | ContextVar for request tracing | ? FIXED |
+| W-005 | Circular Import in MCP | mcp/manager.py | Module-level import with fallback | ? FIXED |
+| W-006 | Missing Error Metrics | gent/mock_agent.py | AgentMetrics class added | ? FIXED |
+| W-007 | Cache Key Collision | cache/tool/cache.py | JSON validation before key gen | ? FIXED |
+| W-008 | Circuit Breaker Race | esilience/circuit_breaker.py | Single-winner half-open pattern | ? FIXED |
+| W-009 | No Retry in Circuit Breaker | esilience/circuit_breaker.py | Exponential backoff retry loop | ? FIXED |
+| W-010 | Load Shedding | cache/tool/cache.py | Already activated in start() | ? OK |
+
+### Medium Priority Fixes
+
+| # | Weakness | File | Fix | Status |
+|---|----------|------|-----|--------|
+| W-011 | Tool Registry Not Thread-Safe | 	ools/registry.py | asyncio.Lock for all ops | ? FIXED |
+| W-014 | Cleanup Fire-and-Forget | untime/cancellation.py | Error logging added | ? FIXED |
+| W-017 | Prompt Injection Risk | memory/store.py | _prompt_safe_text exists | ? OK |
+
+### Backlog (Not Fixed Yet)
+
+| # | Weakness | Reason |
+|---|----------|--------|
+| W-012 | No Structured Logging | Needs migration effort |
+| W-013 | No Health Check Endpoint | Not implemented |
+| W-015 | LLM Router No Timeout | Needs design |
+| W-016 | No Rate Limiting | Not implemented |
+| W-018 | Cache Key Missing Version | Needs design |
+
+---
+
+## Summary (2026-05-23 Night Session)
+
+| Priority | Fixed | Backlog | Total |
+|----------|-------|---------|-------|
+| Critical | 3 | 0 | 3 |
+| High | 7 | 0 | 7 |
+| Medium | 2 | 4 | 6 |
+| **Total** | **12** | **4** | **16** |

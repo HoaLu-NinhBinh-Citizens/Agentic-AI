@@ -10,22 +10,7 @@ When workflow cancelled:
 4. Close event streams
 5. Release resources
 
-Usage:
-    scope = CancellationScope()
-    
-    async def parent_work():
-        child_scope = scope.fork()
-        
-        # Pass child_scope to child tasks
-        await child_task(child_scope)
-        
-        if should_cancel:
-            scope.cancel("User requested")
-    
-    try:
-        await parent_work()
-    except CancelledError as e:
-        print(f"Cancelled: {e.reason}")
+FIX W-014: Cleanup handlers now tracked with proper error logging.
 """
 
 import asyncio

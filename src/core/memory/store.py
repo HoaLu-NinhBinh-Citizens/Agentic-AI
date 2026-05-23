@@ -75,10 +75,21 @@ class AgentMemory:
         }
 
     def save(self):
+        """Save memory to disk atomically.
+        
+        FIX W-002: Uses fsync for durability before atomic rename.
+        """
         payload = json.dumps(self.data, indent=2)
         tmp_path = self.memory_path.with_name(f"{self.memory_path.name}.tmp")
-        tmp_path.write_text(payload, encoding="utf-8")
+        
+        # FIX: Write with fsync for crash safety
+        with open(tmp_path, 'w', encoding="utf-8") as f:
+            f.write(payload)
+            f.flush()
+            os.fsync(f.fileno())
+        
         os.replace(tmp_path, self.memory_path)
+        logger.debug("memory_saved", path=str(self.memory_path))
 
     def get_recent_lessons(self, limit: int = 8) -> List[str]:
         lessons: List[str] = []

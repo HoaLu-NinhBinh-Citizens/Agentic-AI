@@ -2,8 +2,11 @@
 Tool Registry
 
 Central registry for managing tools.
+
+FIX W-011: Added thread safety with asyncio.Lock for concurrent access.
 """
 
+import asyncio
 import logging
 from typing import Any, Callable, Dict, List, Optional, Set
 
@@ -19,29 +22,9 @@ logger = logging.getLogger(__name__)
 
 class ToolRegistry:
     """
-    Central registry for tools.
+    Central registry for tools with thread-safe async operations.
 
-    Features:
-    - Tool registration and unregistration
-    - Tool lookup by name
-    - Tool search by name, category, tags
-    - Permission checking
-    - Tool validation
-
-    Usage:
-        registry = ToolRegistry()
-
-        # Register a tool
-        registry.register(my_tool)
-
-        # Lookup
-        tool = registry.get("read_file")
-
-        # Search
-        file_tools = registry.search(category=ToolCategory.FILE)
-
-        # List all
-        all_tools = registry.list_tools()
+    FIX W-011: All operations are now protected by asyncio.Lock.
     """
 
     def __init__(self):
@@ -50,10 +33,11 @@ class ToolRegistry:
         self._categories: Dict[ToolCategory, List[str]] = {}
         self._tags: Dict[str, Set[str]] = {}  # tag -> tool names
         self._permissions: Dict[ToolPermission, Set[str]] = {}  # permission -> tool names
+        self._lock = asyncio.Lock()  # W-011: Protect concurrent access
 
-    def register(self, tool: Tool) -> None:
+    async def register(self, tool: Tool) -> None:
         """
-        Register a tool.
+        Register a tool (async, thread-safe).
 
         Args:
             tool: Tool definition to register
@@ -61,37 +45,38 @@ class ToolRegistry:
         Raises:
             ValueError: If tool with same name already exists
         """
-        if tool.name in self._tools:
-            raise ValueError(f"Tool '{tool.name}' is already registered")
+        async with self._lock:
+            if tool.name in self._tools:
+                raise ValueError(f"Tool '{tool.name}' is already registered")
 
-        # Validate tool
-        self._validate_tool(tool)
+            # Validate tool
+            self._validate_tool(tool)
 
-        # Store tool
-        self._tools[tool.name] = tool
+            # Store tool
+            self._tools[tool.name] = tool
 
-        # Update category index
-        if tool.category not in self._categories:
-            self._categories[tool.category] = []
-        self._categories[tool.category].append(tool.name)
+            # Update category index
+            if tool.category not in self._categories:
+                self._categories[tool.category] = []
+            self._categories[tool.category].append(tool.name)
 
-        # Update tag index
-        for tag in tool.tags:
-            if tag not in self._tags:
-                self._tags[tag] = set()
-            self._tags[tag].add(tool.name)
+            # Update tag index
+            for tag in tool.tags:
+                if tag not in self._tags:
+                    self._tags[tag] = set()
+                self._tags[tag].add(tool.name)
 
-        # Update permission index
-        for permission in tool.permissions:
-            if permission not in self._permissions:
-                self._permissions[permission] = set()
-            self._permissions[permission].add(tool.name)
+            # Update permission index
+            for permission in tool.permissions:
+                if permission not in self._permissions:
+                    self._permissions[permission] = set()
+                self._permissions[permission].add(tool.name)
 
-        logger.info(f"Registered tool: {tool.name} (category={tool.category.value})")
+            logger.info("tool_registered", tool=tool.name, category=tool.category.value)
 
-    def unregister(self, name: str) -> bool:
+    async def unregister(self, name: str) -> bool:
         """
-        Unregister a tool.
+        Unregister a tool (async, thread-safe).
 
         Args:
             name: Tool name to unregister
@@ -99,40 +84,41 @@ class ToolRegistry:
         Returns:
             True if tool was unregistered, False if not found
         """
-        if name not in self._tools:
-            return False
+        async with self._lock:
+            if name not in self._tools:
+                return False
 
-        tool = self._tools[name]
+            tool = self._tools[name]
 
-        # Remove from main index
-        del self._tools[name]
+            # Remove from main index
+            del self._tools[name]
 
-        # Remove from category index
-        if tool.category in self._categories:
-            self._categories[tool.category].remove(name)
-            if not self._categories[tool.category]:
-                del self._categories[tool.category]
+            # Remove from category index
+            if tool.category in self._categories:
+                self._categories[tool.category].remove(name)
+                if not self._categories[tool.category]:
+                    del self._categories[tool.category]
 
-        # Remove from tag index
-        for tag in tool.tags:
-            if tag in self._tags:
-                self._tags[tag].discard(name)
-                if not self._tags[tag]:
-                    del self._tags[tag]
+            # Remove from tag index
+            for tag in tool.tags:
+                if tag in self._tags:
+                    self._tags[tag].discard(name)
+                    if not self._tags[tag]:
+                        del self._tags[tag]
 
-        # Remove from permission index
-        for permission in tool.permissions:
-            if permission in self._permissions:
-                self._permissions[permission].discard(name)
-                if not self._permissions[permission]:
-                    del self._permissions[permission]
+            # Remove from permission index
+            for permission in tool.permissions:
+                if permission in self._permissions:
+                    self._permissions[permission].discard(name)
+                    if not self._permissions[permission]:
+                        del self._permissions[permission]
 
-        logger.info(f"Unregistered tool: {name}")
-        return True
+            logger.info("tool_unregistered", tool=name)
+            return True
 
-    def get(self, name: str) -> Optional[Tool]:
+    async def get(self, name: str) -> Optional[Tool]:
         """
-        Get a tool by name.
+        Get a tool by name (async, thread-safe).
 
         Args:
             name: Tool name
@@ -140,25 +126,28 @@ class ToolRegistry:
         Returns:
             Tool definition or None if not found
         """
-        return self._tools.get(name)
+        async with self._lock:
+            return self._tools.get(name)
 
-    def list_tools(self) -> List[Tool]:
+    async def list_tools(self) -> List[Tool]:
         """
-        List all registered tools.
+        List all registered tools (async, thread-safe).
 
         Returns:
             List of all tools
         """
-        return list(self._tools.values())
+        async with self._lock:
+            return list(self._tools.values())
 
-    def list_tool_names(self) -> List[str]:
+    async def list_tool_names(self) -> List[str]:
         """
-        List all tool names.
+        List all tool names (async, thread-safe).
 
         Returns:
             List of tool names
         """
-        return list(self._tools.keys())
+        async with self._lock:
+            return list(self._tools.keys())
 
     def search(
         self,

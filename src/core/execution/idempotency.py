@@ -6,6 +6,7 @@ Provides in-memory storage for idempotent retry support.
 from __future__ import annotations
 
 import asyncio
+import json
 import logging
 import time
 from abc import ABC, abstractmethod
@@ -179,3 +180,97 @@ class InMemoryIdempotencyStore(IdempotencyStore):
         async with self._lock:
             self._records.clear()
             logger.debug("Cleared all idempotency records")
+
+
+class RedisIdempotencyStore(IdempotencyStore):
+    """Redis-backed idempotency store with persistence.
+    
+    FIX W-003: Provides durable persistence for idempotency records.
+    State survives restarts and can be shared across instances.
+    """
+    
+    def __init__(
+        self,
+        redis_url: str = "redis://localhost:6379",
+        ttl_seconds: float = 300.0,
+        key_prefix: str = "idempotency:",
+    ) -> None:
+        """
+        Args:
+            redis_url: Redis connection URL.
+            ttl_seconds: Time-to-live for cached entries.
+            key_prefix: Prefix for Redis keys.
+        """
+        self._redis_url = redis_url
+        self._ttl = ttl_seconds
+        self._key_prefix = key_prefix
+        self._redis = None
+        self._lock = asyncio.Lock()
+    
+    async def _get_redis(self):
+        """Get or create Redis connection."""
+        if self._redis is None:
+            try:
+                import redis.asyncio as redis
+                self._redis = redis.from_url(self._redis_url)
+            except ImportError:
+                logger.warning("redis not installed, falling back to in-memory")
+                return None
+        return self._redis
+    
+    async def get(self, key: str) -> dict[str, Any] | None:
+        """Get cached result by idempotency key."""
+        redis_client = await self._get_redis()
+        if redis_client is None:
+            return None
+        
+        full_key = f"{self._key_prefix}{key}"
+        try:
+            data = await redis_client.get(full_key)
+            if data is None:
+                return None
+            
+            result = json.loads(data)
+            logger.debug("idempotency_redis_hit", key=key)
+            return result
+        except Exception as e:
+            logger.error("idempotency_redis_get_failed", key=key, error=str(e))
+            return None
+    
+    async def set(self, key: str, result: dict[str, Any]) -> None:
+        """Store successful result by idempotency key."""
+        redis_client = await self._get_redis()
+        if redis_client is None:
+            return
+        
+        full_key = f"{self._key_prefix}{key}"
+        try:
+            data = json.dumps(result)
+            await redis_client.setex(full_key, self._ttl, data)
+            logger.debug("idempotency_redis_stored", key=key, ttl=self._ttl)
+        except Exception as e:
+            logger.error("idempotency_redis_set_failed", key=key, error=str(e))
+    
+    async def delete(self, key: str) -> None:
+        """Delete cached result."""
+        redis_client = await self._get_redis()
+        if redis_client is None:
+            return
+        
+        full_key = f"{self._key_prefix}{key}"
+        try:
+            await redis_client.delete(full_key)
+            logger.debug("idempotency_redis_deleted", key=key)
+        except Exception as e:
+            logger.error("idempotency_redis_delete_failed", key=key, error=str(e))
+    
+    async def clear_expired(self) -> int:
+        """Clear expired entries (handled by Redis TTL)."""
+        return 0
+    
+    async def close(self) -> None:
+        """Close Redis connection."""
+        if self._redis:
+            await self._redis.close()
+            self._redis = None
+

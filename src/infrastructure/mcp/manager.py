@@ -13,6 +13,8 @@ Phase 2C adds (W-003 fix):
 - Deadlock detection timeout to prevent parent-child deadlock
 - Buffered communication with backpressure
 - Non-blocking read pattern to avoid stdio buffer overflow
+
+FIX W-005: Moved MCP SDK import to module level with graceful fallback.
 """
 
 from __future__ import annotations
@@ -29,6 +31,18 @@ from infrastructure.resilience.circuit_breaker import CircuitBreaker, CircuitBre
 from shared.exceptions.tool_errors import ToolNotFoundError
 
 logger = structlog.get_logger(__name__)
+
+# W-005: Import MCP SDK at module level with graceful fallback
+try:
+    from mcp import ClientSession
+    from mcp.client.stdio import stdio_client, StdioServerParameters
+    HAS_MCP_SDK = True
+except ImportError:
+    HAS_MCP_SDK = False
+    ClientSession = None
+    stdio_client = None
+    StdioServerParameters = None
+    logger.warning("MCP SDK not installed. MCP functionality will be disabled.")
 
 
 @dataclass
@@ -190,10 +204,11 @@ class MCPClientManager:
         stdio_context = None
 
         try:
+            # W-005: Check MCP SDK availability
+            if not HAS_MCP_SDK:
+                raise ImportError("MCP SDK not installed. Install with: pip install mcp")
+            
             # Step 1: Import MCP SDK and spawn subprocess
-            from mcp import ClientSession
-            from mcp.client.stdio import stdio_client, StdioServerParameters
-
             params = StdioServerParameters(command=config.command, args=config.args)
 
             # Enter async context manager to get streams

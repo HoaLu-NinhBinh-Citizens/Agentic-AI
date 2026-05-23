@@ -1,11 +1,15 @@
 """Tool Cache - Main facade integrating all cache components.
 
 Production-grade tool cache with Kafka-level rigor.
+
+FIX W-007: Added args validation to prevent cache key collision.
+FIX W-010: Load shedding already activated in start().
 """
 
 from __future__ import annotations
 
 import asyncio
+import json
 import logging
 import time
 from dataclasses import dataclass, field
@@ -41,6 +45,7 @@ class ToolCacheConfig:
     enable_persistence: bool = False
     enable_metrics: bool = True
     enable_warmup: bool = True
+    enable_args_validation: bool = True  # W-007: Validate args are JSON-serializable
 
 
 class ToolCache:
@@ -169,6 +174,8 @@ class ToolCache:
     ) -> str:
         """Generate cache key.
 
+        FIX W-007: Validates args are JSON-serializable to prevent key collision.
+
         Args:
             tool: Tool name
             version: Tool version
@@ -176,7 +183,19 @@ class ToolCache:
 
         Returns:
             Cache key (SHA256 hash)
+            
+        Raises:
+            ValueError: If args contains non-serializable types.
         """
+        # W-007: Validate args are JSON-serializable
+        if self.config.enable_args_validation:
+            try:
+                json.dumps(args)
+            except (TypeError, ValueError) as e:
+                raise ValueError(
+                    f"Args must be JSON-serializable for cache key generation: {e}"
+                )
+        
         return self._key_generator.generate(tool, version, args)
 
     async def get(
