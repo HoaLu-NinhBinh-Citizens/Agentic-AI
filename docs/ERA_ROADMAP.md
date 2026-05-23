@@ -360,7 +360,7 @@ Formalizes execution layer. Bao gồm:
 | ID | Sub‑phase | Mô tả | TT |
 |----|-----------|-------|-----|
 | 15.1 | Deployment modes | SaaS, on-prem, hybrid, air-gapped | ✅ |
-| 15.2 | Licensing & pricing | Community, Pro, Enterprise | ⬜ |
+| 15.2 | Licensing & pricing | Community, Pro, Enterprise | ✅ |
 | 15.3 | Offline mode core | Không internet, local | ⬜ |
 | 15.3a | Offline sync | Đồng bộ khi online | ✅ |
 | 15.4 | Security ISO 27001, SOC2 | ✅ |
@@ -378,14 +378,14 @@ Formalizes execution layer. Bao gồm:
 |----|-----------|-------|-----|
 | 16.1 | OSS governance | CONTRIBUTING, CODE_OF_CONDUCT | ✅ |
 | 16.2 | Ecosystem integrations | Plugin marketplace | ✅ |
-| 16.3 | Documentation & training | API docs, video | 🔄 |
-| 16.4a | AI tự sinh test case | Từ coverage gaps | ⬜ |
-| 16.4b | AI đề xuất cải tiến kiến trúc | Bottleneck analysis | ⬜ |
-| 16.4c | Học từ từ chối của user | Confidence calibration | ⬜ |
+| 16.3 | Documentation & training | API docs, video | ✅ |
+| 16.4a | AI tự sinh test case | Từ coverage gaps | ✅ |
+| 16.4b | AI đề xuất cải tiến kiến trúc | Bottleneck analysis | ✅ |
+| 16.4c | Học từ từ chối của user | Confidence calibration | ✅ |
 | 16.4d | Auto fine-tune hàng tháng | ⬜ |
 | 16.5 | ROI metrics | Adoption rate, time saved | ⬜ |
 
-**Era 3 tổng:** 🔄 **~50%**
+**Era 3 tổng:** 🔄 **~70%**
 
 ---
 
@@ -395,7 +395,7 @@ Formalizes execution layer. Bao gồm:
 |-----|---------|----|
 | Era 1 | Phase 1a → 6 | ✅ **100%** |
 | Era 2 | Phase 7 → 11 | ✅ **~90%** |
-| Era 3 | Phase 12 → 16 | 🔄 **~50%** |
+| Era 3 | Phase 12 → 16 | 🔄 **~70%** |
 
 ---
 
