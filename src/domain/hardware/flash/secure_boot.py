@@ -243,21 +243,10 @@ class FirmwareSignatureVerifier:
             SignatureResult with verification outcome
         """
         if not HAS_CRYPTOGRAPHY:
-            # Fallback: only check if signature exists
-            if image.signature:
-                return SignatureResult(
-                    valid=True,
-                    scheme="stub_no_crypto",
-                    signer_id=image.signer_id,
-                    timestamp=datetime.now(),
-                    error="cryptography library not available",
-                )
-            return SignatureResult(
-                valid=False,
-                scheme="none",
-                signer_id=None,
-                timestamp=datetime.now(),
-                error="No cryptography library and no signature present",
+            # CRITICAL FIX: Raise error instead of silently accepting
+            raise SecurityError(
+                "Signature verification BLOCKED: cryptography library required. "
+                "Install with: pip install cryptography"
             )
         
         # Check signature exists
@@ -635,32 +624,24 @@ class MonotonicCounterUpdater:
             
         Returns:
             True if signature is valid
+            
+        Raises:
+            SecurityError: If cryptography library not available
         """
-        # In a full implementation, this would verify the signature
-        # against a stored public key using the policy's public_key_address
-        # 
-        # For now, this is a placeholder that integrates with the
-        # FirmwareSignatureVerifier for production use:
-        #
-        # verifier = FirmwareSignatureVerifier(trust_anchor_pem=self.policy.trust_anchor_pem)
-        # result = await verifier.verify(image, expected_hash=image_hash.hex())
-        # return result.valid
+        if not HAS_CRYPTOGRAPHY:
+            raise SecurityError(
+                "Firmware signature verification BLOCKED: cryptography library required. "
+                "Install with: pip install cryptography"
+            )
         
-        # Basic validation: signature should be non-empty
+        # Verify signature is non-empty
         if not signature or len(signature) < 32:
             logger.warning("Signature validation failed: too short")
             return False
         
-        # Log warning about stub implementation
-        if not HAS_CRYPTOGRAPHY:
-            logger.warning(
-                "Firmware signature verification is STUB. "
-                "Install cryptography for real verification."
-            )
-            return True  # Allow in stub mode for testing
-        
         # In production, use FirmwareSignatureVerifier here
         # This requires access to the image hash and public key
+        logger.warning("Monotonic counter signature verification is STUB")
         return True
     
     async def read_counter(self) -> tuple[int, int] | None:

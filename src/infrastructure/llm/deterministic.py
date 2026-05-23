@@ -152,6 +152,25 @@ class SchemaEnforcer:
     schema: dict[str, Any]
     version: str = "1.0"
     
+    # SECURE: Type lookup table instead of eval()
+    TYPE_MAP: dict[str, type] = {
+        "int": int,
+        "str": str,
+        "float": float,
+        "bool": bool,
+        "list": list,
+        "dict": dict,
+        "tuple": tuple,
+        "set": set,
+        "bytes": bytes,
+        "None": type(None),
+        "int|None": int | None,
+        "str|None": str | None,
+        "float|None": float | None,
+        "list|None": list | None,
+        "dict|None": dict | None,
+    }
+    
     def validate(self, response: str) -> tuple[bool, str]:
         """Validate response against schema.
         
@@ -170,9 +189,16 @@ class SchemaEnforcer:
                     return False, f"Missing required field: {key}"
                 
                 if key in data:
-                    expected_type = spec.get("type")
-                    if expected_type and not isinstance(data[key], eval(expected_type)):
-                        return False, f"Wrong type for {key}: expected {expected_type}"
+                    expected_type = spec.get("type", "str")
+                    
+                    # SECURE: Use lookup table instead of eval()
+                    expected_python_type = self.TYPE_MAP.get(expected_type)
+                    if expected_python_type is None:
+                        logger.warning("unknown_type_in_schema", type_name=expected_type)
+                        continue
+                    
+                    if not isinstance(data[key], expected_python_type):
+                        return False, f"Wrong type for {key}: expected {expected_type}, got {type(data[key]).__name__}"
             
             return True, ""
             

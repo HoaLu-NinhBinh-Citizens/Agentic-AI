@@ -339,6 +339,33 @@ class RedisStreamsEventBusBackend(EventBusBackend):
         async with self._lock:
             self._sequences[topic] += 1
             return self._sequences[topic]
+    
+    async def _load_consumer_position(self, stream_key: str) -> str | None:
+        """Load consumer position for stream from Redis.
+        
+        FIX: Enables at-least-once delivery by tracking position.
+        """
+        try:
+            pos_key = f"{self._stream_prefix}:positions:{self._consumer_group}:{stream_key}"
+            pos = await self._redis.get(pos_key)
+            if pos:
+                logger.debug("consumer_position_loaded", stream=stream_key, position=pos)
+                return pos.decode()
+        except Exception as e:
+            logger.warning("consumer_position_load_failed", error=str(e))
+        return None
+    
+    async def _save_consumer_position(self, stream_key: str, last_id: str) -> None:
+        """Save consumer position for stream to Redis.
+        
+        FIX: Persists position for crash recovery.
+        """
+        try:
+            pos_key = f"{self._stream_prefix}:positions:{self._consumer_group}:{stream_key}"
+            await self._redis.set(pos_key, last_id)
+            logger.debug("consumer_position_saved", stream=stream_key, position=last_id)
+        except Exception as e:
+            logger.warning("consumer_position_save_failed", error=str(e))
 
     async def publish(self, event: Event) -> None:
         """Publish event to Redis Stream FIRST, then dispatch locally.
@@ -415,9 +442,16 @@ class RedisStreamsEventBusBackend(EventBusBackend):
             del self._listener_tasks[subscription.topic_pattern]
 
     async def _listen_to_stream(self, topic_pattern: str) -> None:
-        """Listen to Redis Stream for events matching pattern."""
+        """Listen to Redis Stream for events matching pattern.
+        
+        FIX: Now reads from last processed position for at-least-once delivery.
+        """
         stream_key = self._get_stream_key(topic_pattern)
-        last_id = "$"  # Only new messages
+        
+        # FIX: Persist consumer position for at-least-once delivery
+        last_id = await self._load_consumer_position(stream_key)
+        if not last_id:
+            last_id = "0"  # Start from beginning if no saved position
         
         while self._running:
             try:
@@ -439,12 +473,15 @@ class RedisStreamsEventBusBackend(EventBusBackend):
                             event = self._parse_stream_message(data)
                             event.sequence = int(data.get(b"sequence", 0))
                             
-                            # Update last read ID
-                            last_id = msg_id
-                            
-                            # Acknowledge after processing
-                            await self._dispatch_local(event)
+                            # FIX: ACK BEFORE dispatch for at-least-once
                             await self._redis.xack(stream_key, self._consumer_group, msg_id)
+                            
+                            # Dispatch after successful ACK
+                            await self._dispatch_local(event)
+                            
+                            # Update last read ID and persist
+                            last_id = msg_id
+                            asyncio.create_task(self._save_consumer_position(stream_key, last_id))
                             
                         except Exception as e:
                             logger.exception("stream_message_parse_error", error=str(e))

@@ -178,11 +178,24 @@ class LeaderElector:
                 return instance_id
             
             # Lock not acquired, get current leader
-            leader_data = await client.get(self.lock_key)
+            # Use Lua script for atomic read + extend TTL check
+            lua_script = """
+            local leader = redis.call('GET', KEYS[1])
+            if leader then
+                local ttl = redis.call('TTL', KEYS[1])
+                return {leader, ttl}
+            end
+            return nil
+            """
+            
+            result = await client.eval(lua_script, 1, self.lock_key)
             await client.close()
             
-            if leader_data:
-                current_leader = leader_data.decode().split(":")[0]
+            if result:
+                leader_info = result[0].decode() if isinstance(result[0], bytes) else result[0]
+                current_leader = leader_info.split(":")[0]
+                ttl = result[1] if len(result) > 1 else 0
+                
                 self._is_leader = (current_leader == instance_id)
                 
                 if not self._is_leader:
@@ -234,7 +247,7 @@ class LeaderElector:
             return True
     
     async def _heartbeat_redis(self) -> bool:
-        """Redis heartbeat."""
+        """Redis heartbeat with atomic TTL refresh."""
         if not self._is_leader or not self._instance_id:
             return False
         
@@ -243,30 +256,37 @@ class LeaderElector:
             
             client = redis.from_url(self.redis_url)
             
-            # Extend TTL
-            leader_data = await client.get(self.lock_key)
-            if not leader_data:
+            # Use Lua script for atomic check-and-extend
+            lua_script = """
+            local leader = redis.call('GET', KEYS[1])
+            if leader then
+                local current = string.match(leader, "^([^:]+)")
+                if current == ARGV[1] then
+                    redis.call('EXPIRE', KEYS[1], ARGV[2])
+                    return 1
+                end
+            end
+            return 0
+            """
+            
+            result = await client.eval(
+                lua_script, 1, 
+                self.lock_key,
+                self._instance_id,
+                int(self.lock_ttl),
+            )
+            
+            await client.close()
+            
+            if result == 1:
+                if self._current_leader:
+                    self._current_leader.last_heartbeat = datetime.now()
+                self._heartbeat_count += 1
+                return True
+            else:
                 # Lost leadership
                 self._is_leader = False
-                await client.close()
                 return False
-            
-            current_leader = leader_data.decode().split(":")[0]
-            if current_leader != self._instance_id:
-                # Someone else became leader
-                self._is_leader = False
-                await client.close()
-                return False
-            
-            # Refresh TTL
-            await client.expire(self.lock_key, int(self.lock_ttl))
-            
-            if self._current_leader:
-                self._current_leader.last_heartbeat = datetime.now()
-            
-            self._heartbeat_count += 1
-            await client.close()
-            return True
             
         except Exception as e:
             logger.error(f"Heartbeat failed: {e}")
