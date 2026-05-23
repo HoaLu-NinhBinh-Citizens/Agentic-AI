@@ -7,29 +7,40 @@ Detects and analyzes flaky tests in firmware test suites:
 - Fleet-wide flaky test tracking
 
 Tier 1 value component.
+
+Metrics exposed:
+- hil_flaky_tests_detected_total: Flaky tests detected
+- hil_flaky_test_runs_total: Total test runs recorded
+- hil_flaky_detection_duration_seconds: Time to detect flakiness
+- hil_retry_handler_retries_total: Total retry attempts
 """
 
 from __future__ import annotations
 
-import hashlib
-import logging
+import asyncio
 import statistics
 from dataclasses import dataclass, field
-from datetime import datetime, timedelta
+from datetime import datetime
 from enum import Enum
 from typing import Any
 
-logger = logging.getLogger(__name__)
+from src.infrastructure.observability.metrics import MetricsRegistry
+from src.infrastructure.observability.structured_logging import get_logger
+
+logger = get_logger(__name__)
+
+# Prometheus metrics
+_METRICS = MetricsRegistry.get_instance()
 
 
 class FlakyPattern(Enum):
     """Types of flaky test patterns."""
-    TIMING_SENSITIVE = "timing_sensitive"      # Race conditions, timeouts
-    RESOURCE_CONTENTION = "resource_contention"  # Shared resources, memory
-    EXTERNAL_DEPENDENCY = "external_dependency"  # Network, hardware
-    INTERMITTENT_HARDWARE = "intermittent_hardware"  # Hardware instability
-    RANDOM_BEHAVIOR = "random_behavior"        # Non-deterministic
-    ENVIRONMENTAL = "environmental"            # Environment differences
+    TIMING_SENSITIVE = "timing_sensitive"
+    RESOURCE_CONTENTION = "resource_contention"
+    EXTERNAL_DEPENDENCY = "external_dependency"
+    INTERMITTENT_HARDWARE = "intermittent_hardware"
+    RANDOM_BEHAVIOR = "random_behavior"
+    ENVIRONMENTAL = "environmental"
     UNKNOWN = "unknown"
 
 
@@ -104,9 +115,40 @@ class FlakyTestDetector:
     # Timing sensitivity thresholds
     TIMING_SENSITIVE_CV = 0.3  # Coefficient of variation
     
+    # Confidence calculation parameters
+    CONFIDENCE_SAMPLE_SIZE_FOR_FULL_WEIGHT = 10  # Runs needed for 100% confidence weight
+    
     def __init__(self) -> None:
         self._test_runs: dict[str, list[TestRun]] = {}
         self._flaky_tests: dict[str, FlakyTestResult] = {}
+        self._analysis_times: dict[str, datetime] = {}
+    
+    def _record_metric_counter(self, name: str, tags: dict[str, str] | None = None, value: int = 1) -> None:
+        """Record a counter metric, handling sync/async context gracefully."""
+        try:
+            loop = asyncio.get_running_loop()
+            loop.call_soon_threadsafe(
+                lambda: asyncio.create_task(_METRICS.inc_counter(name, tags, value))
+            )
+        except RuntimeError:
+            # No running event loop - metric recording will be skipped
+            pass
+    
+    def _calculate_confidence(self, pass_rate: float, n_runs: int) -> float:
+        """Calculate confidence score based on pass rate and sample size.
+        
+        Confidence considers both:
+        1. How far below threshold the pass rate is
+        2. How many runs we have (more runs = more statistical significance)
+        """
+        # Pass rate factor: 0.0 at threshold, increases as pass rate drops
+        pass_rate_factor = (self.FLAKY_THRESHOLD - pass_rate) * 2
+        
+        # Sample size factor: grows logarithmically, reaches 1.0 at MIN_RUNS_FOR_FULL_WEIGHT
+        sample_size_factor = min(1.0, n_runs / self.CONFIDENCE_SAMPLE_SIZE_FOR_FULL_WEIGHT)
+        
+        confidence = pass_rate_factor * sample_size_factor
+        return min(1.0, max(0.0, confidence))
     
     def record_run(self, run: TestRun) -> None:
         """Record a test execution."""
@@ -114,6 +156,12 @@ class FlakyTestDetector:
             self._test_runs[run.test_id] = []
         
         self._test_runs[run.test_id].append(run)
+        
+        # Update metrics (handles sync/async context)
+        self._record_metric_counter(
+            "hil_flaky_test_runs_total",
+            tags={"result": run.result.value, "board_id": run.board_id or "unknown"}
+        )
         
         # Check if flaky after each run
         if len(self._test_runs[run.test_id]) >= self.MIN_RUNS_FOR_ANALYSIS:
@@ -147,6 +195,8 @@ class FlakyTestDetector:
         if len(runs) < self.MIN_RUNS_FOR_ANALYSIS:
             return None
         
+        analysis_start = datetime.now()
+        
         # Calculate statistics
         total = len(runs)
         passes = sum(1 for r in runs if r.result == TestResult.PASS)
@@ -156,7 +206,7 @@ class FlakyTestDetector:
         durations = [r.duration_ms for r in runs if r.duration_ms > 0]
         avg_duration = statistics.mean(durations) if durations else 0.0
         std_dev = statistics.stdev(durations) if len(durations) > 1 else 0.0
-        cv = std_dev / avg_duration if avg_duration > 0 else 0.0  # Coefficient of variation
+        cv = std_dev / avg_duration if avg_duration > 0 else 0.0
         
         # Determine if flaky
         is_flaky = pass_rate < self.FLAKY_THRESHOLD and passes > 0 and passes < total
@@ -165,15 +215,18 @@ class FlakyTestDetector:
             # Analyze pattern
             pattern, causes, recommendations = self._analyze_pattern(runs, cv)
             
+            # Calculate confidence with sample size consideration
+            confidence = self._calculate_confidence(pass_rate, total)
+            
             result = FlakyTestResult(
                 test_id=test_id,
-                test_name=test_id,  # Could be enhanced with actual name
+                test_name=test_id,
                 total_runs=total,
                 pass_count=passes,
                 fail_count=total - passes,
                 pass_rate=pass_rate,
                 pattern=pattern,
-                confidence=min(1.0, (1.0 - pass_rate) * 2),  # Higher confidence for more flaky
+                confidence=confidence,
                 suspected_causes=causes,
                 avg_duration_ms=avg_duration,
                 std_dev_ms=std_dev,
@@ -186,9 +239,35 @@ class FlakyTestDetector:
             )
             
             self._flaky_tests[test_id] = result
+            self._analysis_times[test_id] = analysis_start
+            
+            # Update metrics (handles sync/async context)
+            confidence_bucket = self._get_confidence_bucket(confidence)
+            self._record_metric_counter(
+                "hil_flaky_tests_detected_total",
+                tags={"pattern": pattern.value, "confidence_bucket": confidence_bucket}
+            )
+            
+            logger.info(
+                "flaky_test_detected",
+                test_id=test_id,
+                pattern=pattern.value,
+                confidence=confidence,
+                pass_rate=pass_rate
+            )
+            
             return result
         
         return None
+    
+    def _get_confidence_bucket(self, confidence: float) -> str:
+        """Convert confidence to bucket string for metrics."""
+        if confidence >= 0.8:
+            return "high"
+        elif confidence >= 0.5:
+            return "medium"
+        else:
+            return "low"
     
     def _analyze_pattern(
         self,
@@ -198,6 +277,7 @@ class FlakyTestDetector:
         """Analyze test runs to determine flaky pattern."""
         causes = []
         recommendations = []
+        pattern = FlakyPattern.UNKNOWN
         
         # Check for timing sensitivity
         if timing_cv > self.TIMING_SENSITIVE_CV:
@@ -234,7 +314,6 @@ class FlakyTestDetector:
         
         # Check for randomness
         if len(set(r.result for r in runs)) > 1:
-            # Check if passes/fails are evenly distributed
             passes = sum(1 for r in runs if r.result == TestResult.PASS)
             if 0.3 < passes / len(runs) < 0.7:
                 pattern = FlakyPattern.RANDOM_BEHAVIOR
@@ -314,7 +393,17 @@ class FlakyTestRetryHandler:
     
     def __init__(self, max_retries: int = 3) -> None:
         self._max_retries = max_retries
-        self._retry_history: dict[str, list[bool]] = {}  # test_id -> [success per retry]
+        self._retry_history: dict[str, list[bool]] = {}
+    
+    def _record_metric_counter(self, name: str, tags: dict[str, str] | None = None, value: int = 1) -> None:
+        """Record a counter metric, handling sync/async context gracefully."""
+        try:
+            loop = asyncio.get_running_loop()
+            loop.call_soon_threadsafe(
+                lambda: asyncio.create_task(_METRICS.inc_counter(name, tags, value))
+            )
+        except RuntimeError:
+            pass
     
     def should_retry(self, test_id: str, attempt: int) -> bool:
         """Determine if test should be retried."""
@@ -325,13 +414,19 @@ class FlakyTestRetryHandler:
         if test_id not in self._retry_history:
             self._retry_history[test_id] = []
         self._retry_history[test_id].append(success)
+        
+        # Update metrics (handles sync/async context)
+        self._record_metric_counter(
+            "hil_retry_handler_retries_total",
+            tags={"test_id": test_id, "success": str(success).lower()}
+        )
     
     def get_final_result(self, test_id: str) -> bool | None:
         """Get final result after retries."""
         attempts = self._retry_history.get(test_id, [])
         if not attempts:
             return None
-        return any(attempts)  # Pass if any attempt passed
+        return any(attempts)
     
     def get_retry_stats(self, test_id: str) -> dict[str, Any]:
         """Get retry statistics for a test."""
@@ -365,18 +460,16 @@ def get_flaky_detector() -> FlakyTestDetector:
 if __name__ == "__main__":
     detector = FlakyTestDetector()
     
-    # Simulate flaky test
     print("Simulating flaky test behavior:")
     print("-" * 50)
     
     # Test 1: Flaky due to timing
     for i in range(5):
-        # Pass 80% of the time, fail 20%
         success = i % 5 != 0
         result = detector.record_result(
             test_id="test_timing_sensitive",
             result=TestResult.PASS if success else TestResult.FAIL,
-            duration_ms=100 + (i * 10),  # Variable timing
+            duration_ms=100 + (i * 10),
             error_message="Timeout waiting for resource" if not success else "",
         )
     

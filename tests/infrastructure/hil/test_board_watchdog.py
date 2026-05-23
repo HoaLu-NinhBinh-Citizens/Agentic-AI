@@ -124,7 +124,7 @@ class TestBoardWatchdog:
         watchdog._restart_counts.pop("nonexistent", None)
 
     @pytest.mark.asyncio
-    async def test_watchdog_timeout_creates_alert(self, watchdog: BoardWatchdog):
+    async     def test_watchdog_timeout_creates_alert(self, watchdog: BoardWatchdog):
         """Test that timeout creates an alert."""
         board_id = "board_001"
         test_id = "test_001"
@@ -132,7 +132,7 @@ class TestBoardWatchdog:
         # Manually create an alert to test the flow
         alert = watchdog._create_alert(
             board_id=board_id,
-            level=AlertLevel.ERROR,
+            alert_level=AlertLevel.ERROR,
             message=f"Test {test_id} timed out",
         )
         
@@ -212,7 +212,7 @@ class TestBoardWatchdog:
         """Test alert creation."""
         alert = watchdog._create_alert(
             board_id="board_001",
-            level=AlertLevel.WARNING,
+            alert_level=AlertLevel.WARNING,
             message="Test alert",
         )
         
@@ -227,7 +227,7 @@ class TestBoardWatchdog:
         """Test acknowledging an alert."""
         alert = watchdog._create_alert(
             board_id="board_001",
-            level=AlertLevel.WARNING,
+            alert_level=AlertLevel.WARNING,
             message="Test alert",
         )
         
@@ -245,7 +245,7 @@ class TestBoardWatchdog:
         """Test resolving an alert."""
         alert = watchdog._create_alert(
             board_id="board_001",
-            level=AlertLevel.WARNING,
+            alert_level=AlertLevel.WARNING,
             message="Test alert",
         )
         
@@ -257,8 +257,8 @@ class TestBoardWatchdog:
 
     def test_get_active_alerts(self, watchdog: BoardWatchdog):
         """Test getting active alerts."""
-        watchdog._create_alert(board_id="board_001", level=AlertLevel.WARNING, message="Warning")
-        watchdog._create_alert(board_id="board_002", level=AlertLevel.ERROR, message="Error")
+        watchdog._create_alert(board_id="board_001", alert_level=AlertLevel.WARNING, message="Warning")
+        watchdog._create_alert(board_id="board_002", alert_level=AlertLevel.ERROR, message="Error")
         
         # Get all active alerts
         alerts = watchdog.get_active_alerts()
@@ -274,8 +274,8 @@ class TestBoardWatchdog:
 
     def test_get_statistics(self, watchdog: BoardWatchdog):
         """Test statistics reporting."""
-        watchdog._create_alert(board_id="board_001", level=AlertLevel.WARNING, message="Warning")
-        watchdog._create_alert(board_id="board_001", level=AlertLevel.CRITICAL, message="Critical")
+        watchdog._create_alert(board_id="board_001", alert_level=AlertLevel.WARNING, message="Warning")
+        watchdog._create_alert(board_id="board_001", alert_level=AlertLevel.CRITICAL, message="Critical")
         
         stats = watchdog.get_statistics()
         
