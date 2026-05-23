@@ -325,7 +325,7 @@ Formalizes execution layer. Bao gồm:
 | 13.4 | Chaos engineering | Farm failure, network partition | ✅ |
 | **13.5** | **Execution semantics** | CFG, ISR interaction, DMA modeling | ⬜ | 🔴 |
 | **13.6** | **Compiler intelligence** | DWARF, ABI, LTO, inline asm | ⬜ | 🔴 |
-| 13.7 | Hardware ontology | SVD → causal graph | ⬜ | 🟡 |
+| 13.7 | Hardware ontology | SVD → causal graph | ✅ |
 
 > ⚠️ Phase 13.5 + 13.6: **không nên làm sớm.** Research-grade. Cần Phase 8 stable + deterministic replay trước.
 
@@ -361,13 +361,13 @@ Formalizes execution layer. Bao gồm:
 |----|-----------|-------|-----|
 | 15.1 | Deployment modes | SaaS, on-prem, hybrid, air-gapped | ✅ |
 | 15.2 | Licensing & pricing | Community, Pro, Enterprise | ✅ |
-| 15.3 | Offline mode core | Không internet, local | ⬜ |
+| 15.3 | Offline mode core | Không internet, local | ✅ |
 | 15.3a | Offline sync | Đồng bộ khi online | ✅ |
 | 15.4 | Security ISO 27001, SOC2 | ✅ |
 | 15.4a | E2E encryption | ✅ |
 | 15.4b | Code signing & attestation | ✅ |
 | 15.4c | TLS 1.3, mutual auth | ✅ |
-| 15.4d | On-prem data processing | ⬜ |
+| 15.4d | On-prem data processing | ✅ |
 | 15.4e | Audit trail | ✅ |
 
 ---
@@ -383,9 +383,9 @@ Formalizes execution layer. Bao gồm:
 | 16.4b | AI đề xuất cải tiến kiến trúc | Bottleneck analysis | ✅ |
 | 16.4c | Học từ từ chối của user | Confidence calibration | ✅ |
 | 16.4d | Auto fine-tune hàng tháng | ⬜ |
-| 16.5 | ROI metrics | Adoption rate, time saved | ⬜ |
+| 16.5 | ROI metrics | Adoption rate, time saved | ✅ |
 
-**Era 3 tổng:** 🔄 **~90%**
+**Era 3 tổng:** ✅ **~95%**
 
 ---
 
@@ -395,7 +395,7 @@ Formalizes execution layer. Bao gồm:
 |-----|---------|----|
 | Era 1 | Phase 1a → 6 | ✅ **100%** |
 | Era 2 | Phase 7 → 11 | ✅ **~90%** |
-| Era 3 | Phase 12 → 16 | 🔄 **~90%** |
+| Era 3 | Phase 12 → 16 | ✅ **~95%** |
 
 ---
 
