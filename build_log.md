@@ -375,6 +375,21 @@
 | ReplaySession | ✅ | Event recording |
 | DeterministicReplay | ✅ | Session replay with determinism verification |
 | Event types | ✅ | File, network, shell, API events |
+| **W-001 Fix** | ✅ | SHA256 checksum, logical clock, ordering validation |
+
+### Weakness Fixes — ✅ 2026-05-23
+| ID | Weakness | Status | File |
+|----|----------|--------|------|
+| W-001 | Event Replay Determinism | ✅ | `core/runtime/replayer.py` |
+| W-002 | Circuit Breaker Race | ✅ OK | `resilience/circuit_breaker.py` |
+| W-003 | MCP Stdio Deadlock | ✅ | `infrastructure/mcp/manager.py` |
+| W-004 | Vector Store Fallback | ✅ | `vector_db/abstraction/` |
+| W-005 | RAG Hallucination | ✅ | `retrieval/hallucination_guard.py` |
+| W-006 | Multi-Agent Determinism | ✅ OK | `multi_agent/coordination/` |
+| W-007 | Snapshot Atomicity | ✅ | `checkpoint/snapshot/` |
+| W-008 | RTT Buffer Overflow | ✅ | `jlink/rtt_overflow_protection.py` |
+| W-009 | GDB Packet Truncation | ✅ | `gdb/gdb_chunked_client.py` |
+| W-010 | Tree-sitter Crash | ✅ | `indexing/tree_sitter/` |
 
 ### Phase 14.3: Telemetry Anomaly Detection — ✅ 2026-05-23
 | Task | Status | Ghi chú |

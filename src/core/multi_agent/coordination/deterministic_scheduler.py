@@ -6,11 +6,13 @@ Provides:
 - Logical clock (Lamport timestamps)
 - Replay capability for debugging
 - Audit trail
+- Redis-backed persistence for distributed coordination
 """
 
 from __future__ import annotations
 
 import asyncio
+import json
 import logging
 import time
 from collections import defaultdict, deque
@@ -21,6 +23,14 @@ from typing import Any, Callable, Dict, List, Optional, Set
 from uuid import uuid4
 
 logger = logging.getLogger(__name__)
+
+# Optional Redis support
+try:
+    import redis.asyncio as redis
+    HAS_REDIS = True
+except ImportError:
+    HAS_REDIS = False
+    logger.warning("redis_not_installed_scheduler")
 
 
 class EventType(str, Enum):
@@ -90,7 +100,19 @@ class DeterministicScheduler:
     - Causal ordering of events
     - Deterministic replay
     - Audit trail
-    - Debugging support
+    - Redis-backed persistence for distributed coordination
+    - Event replay across restarts
+    
+    Usage:
+        # Local-only
+        scheduler = DeterministicScheduler(node_id="agent-1")
+        
+        # With Redis persistence
+        scheduler = DeterministicScheduler(
+            node_id="agent-1",
+            redis_url="redis://localhost:6379",
+            enable_persistence=True
+        )
     """
     
     def __init__(
@@ -98,10 +120,13 @@ class DeterministicScheduler:
         node_id: str,
         enable_replay: bool = True,
         max_history: int = 10000,
+        redis_url: str | None = None,
+        enable_persistence: bool = False,
     ):
         self.node_id = node_id
         self.enable_replay = enable_replay
         self.max_history = max_history
+        self.enable_persistence = enable_persistence and HAS_REDIS
         
         self._clock = LogicalClock(counter=0, node_id=node_id)
         self._events: deque[ScheduledEvent] = deque(maxlen=max_history)
@@ -118,6 +143,115 @@ class DeterministicScheduler:
         
         # Causality tracking
         self._causality_graph: Dict[str, Set[str]] = defaultdict(set)
+        
+        # Redis persistence
+        self._redis: redis.Redis | None = None
+        self._redis_url = redis_url
+        self._persistence_key = f"aisupport:scheduler:{node_id}"
+        
+        # Start Redis connection if enabled
+        if self.enable_persistence and self._redis_url:
+            asyncio.create_task(self._connect_redis())
+    
+    async def _connect_redis(self) -> None:
+        """Connect to Redis for persistence."""
+        if not self.enable_persistence or not self._redis_url:
+            return
+        
+        try:
+            self._redis = redis.from_url(self._redis_url)
+            await self._redis.ping()
+            logger.info("scheduler_redis_connected", node_id=self.node_id)
+            
+            # Restore state from Redis
+            await self._restore_from_redis()
+        except Exception as e:
+            logger.error("scheduler_redis_connect_failed", error=str(e))
+            self._redis = None
+            self.enable_persistence = False
+    
+    async def _restore_from_redis(self) -> None:
+        """Restore scheduler state from Redis."""
+        if not self._redis:
+            return
+        
+        try:
+            # Restore clock
+            clock_data = await self._redis.hget(self._persistence_key, "clock")
+            if clock_data:
+                clock_dict = json.loads(clock_data)
+                self._clock.counter = clock_dict.get("counter", 0)
+            
+            # Restore pending events
+            pending_data = await self._redis.hget(self._persistence_key, "pending")
+            if pending_data:
+                pending_list = json.loads(pending_data)
+                for event_dict in pending_list:
+                    event = self._dict_to_event(event_dict)
+                    self._pending_events[event.event_id] = event
+            
+            logger.info(
+                "scheduler_state_restored",
+                node_id=self.node_id,
+                clock=self._clock.counter,
+                pending=len(self._pending_events)
+            )
+        except Exception as e:
+            logger.error("scheduler_restore_failed", error=str(e))
+    
+    async def _persist_to_redis(self) -> None:
+        """Persist scheduler state to Redis."""
+        if not self._redis or not self.enable_persistence:
+            return
+        
+        try:
+            # Persist clock
+            clock_data = json.dumps({"counter": self._clock.counter, "node_id": self.node_id})
+            await self._redis.hset(self._persistence_key, "clock", clock_data)
+            
+            # Persist pending events
+            pending_list = [self._event_to_dict(e) for e in self._pending_events.values()]
+            await self._redis.hset(self._persistence_key, "pending", json.dumps(pending_list))
+            
+            # Set TTL (1 hour)
+            await self._redis.expire(self._persistence_key, 3600)
+            
+        except Exception as e:
+            logger.error("scheduler_persist_failed", error=str(e))
+    
+    def _event_to_dict(self, event: ScheduledEvent) -> dict:
+        """Convert event to dict for serialization."""
+        return {
+            "event_id": event.event_id,
+            "event_type": event.event_type.value if isinstance(event.event_type, Enum) else event.event_type,
+            "clock": {"counter": event.clock.counter, "node_id": event.clock.node_id},
+            "timestamp": event.timestamp.isoformat(),
+            "data": event.data,
+            "agent_id": event.agent_id,
+            "task_id": event.task_id,
+            "causality_dependencies": event.causality_dependencies,
+            "metadata": event.metadata,
+        }
+    
+    def _dict_to_event(self, data: dict) -> ScheduledEvent:
+        """Convert dict back to event."""
+        clock = LogicalClock(
+            counter=data["clock"]["counter"],
+            node_id=data["clock"]["node_id"]
+        )
+        event_type = EventType(data["event_type"]) if data["event_type"] in [e.value for e in EventType] else EventType.COORDINATOR_ACTION
+        
+        return ScheduledEvent(
+            event_id=data["event_id"],
+            event_type=event_type,
+            clock=clock,
+            timestamp=datetime.fromisoformat(data["timestamp"]),
+            data=data["data"],
+            agent_id=data.get("agent_id"),
+            task_id=data.get("task_id"),
+            causality_dependencies=data.get("causality_dependencies", []),
+            metadata=data.get("metadata", {}),
+        )
     
     def register_handler(
         self,
@@ -164,6 +298,10 @@ class DeterministicScheduler:
             # Update causality graph
             for dep_id in event.causality_dependencies:
                 self._causality_graph[event.event_id].add(dep_id)
+            
+            # Persist to Redis if enabled
+            if self.enable_persistence:
+                asyncio.create_task(self._persist_to_redis())
             
             return event
     
@@ -388,4 +526,19 @@ class DeterministicScheduler:
             "execution_records": len(self._execution_log),
             "is_replaying": self._is_replaying,
             "replay_index": self._replay_index,
+            "persistence_enabled": self.enable_persistence,
+            "redis_connected": self._redis is not None,
         }
+    
+    async def shutdown(self) -> None:
+        """Shutdown scheduler and close Redis connection."""
+        # Persist final state
+        if self.enable_persistence:
+            await self._persist_to_redis()
+        
+        # Close Redis
+        if self._redis:
+            await self._redis.close()
+            self._redis = None
+        
+        logger.info("scheduler_shutdown", node_id=self.node_id)

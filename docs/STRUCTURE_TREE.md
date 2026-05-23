@@ -456,6 +456,7 @@ src/
 │   │       ├── state_machine.py      # KeyStateMachine (FSM)
 │   │       ├── normalizer.py        # StrictNormalizer
 │   │       ├── key_generator.py     # KeyGenerator (SHA256)
+│   │       ├── semantic_hash.py     # SemanticCacheHasher (W-012)
 │   │       ├── single_flight.py     # SingleFlightCoordinator
 │   │       ├── swr_engine.py       # SWREngine
 │   │       ├── rate_limiter.py      # ToolRateLimiter

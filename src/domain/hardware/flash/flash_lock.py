@@ -5,6 +5,7 @@ Phase 6.2: Implements distributed flash locking for:
 - Automatic lease renewal
 - Lock timeout handling
 - Integration with event bus
+- Fencing token for flash operations (P0)
 """
 
 from __future__ import annotations
@@ -16,9 +17,85 @@ import os
 import uuid
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta
-from typing import Any
+from typing import Any, Optional
 
 logger = logging.getLogger(__name__)
+
+
+@dataclass
+class FlashFenceToken:
+    """Fencing token for flash operations.
+    
+    CRITICAL: This token MUST be validated at EVERY flash operation
+    (erase, write, verify) to prevent split-brain scenarios where
+    stale operations overwrite newer data.
+    
+    The token contains:
+    - A monotonically increasing sequence number
+    - The target being operated on
+    - The transaction that owns this token
+    - Timestamp for staleness detection
+    
+    Usage pattern:
+    1. Acquire lock -> receive FenceToken with seq=N
+    2. Before EVERY flash operation (erase/write/verify):
+       - Check token.seq >= N, reject if lower
+       - Pass token to operation
+    3. On operation failure, token becomes invalid
+    """
+    token: str = field(default_factory=lambda: str(uuid.uuid4()))
+    sequence: int = 0  # Monotonically increasing
+    lock_id: str = ""  # Target lock ID
+    transaction_id: str = ""  # Owning transaction
+    owner_id: str = ""  # Owner (agent/session)
+    
+    # Validity
+    issued_at: datetime = field(default_factory=datetime.now)
+    expires_at: datetime = field(default_factory=lambda: datetime.now() + timedelta(seconds=60))
+    is_revoked: bool = False
+    
+    # Version tracking
+    version: int = 1  # Incremented on each operation
+    
+    def is_valid(self) -> bool:
+        """Check if token is still valid for operations."""
+        if self.is_revoked:
+            return False
+        if datetime.now() > self.expires_at:
+            return False
+        return True
+    
+    def validate_for_operation(self, operation_name: str) -> tuple[bool, str]:
+        """Validate token is valid for a specific operation.
+        
+        Args:
+            operation_name: Name of the operation (erase, write, verify)
+            
+        Returns:
+            (is_valid, error_message)
+        """
+        if self.is_revoked:
+            return False, f"Token {self.token[:8]}... is revoked"
+        
+        if datetime.now() > self.expires_at:
+            return False, f"Token {self.token[:8]}... has expired"
+        
+        return True, ""
+    
+    def advance_version(self) -> None:
+        """Advance token version after successful operation."""
+        self.version += 1
+    
+    def revoke(self) -> None:
+        """Revoke this token, preventing further operations."""
+        self.is_revoked = True
+        logger.info(
+            "fence_token_revoked",
+            token=self.token[:8],
+            lock_id=self.lock_id,
+            transaction_id=self.transaction_id,
+            final_version=self.version,
+        )
 
 
 @dataclass
@@ -35,6 +112,9 @@ class FlashLock:
     
     version: int = 1
     
+    # Fencing token sequence (for token generation)
+    fence_sequence: int = 0
+    
     def is_valid(self) -> bool:
         """Check if lock is still valid."""
         return datetime.now() < self.expires_at
@@ -49,6 +129,43 @@ class FlashLock:
         self.version += 1
         return True
     
+    def issue_fence_token(
+        self,
+        transaction_id: str,
+        owner_id: str,
+    ) -> FlashFenceToken:
+        """Issue a new fencing token for flash operations.
+        
+        CRITICAL: Every flash operation MUST validate this token
+        before proceeding.
+        
+        Args:
+            transaction_id: The flash transaction ID
+            owner_id: Owner (agent/session)
+            
+        Returns:
+            FlashFenceToken for this operation
+        """
+        self.fence_sequence += 1
+        
+        token = FlashFenceToken(
+            sequence=self.fence_sequence,
+            lock_id=self.target_name,
+            transaction_id=transaction_id,
+            owner_id=owner_id,
+            expires_at=self.expires_at,
+        )
+        
+        logger.debug(
+            "fence_token_issued",
+            token=token.token[:8],
+            sequence=token.sequence,
+            lock_id=self.target_name,
+            transaction_id=transaction_id,
+        )
+        
+        return token
+    
     def to_dict(self) -> dict[str, Any]:
         """Convert to dictionary."""
         return {
@@ -57,7 +174,25 @@ class FlashLock:
             "acquired_at": self.acquired_at.isoformat(),
             "expires_at": self.expires_at.isoformat(),
             "version": self.version,
+            "fence_sequence": self.fence_sequence,
         }
+
+
+@dataclass
+class FenceValidationError(Exception):
+    """Raised when fence token validation fails."""
+    
+    operation: str
+    token_sequence: int
+    required_sequence: int
+    reason: str
+    
+    def __str__(self) -> str:
+        return (
+            f"Fence validation failed for {self.operation}: "
+            f"token_seq={self.token_sequence}, required>={self.required_sequence}, "
+            f"reason={self.reason}"
+        )
 
 
 @dataclass
@@ -281,6 +416,155 @@ class TargetFlashLock:
                 return True
             
             return False
+    
+    # =================================================================
+    # FENCING TOKEN OPERATIONS (P0)
+    # =================================================================
+    
+    async def issue_fence_token(
+        self,
+        target_name: str,
+        owner_id: str,
+        transaction_id: str,
+    ) -> FlashFenceToken | None:
+        """Issue a fencing token for flash operations.
+        
+        CRITICAL: Every flash operation (erase/write/verify) MUST
+        validate this token before proceeding to prevent split-brain.
+        
+        Args:
+            target_name: Target being locked
+            owner_id: Owner (must match lock owner)
+            transaction_id: Flash transaction ID
+            
+        Returns:
+            FlashFenceToken if lock is held by owner, None otherwise
+        """
+        async with self._lock:
+            lock = self._locks.get(target_name)
+            
+            if not lock:
+                logger.warning(
+                    "fence_token_issue_failed: no lock held",
+                    target=target_name,
+                )
+                return None
+            
+            if not lock.is_valid():
+                logger.warning(
+                    "fence_token_issue_failed: lock expired",
+                    target=target_name,
+                )
+                return None
+            
+            if lock.owner_id != owner_id:
+                logger.warning(
+                    "fence_token_issue_failed: owner mismatch",
+                    target=target_name,
+                    requested_by=owner_id,
+                    owned_by=lock.owner_id,
+                )
+                return None
+            
+            return lock.issue_fence_token(transaction_id, owner_id)
+    
+    async def validate_fence_token(
+        self,
+        target_name: str,
+        token: FlashFenceToken,
+        operation_name: str,
+    ) -> tuple[bool, str]:
+        """Validate a fence token before flash operation.
+        
+        CRITICAL: Call this BEFORE every erase/write/verify operation.
+        
+        Args:
+            target_name: Target being operated on
+            token: Fence token to validate
+            operation_name: Name of operation (erase, write, verify)
+            
+        Returns:
+            (is_valid, error_message)
+        """
+        async with self._lock:
+            lock = self._locks.get(target_name)
+            
+            # Check lock exists
+            if not lock:
+                return False, f"No lock held for {target_name}"
+            
+            # Check lock owner matches token owner
+            if lock.owner_id != token.owner_id:
+                return False, (
+                    f"Token owner mismatch: token={token.owner_id}, "
+                    f"lock={lock.owner_id}"
+                )
+            
+            # Check token validity
+            is_valid, reason = token.validate_for_operation(operation_name)
+            if not is_valid:
+                return False, reason
+            
+            # Check token sequence matches current lock sequence
+            if token.sequence < lock.fence_sequence:
+                return False, (
+                    f"Stale fence token: token_seq={token.sequence}, "
+                    f"current_seq={lock.fence_sequence}. "
+                    f"Rejecting {operation_name} to prevent split-brain."
+                )
+            
+            # Token is valid
+            return True, ""
+    
+    async def revoke_fence_token(
+        self,
+        target_name: str,
+        owner_id: str,
+    ) -> bool:
+        """Revoke the current fence token for a lock.
+        
+        Call this when a flash operation fails to prevent
+        stale operations from proceeding.
+        
+        Args:
+            target_name: Target name
+            owner_id: Owner ID
+            
+        Returns:
+            True if revoked
+        """
+        async with self._lock:
+            lock = self._locks.get(target_name)
+            
+            if not lock or lock.owner_id != owner_id:
+                return False
+            
+            # This effectively invalidates the current token
+            # New tokens will have higher sequence
+            lock.fence_sequence += 1
+            
+            logger.info(
+                "fence_token_revoked",
+                target=target_name,
+                owner=owner_id,
+                new_sequence=lock.fence_sequence,
+            )
+            
+            return True
+    
+    def get_fence_state(self, target_name: str) -> dict[str, Any] | None:
+        """Get current fence state for a target."""
+        lock = self._locks.get(target_name)
+        if not lock:
+            return None
+        
+        return {
+            "target_name": target_name,
+            "owner_id": lock.owner_id,
+            "is_valid": lock.is_valid(),
+            "fence_sequence": lock.fence_sequence,
+            "version": lock.version,
+        }
 
 
 @dataclass
@@ -288,6 +572,13 @@ class LockManager:
     """Manages flash locks and coordinates with event bus.
     
     Integrates with Phase 6.1 event bus for lock events.
+    
+    CRITICAL: Uses fencing tokens to prevent split-brain scenarios.
+    Every flash operation MUST:
+    1. Acquire lock -> get fence token
+    2. Validate token BEFORE every erase/write/verify
+    3. Advance token version after successful operation
+    4. Revoke token on failure
     """
     
     target_lock: TargetFlashLock
@@ -313,6 +604,139 @@ class LockManager:
             await self.event_bus.publish(event)
         
         return lock
+    
+    async def acquire_with_fence_token(
+        self,
+        target_name: str,
+        owner_id: str,
+        transaction_id: str,
+        timeout_seconds: float = 30.0,
+    ) -> tuple[FlashLock | None, FlashFenceToken | None]:
+        """Acquire lock and issue fence token atomically.
+        
+        This is the PREFERRED method for flash operations.
+        
+        Args:
+            target_name: Target to lock
+            owner_id: Owner (agent/session)
+            transaction_id: Flash transaction ID
+            timeout_seconds: Lock acquisition timeout
+            
+        Returns:
+            (FlashLock, FlashFenceToken) if successful, (None, None) otherwise
+        """
+        lock = await self.acquire_and_publish(target_name, owner_id, timeout_seconds)
+        
+        if not lock:
+            return None, None
+        
+        token = await self.target_lock.issue_fence_token(
+            target_name=target_name,
+            owner_id=owner_id,
+            transaction_id=transaction_id,
+        )
+        
+        if not token:
+            # Lock acquired but token issue failed - release lock
+            await self.target_lock.release(target_name, owner_id)
+            return None, None
+        
+        return lock, token
+    
+    async def validate_and_execute(
+        self,
+        target_name: str,
+        fence_token: FlashFenceToken,
+        operation_name: str,
+        operation_fn: callable,
+    ) -> Any:
+        """Validate fence token and execute operation atomically.
+        
+        This is the CRITICAL pattern for ALL flash operations:
+        
+        ```python
+        # 1. Acquire lock and token
+        lock, token = await manager.acquire_with_fence_token(
+            target_name, owner_id, transaction_id
+        )
+        
+        # 2. Execute with validation
+        result = await manager.validate_and_execute(
+            target_name, token, "write", write_fn
+        )
+        
+        # 3. Advance token on success
+        if result:
+            await manager.advance_fence_token(target_name, owner_id)
+        ```
+        
+        Args:
+            target_name: Target being operated on
+            fence_token: Token from acquire_with_fence_token
+            operation_name: Name of operation (erase, write, verify)
+            operation_fn: Async function to execute
+            
+        Returns:
+            Operation result if valid, raises FenceValidationError otherwise
+        """
+        is_valid, reason = await self.target_lock.validate_fence_token(
+            target_name=target_name,
+            token=fence_token,
+            operation_name=operation_name,
+        )
+        
+        if not is_valid:
+            raise FenceValidationError(
+                operation=operation_name,
+                token_sequence=fence_token.sequence,
+                required_sequence=fence_token.sequence,
+                reason=reason,
+            )
+        
+        result = await operation_fn()
+        
+        # Advance token version on success
+        fence_token.advance_version()
+        
+        return result
+    
+    async def advance_fence_token(
+        self,
+        target_name: str,
+        owner_id: str,
+    ) -> bool:
+        """Advance fence token version after successful operation.
+        
+        Call this after each successful erase/write/verify.
+        """
+        return await self.target_lock.revoke_fence_token(target_name, owner_id)
+    
+    async def invalidate_fence_on_failure(
+        self,
+        target_name: str,
+        owner_id: str,
+    ) -> bool:
+        """Invalidate fence tokens on operation failure.
+        
+        Call this when a flash operation fails to prevent
+        stale operations from proceeding.
+        """
+        revoked = await self.target_lock.revoke_fence_token(target_name, owner_id)
+        
+        if revoked and self.event_bus:
+            from ..event import DomainEvent
+            
+            event = DomainEvent(
+                event_type="flash.fence_invalidated",
+                source="lock_manager",
+                data={
+                    "target_name": target_name,
+                    "owner_id": owner_id,
+                },
+            )
+            await self.event_bus.publish(event)
+        
+        return revoked
     
     async def release_and_publish(
         self,
@@ -362,7 +786,7 @@ class LockManager:
         return cleaned
     
     async def get_lock_status(self, target_name: str) -> dict[str, Any]:
-        """Get detailed lock status."""
+        """Get detailed lock status including fence state."""
         lock = self.target_lock.get_lock(target_name)
         
         if not lock:
@@ -379,4 +803,5 @@ class LockManager:
             "expires_at": lock.expires_at.isoformat(),
             "remaining_seconds": max(0, (lock.expires_at - datetime.now()).total_seconds()),
             "is_valid": lock.is_valid(),
+            "fence_state": self.target_lock.get_fence_state(target_name),
         }

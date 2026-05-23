@@ -153,14 +153,34 @@ class DeterministicReplay:
         return event
     
     def _verify_determinism(self, session: ReplaySession) -> bool:
-        """Verify session is deterministic."""
+        """Verify session is deterministic.
+        
+        A session is deterministic if all event hashes are unique (no duplicate
+        events with same content). This ensures replay will produce identical results.
+        """
         if len(session.events) < 2:
             session.deterministic = True
             return True
         
-        # Check if hashes are consistent
+        # Check if hashes are unique - duplicates break determinism
         hashes = [e.deterministic_hash for e in session.events]
-        session.deterministic = len(hashes) == len(set(hashes)) or True  # Simplified
+        unique_hashes = set(hashes)
+        
+        # Deterministic only if all hashes are unique
+        session.deterministic = len(hashes) == len(unique_hashes)
+        
+        if not session.deterministic:
+            # Find duplicates for debugging
+            from collections import Counter
+            duplicates = [h for h, count in Counter(hashes).items() if count > 1]
+            logger.warning(
+                "session_not_deterministic",
+                session_id=session.session_id,
+                total_events=len(hashes),
+                unique_hashes=len(unique_hashes),
+                duplicate_count=len(duplicates),
+                duplicate_hashes=duplicates[:5],  # Log first 5
+            )
         
         return session.deterministic
     

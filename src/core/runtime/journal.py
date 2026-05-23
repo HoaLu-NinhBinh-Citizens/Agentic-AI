@@ -186,52 +186,147 @@ class EventJournal:
         return partition_path
 
     # -------------------------------------------------------------------------
-    # Write Operations
+    # Transactional Write Operations (P1)
     # -------------------------------------------------------------------------
-
-    async def append(self, event: JournalEntry) -> JournalEntry:
+    
+    async def append_transactional(
+        self,
+        events: List[JournalEntry],
+        fsync: bool = True,
+    ) -> tuple[List[JournalEntry], bool]:
+        """Append events transactionally with durability guarantee.
+        
+        All events are written atomically or none are written.
+        Optionally forces fsync to ensure durability.
+        
+        Args:
+            events: Events to append
+            fsync: Force fsync after write (ensures durability)
+            
+        Returns:
+            (List of appended entries, success)
+        """
+        if not events:
+            return [], True
+        
+        import tempfile
+        import os
+        
+        async with self._write_lock:
+            # Prepare entries with metadata
+            prepared_events = []
+            partition_name = None
+            partition_path = None
+            
+            for i, event in enumerate(events):
+                # Use same partition for all events in transaction
+                if partition_name is None:
+                    partition_name = self._get_partition_name(event.timestamp)
+                    partition_path = self._get_partition_path(partition_name)
+                
+                event.offset = self._current_offset + i
+                event.partition = partition_name
+                event.checksum = event.compute_checksum()
+                event.version = self.schema_version
+                prepared_events.append(event)
+            
+            # Write to temp file first (atomic write)
+            temp_fd = None
+            temp_path = None
+            try:
+                temp_fd, temp_path = tempfile.mkstemp(
+                    dir=str(self.journal_dir),
+                    prefix=".journal_temp_",
+                )
+                
+                with os.fdopen(temp_fd, "w", encoding="utf-8") as f:
+                    for event in prepared_events:
+                        line = json.dumps(event.to_dict(), ensure_ascii=False) + "\n"
+                        f.write(line)
+                    
+                    if fsync:
+                        f.flush()
+                        os.fsync(f.fileno())
+                
+                temp_fd = None  # File handle closed, don't close again
+                
+                # Atomic rename to final location
+                target_path = partition_path or self._get_partition_path(partition_name)
+                
+                # Ensure parent directory exists
+                target_path.parent.mkdir(parents=True, exist_ok=True)
+                
+                if target_path.exists():
+                    # Append to existing file
+                    with open(target_path, "a", encoding="utf-8") as f:
+                        with open(temp_path, "r", encoding="utf-8") as temp:
+                            for line in temp:
+                                f.write(line)
+                        if fsync:
+                            f.flush()
+                            os.fsync(f.fileno())
+                else:
+                    # Move temp file to final location
+                    os.rename(temp_path, target_path)
+                    temp_path = None  # Don't delete, it's now the target
+                
+                # Update offset
+                self._current_offset += len(events)
+                
+                # Check for rotation
+                if target_path.stat().st_size >= self.max_file_size_bytes:
+                    self._current_partition = None  # Force new partition
+                
+                logger.info(
+                    "Transactional append completed: %d events, partition=%s, fsync=%s",
+                    len(events),
+                    partition_name,
+                    fsync,
+                )
+                
+                return prepared_events, True
+                
+            except Exception as e:
+                logger.error("Transactional append failed: %s", e)
+                return [], False
+                
+            finally:
+                # Clean up temp file if it still exists
+                if temp_fd is not None:
+                    try:
+                        os.close(temp_fd)
+                    except OSError:
+                        pass
+                if temp_path and os.path.exists(temp_path):
+                    try:
+                        os.unlink(temp_path)
+                    except OSError:
+                        pass
+    
+    async def append(self, event: JournalEntry, fsync: bool = False) -> JournalEntry:
         """
         Append an event to the journal.
-
+        
+        For guaranteed durability, use append_transactional() instead.
+        
         Args:
             event: Event to journal
+            fsync: Force fsync after write (for durability)
 
         Returns:
             JournalEntry with offset and checksum set
         """
-        async with self._write_lock:
-            # Set metadata
-            event.offset = self._current_offset
-            event.partition = self._get_partition_name(event.timestamp)
-            event.checksum = event.compute_checksum()
-            event.version = self.schema_version
-
-            # Get partition
-            partition_path = self._get_or_create_partition(event.timestamp)
-
-            # Write entry
-            line = json.dumps(event.to_dict(), ensure_ascii=False) + "\n"
-            with open(partition_path, "a", encoding="utf-8") as f:
-                f.write(line)
-
-            self._current_offset += 1
-
-            # Check for rotation
-            if partition_path.stat().st_size >= self.max_file_size_bytes:
-                self._current_partition = None  # Force new partition
-
-            logger.debug(
-                "Appended event %s to partition %s at offset %d",
-                event.id,
-                event.partition,
-                event.offset,
-            )
-
-            return event
-
+        # Use single-event transaction for compatibility
+        events, success = await self.append_transactional([event], fsync=fsync)
+        if success and events:
+            return events[0]
+        raise IOError("Failed to append event")
+    
     async def append_batch(self, events: List[JournalEntry]) -> List[JournalEntry]:
         """
         Append multiple events in a batch.
+        
+        For guaranteed durability, use append_transactional() instead.
 
         Args:
             events: Events to journal
@@ -239,10 +334,9 @@ class EventJournal:
         Returns:
             List of journaled entries
         """
-        results = []
-        for event in events:
-            result = await self.append(event)
-            results.append(result)
+        results, success = await self.append_transactional(events, fsync=False)
+        if not success:
+            raise IOError("Failed to append batch")
         return results
 
     # -------------------------------------------------------------------------

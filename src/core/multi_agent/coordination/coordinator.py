@@ -232,11 +232,12 @@ class MultiAgentCoordinator:
             enabled=config.dead_letter_alert.enabled,
         )
         
-        # Agent registry
+        # Agent registry - PROTECTED BY LOCK
         self._agents: Dict[str, Dict[str, Any]] = {}
         self._locks: Dict[str, asyncio.Lock] = {}
+        self._agents_lock = asyncio.Lock()  # Protect _agents dict access
         
-        # Task tracking
+        # Task tracking - PROTECTED BY LOCK
         self._pending_tasks: Dict[str, DelegationRequest] = {}
         self._completed_tasks: Dict[str, DelegationResponse] = {}
         self._task_counter = 0
@@ -297,39 +298,56 @@ class MultiAgentCoordinator:
         endpoint: Optional[str] = None,
         metadata: Optional[Dict[str, Any]] = None,
     ) -> None:
-        """Register an agent with the coordinator."""
-        self._agents[agent_id] = {
-            "agent_id": agent_id,
-            "agent_type": agent_type,
-            "capabilities": capabilities,
-            "endpoint": endpoint,
-            "metadata": metadata or {},
-            "registered_at": datetime.now(),
-            "status": HealthStatus.HEALTHY,
-        }
-        self._locks[agent_id] = asyncio.Lock()
+        """Register an agent with the coordinator.
+        
+        THREAD SAFETY: Uses _agents_lock to prevent race conditions.
+        """
+        async with self._agents_lock:
+            self._agents[agent_id] = {
+                "agent_id": agent_id,
+                "agent_type": agent_type,
+                "capabilities": capabilities,
+                "endpoint": endpoint,
+                "metadata": metadata or {},
+                "registered_at": datetime.now(),
+                "status": HealthStatus.HEALTHY,
+            }
+            self._locks[agent_id] = asyncio.Lock()
         
         logger.info(f"Registered agent: {agent_id} (type={agent_type})")
     
     async def unregister_agent(self, agent_id: str) -> None:
-        """Unregister an agent."""
-        if agent_id in self._agents:
-            del self._agents[agent_id]
+        """Unregister an agent.
+        
+        THREAD SAFETY: Uses _agents_lock to prevent race conditions.
+        """
+        async with self._agents_lock:
+            if agent_id in self._agents:
+                del self._agents[agent_id]
             if agent_id in self._locks:
                 del self._locks[agent_id]
-            logger.info(f"Unregistered agent: {agent_id}")
+        
+        logger.info(f"Unregistered agent: {agent_id}")
     
     async def get_agent(self, agent_id: str) -> Optional[Dict[str, Any]]:
-        """Get agent information."""
-        return self._agents.get(agent_id)
+        """Get agent information.
+        
+        THREAD SAFETY: Read operation with lock.
+        """
+        async with self._agents_lock:
+            return self._agents.get(agent_id)
     
     async def list_agents(
         self,
         agent_type: Optional[str] = None,
         capability: Optional[str] = None,
     ) -> List[Dict[str, Any]]:
-        """List registered agents with optional filtering."""
-        agents = list(self._agents.values())
+        """List registered agents with optional filtering.
+        
+        THREAD SAFETY: Read operation with lock.
+        """
+        async with self._agents_lock:
+            agents = list(self._agents.values())
         
         if agent_type:
             agents = [a for a in agents if a["agent_type"] == agent_type]
@@ -344,10 +362,14 @@ class MultiAgentCoordinator:
         agent_id: str,
         status: HealthStatus,
     ) -> None:
-        """Update agent health status."""
-        if agent_id in self._agents:
-            self._agents[agent_id]["status"] = status
-            self._agents[agent_id]["last_status_update"] = datetime.now()
+        """Update agent health status.
+        
+        THREAD SAFETY: Write operation with lock.
+        """
+        async with self._agents_lock:
+            if agent_id in self._agents:
+                self._agents[agent_id]["status"] = status
+                self._agents[agent_id]["last_status_update"] = datetime.now()
     
     # =============================================================================
     # Task Delegation
@@ -755,10 +777,16 @@ class MultiAgentCoordinator:
         }
     
     def _count_agents_by_type(self) -> Dict[str, int]:
-        """Count agents by type."""
+        """Count agents by type.
+        
+        THREAD SAFETY: Read operation with lock.
+        """
+        # Note: This is called from get_metrics which is sync, need to handle carefully
+        # For now, make a copy of agents
+        agents_copy = list(self._agents.values()) if hasattr(self, '_agents') else []
         counts = {}
-        for agent in self._agents.values():
-            agent_type = agent["agent_type"]
+        for agent in agents_copy:
+            agent_type = agent.get("agent_type", "unknown")
             counts[agent_type] = counts.get(agent_type, 0) + 1
         return counts
     

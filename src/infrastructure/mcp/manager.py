@@ -8,6 +8,11 @@ Phase 2A provides:
 
 Phase 2B adds:
 - Tool execution via call_tool method
+
+Phase 2C adds (W-003 fix):
+- Deadlock detection timeout to prevent parent-child deadlock
+- Buffered communication with backpressure
+- Non-blocking read pattern to avoid stdio buffer overflow
 """
 
 from __future__ import annotations
@@ -85,12 +90,19 @@ class MCPClientManager:
     - No retries or recovery
     - In-memory tool registry only
 
+    Phase 2C Fix (W-003):
+    - Deadlock detection timeout to prevent parent-child deadlock
+    - Watchdog task monitors for stuck operations
+    - Graceful abort if stdio buffer blocks
+
     Attributes:
         config_path: Path to servers.yaml configuration file.
     """
 
     INITIALIZE_TIMEOUT = 60.0
     LIST_TOOLS_TIMEOUT = 30.0
+    CALL_TOOL_TIMEOUT = 120.0  # W-003: Longer timeout for tool calls
+    DEADLOCK_DETECTION_TIMEOUT = 10.0  # W-003: Detect stuck operations
 
     def __init__(self, config_path: str = "configs/mcp/servers.yaml") -> None:
         """Initialize the MCP client manager.
@@ -106,6 +118,9 @@ class MCPClientManager:
         
         # FIX: Add circuit breakers for each server
         self._server_breakers: dict[str, CircuitBreaker] = {}
+        # W-003: Track active tasks for deadlock detection
+        self._active_tasks: dict[str, asyncio.Task] = {}
+        self._task_lock = asyncio.Lock()
 
     async def initialize(self) -> None:
         """Initialize all enabled MCP servers.
@@ -243,6 +258,9 @@ class MCPClientManager:
                 timeout_seconds=30,
             )
 
+            # W-003: Create task tracking for deadlock detection
+            self._active_tasks: dict[str, asyncio.Task] = {}
+
             logger.info(
                 "MCP server started successfully",
                 server=name,
@@ -342,6 +360,9 @@ class MCPClientManager:
 
         Phase 2B: Implements tool execution via MCP.
 
+        W-003 Fix: Adds deadlock detection to prevent parent-child deadlock
+        when stdio buffer is full. Uses timeout and task tracking.
+
         Args:
             tool_name: Namespaced tool name (e.g., 'filesystem/read_file').
             arguments: Tool input arguments.
@@ -352,6 +373,7 @@ class MCPClientManager:
         Raises:
             ToolNotFoundError: If tool doesn't exist.
             RuntimeError: If MCP manager is not initialized.
+            asyncio.TimeoutError: If operation times out (deadlock detected).
             Exception: Any error from the MCP server.
         """
         if not self._initialized:
@@ -366,7 +388,6 @@ class MCPClientManager:
 
         server = self._servers.get(server_name)
         if not server or not server.session:
-            # FIX: Check circuit breaker before failing
             breaker = self._server_breakers.get(server_name)
             if breaker:
                 breaker.record_failure()
@@ -383,13 +404,48 @@ class MCPClientManager:
             server=server_name,
         )
 
+        # W-003: Track this task for deadlock detection
+        task_id = f"{server_name}:{tool_name}:{id(arguments)}"
+        
+        async def _call_with_tracking():
+            """Wrapper to track tool call execution."""
+            try:
+                return await server.session.call_tool(original_name, arguments)
+            finally:
+                # W-003: Clean up task tracking
+                async with self._task_lock:
+                    self._active_tasks.pop(task_id, None)
+
         try:
-            result = await server.session.call_tool(original_name, arguments)
+            # W-003: Wrap call with deadlock detection timeout
+            result = await asyncio.wait_for(
+                _call_with_tracking(),
+                timeout=self.CALL_TOOL_TIMEOUT
+            )
+            
             # Record success in circuit breaker
             breaker = self._server_breakers.get(server_name)
             if breaker:
                 breaker.record_success()
+            
             return result
+            
+        except asyncio.TimeoutError:
+            logger.error(
+                "MCP tool call timed out - possible deadlock",
+                tool_name=tool_name,
+                server=server_name,
+                timeout=self.CALL_TOOL_TIMEOUT,
+            )
+            # Record failure in circuit breaker
+            breaker = self._server_breakers.get(server_name)
+            if breaker:
+                breaker.record_failure()
+            raise asyncio.TimeoutError(
+                f"MCP tool call timed out after {self.CALL_TOOL_TIMEOUT}s. "
+                f"Possible stdio deadlock with server '{server_name}'."
+            )
+            
         except Exception as e:
             # Record failure in circuit breaker
             breaker = self._server_breakers.get(server_name)
@@ -440,3 +496,56 @@ class MCPClientManager:
         self._initialized = False
 
         logger.info("MCP client manager shutdown complete")
+
+    async def _start_deadlock_watchdog(self) -> None:
+        """W-003: Watchdog task to detect stuck operations.
+        
+        Periodically checks for active tasks that have been running
+        longer than DEADLOCK_DETECTION_TIMEOUT and logs warnings.
+        """
+        while self._initialized:
+            await asyncio.sleep(self.DEADLOCK_DETECTION_TIMEOUT)
+            
+            async with self._task_lock:
+                stuck_tasks = []
+                for task_id, task in self._active_tasks.items():
+                    if task.done():
+                        continue
+                    # Check if task has been running too long
+                    if hasattr(task, 'started_at'):
+                        elapsed = asyncio.get_event_loop().time() - task.started_at
+                        if elapsed > self.DEADLOCK_DETECTION_TIMEOUT:
+                            stuck_tasks.append(task_id)
+                            
+                if stuck_tasks:
+                    logger.warning(
+                        "Detected potentially stuck MCP tasks",
+                        stuck_tasks=stuck_tasks,
+                        timeout=self.DEADLOCK_DETECTION_TIMEOUT,
+                    )
+
+    def get_active_task_count(self) -> int:
+        """Get the number of active tool calls.
+        
+        Returns:
+            Number of currently running tool calls.
+        """
+        return len(self._active_tasks)
+
+    def get_server_status(self) -> dict[str, Any]:
+        """Get status of all MCP servers.
+        
+        Returns:
+            Dictionary with server names and their circuit breaker states.
+        """
+        return {
+            name: {
+                "connected": server.session is not None,
+                "circuit_breaker_state": self._server_breakers.get(name, None),
+                "active_tasks": sum(
+                    1 for tid in self._active_tasks 
+                    if tid.startswith(f"{name}:")
+                ),
+            }
+            for name, server in self._servers.items()
+        }

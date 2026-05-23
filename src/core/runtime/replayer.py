@@ -1,6 +1,12 @@
 """
 Event Replayer - Replay Events from Journal
 
+W-001 Fixes Applied:
+- Checksum validation for replay determinism
+- Deterministic ordering constraints
+- Wall-clock vs logical-clock handling
+- Replay verification at end of replay
+
 Provides event replay capabilities:
 - Replay events from journal offset
 - Filter by event type, source, time range
@@ -10,6 +16,7 @@ Provides event replay capabilities:
 """
 
 import asyncio
+import hashlib
 import logging
 from dataclasses import dataclass, field
 from datetime import datetime
@@ -38,6 +45,11 @@ class ReplayResult:
     errors: List[str] = field(default_factory=list)
     warnings: List[str] = field(default_factory=list)
     success: bool = True
+    # W-001: Determinism verification fields
+    checksum: str = ""  # SHA256 of event sequence
+    verification_checksum: str = ""  # Recomputed checksum for verification
+    is_deterministic: bool = True  # Set to False if checksums don't match
+    event_order_valid: bool = True  # Checks if events are in order
 
     def to_dict(self) -> Dict[str, Any]:
         return {
@@ -49,6 +61,11 @@ class ReplayResult:
             "errors": self.errors,
             "warnings": self.warnings,
             "success": self.success,
+            # W-001: Determinism fields
+            "checksum": self.checksum,
+            "verification_checksum": self.verification_checksum,
+            "is_deterministic": self.is_deterministic,
+            "event_order_valid": self.event_order_valid,
         }
 
 
@@ -64,6 +81,50 @@ class EventReplayer:
             "total_events_replayed": 0,
             "total_errors": 0,
         }
+        # W-001: Deterministic replay state
+        self._checksum_state = hashlib.sha256()
+        self._logical_clock = 0  # For deterministic ordering
+        self._expected_sequence: List[int] = []  # Expected event offsets
+        self._last_offset = -1  # Track last processed offset
+
+    def _compute_event_checksum(self, entry) -> str:
+        """W-001: Compute checksum for a single event.
+        
+        Includes: offset, event_type, source, and deterministic payload.
+        Excludes: timestamp (wall-clock varies) and checksum itself.
+        """
+        hasher = hashlib.sha256()
+        # Deterministic fields only
+        hasher.update(str(entry.offset).encode())
+        hasher.update(entry.event_type.encode())
+        if entry.source:
+            hasher.update(entry.source.encode())
+        # Use logical clock for ordering verification
+        hasher.update(str(self._logical_clock).encode())
+        return hasher.hexdigest()
+
+    def _validate_offset_order(self, entry) -> bool:
+        """W-001: Validate that events are processed in deterministic order.
+        
+        Returns:
+            True if offset is >= last processed offset (correct order).
+        """
+        if entry.offset < self._last_offset:
+            logger.warning(
+                "Offset regression detected during replay",
+                current_offset=entry.offset,
+                last_offset=self._last_offset,
+            )
+            return False
+        self._last_offset = entry.offset
+        return True
+
+    def _reset_deterministic_state(self) -> None:
+        """W-001: Reset deterministic verification state before replay."""
+        self._checksum_state = hashlib.sha256()
+        self._logical_clock = 0
+        self._expected_sequence = []
+        self._last_offset = -1
 
     def register_handler(self, event_type: str, handler: Callable[[Dict[str, Any]], Any]) -> None:
         self._handlers[event_type] = handler
@@ -89,7 +150,9 @@ class EventReplayer:
         max_events: int = 0,
         dry_run: bool = False,
         progress_callback: Optional[Callable[[int, int], None]] = None,
+        verify_determinism: bool = True,  # W-001: New parameter
     ) -> ReplayResult:
+        """W-001: Added verify_determinism parameter for deterministic verification."""
         if self._is_replaying:
             logger.warning("Replay already in progress")
             result = ReplayResult()
@@ -100,6 +163,10 @@ class EventReplayer:
         self._is_replaying = True
         self._replay_start_time = datetime.now()
         self._current_offset = from_offset
+        
+        # W-001: Reset deterministic state
+        if verify_determinism:
+            self._reset_deterministic_state()
 
         result = ReplayResult()
         start_time = asyncio.get_event_loop().time()
@@ -126,6 +193,12 @@ class EventReplayer:
                 if entry.offset < from_offset:
                     continue
 
+                # W-001: Validate offset order for determinism
+                if verify_determinism and not self._validate_offset_order(entry):
+                    result.event_order_valid = False
+                    result.is_deterministic = False
+                    result.warnings.append(f"Offset order violation at offset {entry.offset}")
+
                 if replay_filter and replay_filter.predicate:
                     if not replay_filter.predicate(entry.to_dict()):
                         result.events_filtered += 1
@@ -144,6 +217,12 @@ class EventReplayer:
                         else:
                             await handler(entry.to_dict())
 
+                    # W-001: Update checksum for deterministic verification
+                    if verify_determinism:
+                        event_checksum = self._compute_event_checksum(entry)
+                        self._checksum_state.update(event_checksum.encode())
+                        self._logical_clock += 1
+
                     result.events_replayed += 1
                     result.final_offset = entry.offset
 
@@ -161,6 +240,23 @@ class EventReplayer:
 
                 if progress_callback and total_events > 0:
                     progress_callback(processed, total_events)
+
+            # W-001: Finalize determinism verification
+            if verify_determinism:
+                result.checksum = self._checksum_state.hexdigest()
+                result.verification_checksum = self._compute_sequence_checksum(entries, from_offset)
+                result.is_deterministic = (
+                    result.checksum == result.verification_checksum and
+                    result.event_order_valid and
+                    result.events_failed == 0
+                )
+                
+                if not result.is_deterministic:
+                    result.warnings.append(
+                        "Replay may not be deterministic - checksums don't match "
+                        f"or events failed. Expected: {result.verification_checksum[:16]}..., "
+                        f"Got: {result.checksum[:16]}..."
+                    )
 
             self._stats["total_replays"] += 1
             self._stats["total_events_replayed"] += result.events_replayed
@@ -183,8 +279,36 @@ class EventReplayer:
             result.events_filtered,
             result.duration_ms,
         )
+        
+        # W-001: Log determinism status
+        if verify_determinism:
+            logger.info(
+                "Determinism verification: %s (checksum: %s...)",
+                "PASSED" if result.is_deterministic else "FAILED",
+                result.checksum[:16] if result.checksum else "N/A",
+            )
 
         return result
+
+    def _compute_sequence_checksum(self, entries: List, from_offset: int) -> str:
+        """W-001: Compute expected checksum for verification.
+        
+        Recomputes checksum from entries for comparison.
+        """
+        hasher = hashlib.sha256()
+        logical_clock = 0
+        
+        for entry in entries:
+            if entry.offset < from_offset:
+                continue
+            hasher.update(str(entry.offset).encode())
+            hasher.update(entry.event_type.encode())
+            if entry.source:
+                hasher.update(entry.source.encode())
+            hasher.update(str(logical_clock).encode())
+            logical_clock += 1
+            
+        return hasher.hexdigest()
 
     async def replay_partition(
         self,
