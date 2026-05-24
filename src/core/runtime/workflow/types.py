@@ -5,11 +5,163 @@ Defines all data structures for durable workflow execution.
 
 from __future__ import annotations
 
+import hashlib
 import time
 import uuid
 from dataclasses import dataclass, field
 from enum import Enum
 from typing import Any, Optional, Callable, List
+
+
+# =============================================================================
+# DETERMINISTIC ID/TIME GENERATION
+# =============================================================================
+# P0-A: CRITICAL - These must be used for deterministic replay
+
+def deterministic_uuid(seed: str) -> str:
+    """Generate deterministic UUID from seed string.
+    
+    Uses MD5 hash of seed to generate a reproducible UUID.
+    Use this instead of uuid.uuid4() for workflow/event IDs.
+    
+    Args:
+        seed: A deterministic string (e.g., "workflow_id:sequence")
+        
+    Returns:
+        Deterministic UUID string.
+    """
+    hash_digest = hashlib.md5(seed.encode()).hexdigest()
+    return f"{hash_digest[:8]}-{hash_digest[8:12]}-{hash_digest[12:16]}-{hash_digest[16:20]}-{hash_digest[20:32]}"
+
+
+def deterministic_event_id(workflow_id: str, sequence: int) -> str:
+    """Generate deterministic event ID from workflow_id and sequence."""
+    return deterministic_uuid(f"{workflow_id}:event:{sequence}")
+
+
+def deterministic_activity_id(workflow_id: str, sequence: int) -> str:
+    """Generate deterministic activity ID from workflow_id and sequence."""
+    return deterministic_uuid(f"{workflow_id}:activity:{sequence}")
+
+
+def deterministic_child_id(workflow_id: str, sequence: int) -> str:
+    """Generate deterministic child workflow ID from workflow_id and sequence."""
+    return deterministic_uuid(f"{workflow_id}:child:{sequence}")
+
+
+def deterministic_token_id(lock_id: str, sequence: int) -> str:
+    """Generate deterministic fence token ID."""
+    return deterministic_uuid(f"{lock_id}:token:{sequence}")
+
+
+# =============================================================================
+# FACTORY FUNCTIONS FOR DETERMINISTIC OBJECTS
+# =============================================================================
+# P0-A: CRITICAL - Use these factory functions instead of default_factory
+
+
+def create_workflow_event(
+    workflow_id: str,
+    sequence: int,
+    event_type: EventType,
+    event_data: dict[str, Any] = None,
+) -> "WorkflowEvent":
+    """Create workflow event with deterministic ID.
+    
+    Args:
+        workflow_id: The workflow ID
+        sequence: Event sequence number
+        event_type: Type of event
+        event_data: Optional event data
+        
+    Returns:
+        WorkflowEvent with deterministic ID
+    """
+    return WorkflowEvent(
+        event_id=deterministic_event_id(workflow_id, sequence),
+        workflow_id=workflow_id,
+        event_type=event_type,
+        sequence=sequence,
+        event_data=event_data or {},
+    )
+
+
+def create_workflow_instance(
+    workflow_id: str,
+    workflow_type: str,
+    input: dict[str, Any] = None,
+) -> "WorkflowInstance":
+    """Create workflow instance with deterministic ID.
+    
+    Args:
+        workflow_id: The workflow ID (should be deterministic)
+        workflow_type: Type of workflow
+        input: Optional input data
+        
+    Returns:
+        WorkflowInstance with deterministic ID
+    """
+    return WorkflowInstance(
+        workflow_id=workflow_id,
+        workflow_type=workflow_type,
+        input=input or {},
+        next_sequence=1,
+    )
+
+
+def create_activity_task(
+    workflow_id: str,
+    sequence: int,
+    activity_type: str,
+    input: dict[str, Any] = None,
+    idempotency_key: str = None,
+) -> "ActivityTask":
+    """Create activity task with deterministic ID.
+    
+    P0-A: This function ensures activity tasks have deterministic IDs
+    for Temporal-grade replay correctness.
+    
+    Args:
+        workflow_id: The workflow ID
+        sequence: Task sequence number
+        activity_type: Type of activity
+        input: Optional input data
+        idempotency_key: Optional idempotency key
+        
+    Returns:
+        ActivityTask with deterministic ID
+    """
+    return ActivityTask(
+        task_id=deterministic_activity_id(workflow_id, sequence),
+        activity_id=f"{workflow_id}:{activity_type}:{sequence}",
+        workflow_id=workflow_id,
+        activity_type=activity_type,
+        input=input or {},
+        idempotency_key=idempotency_key or f"{workflow_id}:{activity_type}:{sequence}",
+    )
+
+
+# =============================================================================
+# DEPRECATION WARNINGS FOR NON-DETERMINISTIC DEFAULTS
+# =============================================================================
+# P0-A: WARNING - These default_factory values are NOT deterministic!
+# 
+# WARNING: Using default_factory for IDs and timestamps will cause
+# non-deterministic replay failures. These defaults are provided ONLY
+# for backward compatibility and simple use cases.
+#
+# FOR PRODUCTION: Use the factory functions above:
+#   - create_workflow_instance() instead of direct instantiation
+#   - create_activity_task() instead of direct instantiation
+#   - create_workflow_event() instead of direct instantiation
+#
+# The only acceptable use of time.time() and uuid.uuid4() defaults
+# is for INFRASTRUCTURE objects (not workflow state):
+#   - Dead letter queue items (DLQ)
+#   - Audit logs (external)
+#   - Metrics/counters (aggregated)
+#
+# Workflow state objects MUST use deterministic IDs/timestamps.
 
 
 class WorkflowStatus(str, Enum):

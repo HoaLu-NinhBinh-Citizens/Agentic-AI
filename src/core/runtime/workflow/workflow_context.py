@@ -186,7 +186,7 @@ class WorkflowContext:
         
         Protocol:
         - During NEW execution: generate deterministic ID from sequence
-        - During REPLAY: must return ID from event history
+        - During REPLAY: return ID from event history
         
         Returns:
             Deterministic activity ID string.
@@ -194,17 +194,25 @@ class WorkflowContext:
         # Check if we're in replay mode with history
         if self._replay_mode and self._event_store:
             # In replay, we need to get the activity_id from history
-            # This should be handled by the runtime when emitting events
-            pass
+            # Find the next activity_scheduled event in history
+            history_id = self._event_store.get_next_activity_id_from_history(
+                self.workflow_instance.workflow_id,
+                len([c for c in self._emitted_commands 
+                     if c.command_type == "schedule_activity"])
+            )
+            if history_id:
+                return history_id
         
-        # Generate deterministic ID based on workflow sequence
+        # Generate deterministic ID based on workflow ID and sequence
         # Format: {workflow_id}:activity:{sequence}
-        seq = self.workflow_instance.next_sequence
         activity_seq = len([c for c in self._emitted_commands 
                            if c.command_type == "schedule_activity"])
         
-        # Use deterministic UUID generation based on workflow ID and sequence
-        return self.uuid()
+        # P0-A: Use deterministic ID generation instead of uuid.uuid4()
+        base = f"{self.workflow_instance.workflow_id}:activity:{activity_seq}"
+        import hashlib
+        hash_digest = hashlib.md5(base.encode()).hexdigest()
+        return f"{hash_digest[:8]}-{hash_digest[8:12]}-{hash_digest[12:16]}-{hash_digest[16:20]}-{hash_digest[20:32]}"
     
     def _next_child_id(self, child_workflow_name: str) -> str:
         """Generate deterministic child workflow ID for replay correctness.
@@ -218,10 +226,21 @@ class WorkflowContext:
         # Check replay mode - in replay, IDs should come from history
         if self._replay_mode and self._event_store:
             # In replay, we get child IDs from event history
-            pass
+            history_id = self._event_store.get_next_child_id_from_history(
+                self.workflow_instance.workflow_id,
+                len([c for c in self._emitted_commands 
+                     if c.command_type == "start_child"])
+            )
+            if history_id:
+                return history_id
         
-        # Use deterministic UUID generation
-        return self.uuid()
+        # P0-A: Use deterministic ID generation instead of uuid.uuid4()
+        child_seq = len([c for c in self._emitted_commands 
+                        if c.command_type == "start_child"])
+        base = f"{self.workflow_instance.workflow_id}:child:{child_seq}"
+        import hashlib
+        hash_digest = hashlib.md5(base.encode()).hexdigest()
+        return f"{hash_digest[:8]}-{hash_digest[8:12]}-{hash_digest[12:16]}-{hash_digest[16:20]}-{hash_digest[20:32]}"
     
     async def wait_for_signal(
         self,
@@ -650,8 +669,15 @@ class WorkflowContext:
         CRITICAL: Must NEVER call time.time() here as it violates
         Temporal-grade deterministic replay contract.
         
-        During replay: returns time from event history.
-        During new execution: returns workflow's event-time counter.
+        P0-A: This is the CORRECT way to get time in workflow code.
+        NEVER use time.time() or datetime.now() directly in workflows.
+        
+        Protocol:
+        - During REPLAY: returns time from event history (event time, not wall time)
+        - During NEW execution: returns base_time + (event_count * 0.001)
+        
+        Returns:
+            Deterministic time value in seconds.
         """
         # During replay, return time from event history
         if self._replay_mode and self._event_store:
@@ -661,16 +687,19 @@ class WorkflowContext:
         
         # During new execution, use workflow's internal event counter
         # This is deterministic because it increments with each command
-        if hasattr(self.workflow_instance, 'started_at'):
-            # Return base time + scaled event counter for monotonic behavior
+        if hasattr(self.workflow_instance, 'started_at') and self.workflow_instance.started_at > 0:
+            # P0-A: Deterministic time from event sequence
+            # Event count * 1ms = deterministic offset from base time
             base = self.workflow_instance.started_at
             event_offset = self.workflow_instance.next_sequence * 0.001  # 1ms per event
             return base + event_offset
         
-        # CRITICAL: Should never reach here in production
-        # If we do, use a deterministic fallback based on workflow ID
+        # CRITICAL: This should NEVER happen in production
+        # P0-A VIOLATION: If we reach here, we're not properly initialized
+        # This means started_at was never set or is invalid
         raise NonDeterministicError(
-            "Workflow now() called before started_at is set. "
+            "P0-A VIOLATION: Workflow now() called without valid started_at. "
+            "Workflow must be initialized with a deterministic started_at value. "
             "This is a Temporal-grade violation - workflow must be initialized before execution."
         )
     

@@ -5,12 +5,19 @@ Phase 6.2: Implements distributed flash locking for:
 - Automatic lease renewal
 - Lock timeout handling
 - Integration with event bus
-- Fencing token for flash operations (P0)
+- Fencing token for flash operations (P0-C)
+
+P0-C Requirements:
+- NO silent Redis→Memory fallback (fail-fast)
+- Fencing token enforced at probe adapter boundary
+- Token validated on EVERY write operation
+- Token logged to operation ledger
 """
 
 from __future__ import annotations
 
 import asyncio
+import hashlib
 import json
 import logging
 import os
@@ -22,6 +29,21 @@ from typing import Any, Optional
 logger = logging.getLogger(__name__)
 
 
+# =============================================================================
+# DETERMINISTIC TOKEN ID (P0-A alignment)
+# =============================================================================
+
+
+def deterministic_fence_token(lock_id: str, sequence: int) -> str:
+    """Generate deterministic fence token ID.
+    
+    P0-A: Uses MD5 hash instead of random UUID for deterministic replay.
+    """
+    base = f"{lock_id}:fence:{sequence}"
+    digest = hashlib.md5(base.encode()).hexdigest()
+    return f"{digest[:8]}-{digest[8:12]}-{digest[12:16]}-{digest[16:20]}-{digest[20:32]}"
+
+
 @dataclass
 class FlashFenceToken:
     """Fencing token for flash operations.
@@ -29,6 +51,8 @@ class FlashFenceToken:
     CRITICAL: This token MUST be validated at EVERY flash operation
     (erase, write, verify) to prevent split-brain scenarios where
     stale operations overwrite newer data.
+    
+    P0-C: Token uses deterministic ID for replay correctness.
     
     The token contains:
     - A monotonically increasing sequence number
@@ -43,11 +67,13 @@ class FlashFenceToken:
        - Pass token to operation
     3. On operation failure, token becomes invalid
     """
-    token: str = field(default_factory=lambda: str(uuid.uuid4()))
     sequence: int = 0  # Monotonically increasing
     lock_id: str = ""  # Target lock ID
     transaction_id: str = ""  # Owning transaction
     owner_id: str = ""  # Owner (agent/session)
+    
+    # P0-C: Deterministic token ID (derived from lock_id + sequence)
+    token: str = ""
     
     # Validity
     issued_at: datetime = field(default_factory=datetime.now)
@@ -56,6 +82,11 @@ class FlashFenceToken:
     
     # Version tracking
     version: int = 1  # Incremented on each operation
+    
+    def __post_init__(self) -> None:
+        """Generate deterministic token ID if not provided."""
+        if not self.token and self.lock_id and self.sequence >= 0:
+            self.token = deterministic_fence_token(self.lock_id, self.sequence)
     
     def is_valid(self) -> bool:
         """Check if token is still valid for operations."""
@@ -75,10 +106,10 @@ class FlashFenceToken:
             (is_valid, error_message)
         """
         if self.is_revoked:
-            return False, f"Token {self.token[:8]}... is revoked"
+            return False, f"Token {self.token[:8] if self.token else 'N/A'}... is revoked"
         
         if datetime.now() > self.expires_at:
-            return False, f"Token {self.token[:8]}... has expired"
+            return False, f"Token {self.token[:8] if self.token else 'N/A'}... has expired"
         
         return True, ""
     
@@ -91,7 +122,7 @@ class FlashFenceToken:
         self.is_revoked = True
         logger.info(
             "fence_token_revoked",
-            token=self.token[:8],
+            token=self.token[:8] if self.token else "N/A",
             lock_id=self.lock_id,
             transaction_id=self.transaction_id,
             final_version=self.version,
@@ -204,14 +235,20 @@ class TargetFlashLock:
     - Automatic lease renewal
     - Distributed lock support (Redis)
     - Lock timeout handling
+    - Fencing tokens for split-brain prevention (P0-C)
+    
+    P0-C CRITICAL:
+    - Default fail_if_redis_unavailable=True for production safety
+    - Silent memory fallback is ONLY allowed for single-node testing
+    - ALL flash operations MUST validate fence token
     """
     
     lock_storage: str = "memory"  # "memory", "file", "redis"
     lock_dir: str = "/tmp/aisupport/locks"
     redis_url: str = "redis://localhost:6379"
     
-    # CRITICAL: Fail-fast behavior for distributed locking
-    # Set to True to reject lock operations if Redis is unavailable
+    # P0-C: CRITICAL - Default to True for production safety
+    # Set to False ONLY for single-node testing with in-memory locks
     fail_if_redis_unavailable: bool = True
     
     lease_timeout_seconds: int = 60
@@ -227,6 +264,14 @@ class TargetFlashLock:
         """Initialize lock storage."""
         if self.lock_storage == "file":
             os.makedirs(self.lock_dir, exist_ok=True)
+        
+        # P0-C: Log warning if using memory storage (for visibility)
+        if self.lock_storage == "memory" and not self.fail_if_redis_unavailable:
+            logger.warning(
+                "P0-C WARNING: Using memory storage with fail_if_redis_unavailable=False. "
+                "This is ONLY safe for single-node testing. "
+                "DO NOT use in production distributed deployments."
+            )
     
     async def _init_redis(self) -> None:
         """Initialize Redis connection.
@@ -241,9 +286,8 @@ class TargetFlashLock:
                 self._redis = await aioredis.create_redis_pool(self.redis_url)
             except Exception as e:
                 logger.error(
-                    "redis_connection_failed",
-                    error=str(e),
-                    fail_mode=self.fail_if_redis_unavailable,
+                    "redis_connection_failed: error=%s, fail_mode=%s",
+                    str(e), self.fail_if_redis_unavailable,
                 )
                 if self.fail_if_redis_unavailable:
                     raise RuntimeError(
@@ -253,7 +297,8 @@ class TargetFlashLock:
                     )
                 else:
                     logger.warning(
-                        "Using memory fallback for distributed locks - THIS IS UNSAFE FOR PRODUCTION"
+                        "Using memory fallback for distributed locks - "
+                        "THIS IS UNSAFE FOR PRODUCTION"
                     )
                     self.lock_storage = "memory"
     
@@ -588,6 +633,170 @@ class TargetFlashLock:
             "fence_sequence": lock.fence_sequence,
             "version": lock.version,
         }
+
+
+# =============================================================================
+# OPERATION LEDGER (P0-C)
+# =============================================================================
+
+
+@dataclass
+class FlashOperationRecord:
+    """Record of a flash operation for audit and split-brain prevention.
+    
+    P0-C: Every flash operation (erase/write/verify) MUST be logged
+    to the operation ledger with its fence token for traceability.
+    """
+    target_name: str
+    operation: str  # "erase", "write", "verify"
+    fence_token: str
+    fence_sequence: int
+    
+    # Operation details
+    transaction_id: str
+    sector_start: int = 0
+    sector_count: int = 0
+    address: int = 0
+    length: int = 0
+    
+    # Status
+    status: str = "pending"  # pending, running, completed, failed
+    result: str = ""
+    
+    # Timing
+    started_at: datetime = field(default_factory=datetime.now)
+    completed_at: Optional[datetime] = None
+    duration_ms: float = 0
+    
+    # Owner
+    owner_id: str = ""
+    
+    def mark_completed(self, result: str = "success") -> None:
+        """Mark operation as completed."""
+        self.status = "completed"
+        self.result = result
+        self.completed_at = datetime.now()
+        self.duration_ms = (self.completed_at - self.started_at).total_seconds() * 1000
+    
+    def mark_failed(self, error: str) -> None:
+        """Mark operation as failed."""
+        self.status = "failed"
+        self.result = error
+        self.completed_at = datetime.now()
+        self.duration_ms = (self.completed_at - self.started_at).total_seconds() * 1000
+
+
+class OperationLedger:
+    """Ledger for tracking all flash operations.
+    
+    P0-C: This is the source of truth for operation history.
+    Used to detect stale operations and prevent split-brain.
+    
+    Features:
+    - Append-only operation log
+    - Fence token tracking
+    - Staleness detection
+    - Audit trail
+    """
+    
+    def __init__(self, max_records: int = 10000):
+        self._records: list[FlashOperationRecord] = []
+        self.max_records = max_records
+        self._lock = asyncio.Lock()
+    
+    async def append(
+        self,
+        target_name: str,
+        operation: str,
+        fence_token: FlashFenceToken,
+        **kwargs,
+    ) -> FlashOperationRecord:
+        """Append a new operation record.
+        
+        Args:
+            target_name: Target being operated on
+            operation: Operation type (erase, write, verify)
+            fence_token: Fence token for this operation
+            **kwargs: Additional operation details
+            
+        Returns:
+            FlashOperationRecord
+        """
+        async with self._lock:
+            record = FlashOperationRecord(
+                target_name=target_name,
+                operation=operation,
+                fence_token=fence_token.token,
+                fence_sequence=fence_token.sequence,
+                transaction_id=fence_token.transaction_id,
+                owner_id=fence_token.owner_id,
+                **kwargs,
+            )
+            
+            self._records.append(record)
+            
+            # Trim if over limit
+            if len(self._records) > self.max_records:
+                self._records = self._records[-self.max_records:]
+            
+            return record
+    
+    async def get_latest_for_target(
+        self,
+        target_name: str,
+        operation: str = None,
+    ) -> list[FlashOperationRecord]:
+        """Get latest operation records for a target."""
+        async with self._lock:
+            records = [
+                r for r in self._records
+                if r.target_name == target_name
+                and (operation is None or r.operation == operation)
+            ]
+            return records[-100:]  # Last 100
+    
+    async def get_latest_sequence(
+        self,
+        target_name: str,
+    ) -> int:
+        """Get the latest fence sequence for a target."""
+        async with self._lock:
+            target_records = [
+                r for r in self._records
+                if r.target_name == target_name
+            ]
+            if not target_records:
+                return 0
+            return max(r.fence_sequence for r in target_records)
+    
+    async def validate_no_stale_operations(
+        self,
+        target_name: str,
+        fence_sequence: int,
+    ) -> tuple[bool, str]:
+        """Check if there are any pending/stale operations with lower sequence.
+        
+        P0-C: This prevents split-brain by detecting if an operation
+        with a lower fence sequence is still pending.
+        
+        Returns:
+            (is_safe, error_message)
+        """
+        async with self._lock:
+            # Check for pending operations with lower or equal sequence
+            for record in self._records:
+                if (record.target_name == target_name
+                    and record.fence_sequence <= fence_sequence
+                    and record.status == "pending"):
+                    
+                    return False, (
+                        f"Found pending operation seq={record.fence_sequence} "
+                        f"for {record.operation} on {target_name}. "
+                        f"Current seq={fence_sequence}. "
+                        f"Cannot proceed until pending operation completes."
+                    )
+            
+            return True, ""
 
 
 @dataclass

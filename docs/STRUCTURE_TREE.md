@@ -907,3 +907,81 @@ loadtests/
 ├── pty/
 └── streaming/
 ```
+
+---
+
+## Production Readiness Status
+
+> **Status**: Advanced Prototype / Architecture Lab (May 2026)
+> **Overall Score**: 5.2/10
+
+### P0 Critical Priorities
+
+| Priority | Task | Impact | Status |
+|----------|------|--------|--------|
+| P0-A | Deterministic Workflow Kernel | 🔴 Critical | ⬜ Not Done |
+| P0-B | End-to-End Flash State Machine | 🔴 Critical | ⬜ Not Done |
+| P0-C | Fencing Token Lock Model | 🔴 Critical | ⬜ Not Done |
+| P0-D | Signed Artifact Manifest | 🔴 Critical | ⬜ Not Done |
+| P0-E | Deterministic Replay Contract | 🔴 Critical | ⬜ Not Done |
+| P0-F | HIL Fault Injection Tests | 🟡 High | ⬜ Not Done |
+
+### Current Scorecard
+
+| Subsystem | Score | Notes |
+|-----------|-------|-------|
+| Architecture | 6.0/10 | Prototype tốt |
+| Distributed Systems | 4.0/10 | Prototype |
+| Embedded Infrastructure | 5.5/10 | Có tiến bộ |
+| AI Architecture | 6.0/10 | Đúng hướng |
+| Security | 4.5/10 | Thiếu nhiều |
+| Reliability | 5.0/10 | Rủi ro cao |
+| Observability | 5.5/10 | Khá tốt |
+| Scalability | 4.5/10 | Prototype |
+
+### Modules to FREEZE (Architecture Theater)
+
+> **DO NOT ADD FEATURES** to these modules until P0 priorities are addressed:
+
+```bash
+# DEPRECATED - Will be removed in cleanup:
+- src/core/multi_agent/coordination/byzantine_*.py
+- src/core/multi_agent/coordination/quorum*.py
+- src/core/runtime/enterprise/cross_region*.py
+- src/infrastructure/router/fairness/*.py
+- src/domains/autonomy/planner/* (MERGE into core)
+- src/application/llm/* (CONSOLIDATE)
+```
+
+### Complexity Bombs (Hidden Risks)
+
+```
+⚠️ 1. Multi-agent orchestration TRƯỚC deterministic runtime
+⚠️ 2. Fleet OTA TRƯỚC bootloader recovery
+⚠️ 3. Plugin ecosystem TRƯỚC sandbox/RBAC
+⚠️ 4. Hyperscale abstractions TRƯỚC single-node correctness
+```
+
+### What Will Kill This Project
+
+> **Guarantee Inflation**: Module names promise enterprise/fleet/deterministic/exactly-once
+> nhưng runtime không enforce được → users sẽ lose trust sau bricked board.
+
+### True Moat
+
+**Not**: Generic AI agents, multi-agent orchestration
+
+**Is**: Deterministic, evidence-grounded embedded debugging and recovery
+
+**Breakthrough**: An AI system that can say:
+> "This crash came from this firmware build, this PC maps to this inlined source frame,
+> this register/peripheral state proves this root cause, this patch fixes it,
+> this HIL replay validates it, and this flash transaction can safely deploy or roll back."
+
+---
+
+## References
+
+- `docs/PRODUCTION_READINESS_REVIEW.md` - Detailed review document
+- `docs/AGENTS.md` - Agent instructions
+- Phase documents: `docs/phase*.md`
