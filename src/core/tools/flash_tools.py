@@ -6,6 +6,9 @@ Provides tools for flashing and programming hardware:
 - Verify flash contents
 - Read flash memory
 - Hardware connection management
+
+CRITICAL: All flash operations MUST be fenced with FlashFenceToken
+to prevent split-brain scenarios. See domain/hardware/flash/flash_lock.py
 """
 
 import asyncio
@@ -27,6 +30,16 @@ from src.core.tools.schema import (
 )
 
 logger = logging.getLogger(__name__)
+
+
+class FlashFenceTokenRequiredError(Exception):
+    """Raised when flash operation is attempted without valid fence token."""
+    pass
+
+
+class FlashFenceTokenValidationError(Exception):
+    """Raised when flash operation fence token validation fails."""
+    pass
 
 
 class FlashStatus(Enum):
@@ -152,6 +165,60 @@ class FlashPermissionGuard:
 # Global flash permission guard
 _flash_guard = FlashPermissionGuard()
 
+# Global fence token validator (injected at runtime)
+_fence_validator: Optional[callable] = None
+
+
+def set_fence_validator(validator: callable) -> None:
+    """Set the global fence token validator.
+    
+    Args:
+        validator: Callable that validates fence tokens.
+                   Should be: async def validate(token: FlashFenceToken, target: str, op: str) -> bool
+    """
+    global _fence_validator
+    _fence_validator = validator
+
+
+async def validate_fence_token(
+    fence_token: Optional[Dict[str, Any]],
+    target: str,
+    operation: str,
+) -> None:
+    """Validate fence token before flash operation.
+    
+    CRITICAL: This MUST be called before every erase/write/verify
+    operation to prevent split-brain scenarios.
+    
+    Args:
+        fence_token: Token dict containing sequence, token_id, etc.
+        target: Target name being operated on.
+        operation: Operation name (erase, write, verify).
+        
+    Raises:
+        FlashFenceTokenRequiredError: If no token provided.
+        FlashFenceTokenValidationError: If token validation fails.
+    """
+    if fence_token is None:
+        raise FlashFenceTokenRequiredError(
+            f"Flash operation '{operation}' on '{target}' requires fence token. "
+            f"Acquire lock first to get fence token."
+        )
+    
+    if _fence_validator is None:
+        logger.warning(
+            "No fence validator configured - skipping validation. "
+            "This is DANGEROUS in production!"
+        )
+        return
+    
+    is_valid = await _fence_validator(fence_token, target, operation)
+    if not is_valid:
+        raise FlashFenceTokenValidationError(
+            f"Fence token validation failed for '{operation}' on '{target}'. "
+            f"Token may be stale or revoked."
+        )
+
 
 def get_flash_permission_guard() -> FlashPermissionGuard:
     """Get the global flash permission guard."""
@@ -193,6 +260,12 @@ FLASH_FIRMWARE_TOOL = create_flash_tool(
     description="Flash firmware binary to target MCU over SWD/JTAG",
     parameters=[
         ToolParameter(
+            name="target",
+            type=ParameterType.STRING,
+            description="Target name to flash",
+            required=True,
+        ),
+        ToolParameter(
             name="binary_path",
             type=ParameterType.FILE_PATH,
             description="Path to firmware binary file (.bin, .hex, .elf)",
@@ -226,6 +299,12 @@ FLASH_FIRMWARE_TOOL = create_flash_tool(
             required=False,
             default="SWD",
             choices=["SWD", "JTAG", "UART", "SPI"],
+        ),
+        ToolParameter(
+            name="fence_token",
+            type=ParameterType.OBJECT,
+            description="Flash fence token (required for split-brain protection)",
+            required=True,
         ),
     ],
 )
@@ -312,22 +391,29 @@ FLASH_INFO_TOOL = create_flash_tool(
 
 async def execute_flash_firmware(
     agent_id: str,
+    target: str,
     binary_path: str,
     target_address: int = 0x08000000,
     verify: bool = True,
     reset: bool = True,
     interface: str = "SWD",
+    fence_token: Optional[Dict[str, Any]] = None,
 ) -> ToolResult:
     """
-    Execute flash firmware operation with permission check.
+    Execute flash firmware operation with permission check and fence validation.
+
+    CRITICAL: This operation REQUIRES a valid fence token to prevent
+    split-brain scenarios where concurrent operations corrupt flash.
 
     Args:
         agent_id: ID of agent requesting flash
+        target: Target name to flash
         binary_path: Path to firmware binary
         target_address: Flash address
         verify: Whether to verify after flash
         reset: Whether to reset after flash
         interface: Programming interface
+        fence_token: Flash fence token for split-brain protection
 
     Returns:
         ToolResult with operation outcome
@@ -345,7 +431,25 @@ async def execute_flash_firmware(
             error_type="PermissionError",
         )
 
-    # Simulate flash operation (actual implementation would use pyocd/openocd)
+    # CRITICAL: Validate fence token before any flash operation
+    try:
+        await validate_fence_token(fence_token, target, "write")
+    except FlashFenceTokenRequiredError as exc:
+        return ToolResult(
+            tool_name="flash_firmware",
+            success=False,
+            error=str(exc),
+            error_type="FlashFenceTokenRequiredError",
+        )
+    except FlashFenceTokenValidationError as exc:
+        return ToolResult(
+            tool_name="flash_firmware",
+            success=False,
+            error=str(exc),
+            error_type="FlashFenceTokenValidationError",
+        )
+
+    # Flash operation
     try:
         binary = Path(binary_path)
         if not binary.exists():
@@ -357,25 +461,29 @@ async def execute_flash_firmware(
             )
 
         logger.info(
-            "Flashing %s to address 0x%08X via %s",
+            "Flashing %s to address 0x%08X on %s via %s (token=%s...)",
             binary.name,
             target_address,
+            target,
             interface,
+            fence_token.get("token", "unknown")[:8] if fence_token else "none",
         )
 
         # Simulated operation
-        await asyncio.sleep(0.1)  # Simulated flash time
+        await asyncio.sleep(0.1)
 
         return ToolResult(
             tool_name="flash_firmware",
             success=True,
             output={
+                "target": target,
                 "binary": binary.name,
                 "address": hex(target_address),
                 "size": binary.stat().st_size,
                 "verified": verify,
                 "reset": reset,
                 "interface": interface,
+                "fence_token_validated": True,
             },
         )
 

@@ -13,25 +13,38 @@ from .sandbox import AgentSandbox, SandboxConfig, SandboxPermission, ResourceQuo
 from .fsm import DeterministicFSM, FSMState, FSMAction, FSMTransition
 from .scheduler import AgentScheduler, SchedulingPolicy, PriorityLevel
 from .isolation import FailureIsolation, IsolationBoundary, RetryBoundary, ErrorSeverity, ErrorCategory
+from .harness import AgentHarness, HarnessConfig, HarnessResult, HarnessStep, HarnessState, run_agent_task
 
 __all__ = [
+    # Lifecycle
     "AgentLifecycle",
     "AgentState",
     "LifecycleEvent",
+    # Sandbox
     "AgentSandbox",
     "SandboxConfig",
     "SandboxPermission",
     "ResourceQuota",
+    # FSM
     "DeterministicFSM",
     "FSMState",
     "FSMAction",
     "FSMTransition",
+    # Scheduler
     "AgentScheduler",
     "SchedulingPolicy",
     "PriorityLevel",
+    # Isolation
     "FailureIsolation",
     "IsolationBoundary",
     "RetryBoundary",
     "ErrorSeverity",
     "ErrorCategory",
+    # Harness
+    "AgentHarness",
+    "HarnessConfig",
+    "HarnessResult",
+    "HarnessStep",
+    "HarnessState",
+    "run_agent_task",
 ]

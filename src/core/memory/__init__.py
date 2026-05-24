@@ -5,6 +5,9 @@ from .chunker import Chunker, Chunk
 from .deduplication import DeduplicationEngine
 from .store import AgentMemory
 
+# Long-horizon memory for agent consistency
+from .long_horizon_memory import LongHorizonMemory, MemoryType, MemoryItem
+
 __all__ = [
     "SemanticMemory",
     "MemoryRecord",
@@ -13,4 +16,7 @@ __all__ = [
     "Chunk",
     "DeduplicationEngine",
     "AgentMemory",
+    "LongHorizonMemory",
+    "MemoryType",
+    "MemoryItem",
 ]

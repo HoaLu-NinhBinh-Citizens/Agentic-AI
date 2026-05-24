@@ -1,1 +1,1 @@
-"""Chaos tests for compression module."""
+"""Chaos tests for production readiness."""

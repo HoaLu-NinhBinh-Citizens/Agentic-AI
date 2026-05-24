@@ -210,6 +210,10 @@ class TargetFlashLock:
     lock_dir: str = "/tmp/aisupport/locks"
     redis_url: str = "redis://localhost:6379"
     
+    # CRITICAL: Fail-fast behavior for distributed locking
+    # Set to True to reject lock operations if Redis is unavailable
+    fail_if_redis_unavailable: bool = True
+    
     lease_timeout_seconds: int = 60
     renew_interval_seconds: int = 30
     
@@ -225,14 +229,33 @@ class TargetFlashLock:
             os.makedirs(self.lock_dir, exist_ok=True)
     
     async def _init_redis(self) -> None:
-        """Initialize Redis connection."""
+        """Initialize Redis connection.
+        
+        CRITICAL: In production, silent fallback to memory is DANGEROUS
+        because it breaks distributed lock guarantees. Set fail_if_redis_unavailable
+        to True for production deployments.
+        """
         if self._redis is None and self.lock_storage == "redis":
             try:
                 import aioredis
                 self._redis = await aioredis.create_redis_pool(self.redis_url)
             except Exception as e:
-                logger.warning("redis_connection_failed", error=str(e))
-                self.lock_storage = "memory"
+                logger.error(
+                    "redis_connection_failed",
+                    error=str(e),
+                    fail_mode=self.fail_if_redis_unavailable,
+                )
+                if self.fail_if_redis_unavailable:
+                    raise RuntimeError(
+                        f"Failed to connect to Redis at {self.redis_url}. "
+                        f"Cannot use memory fallback in distributed mode. "
+                        f"Set fail_if_redis_unavailable=False only for single-node testing."
+                    )
+                else:
+                    logger.warning(
+                        "Using memory fallback for distributed locks - THIS IS UNSAFE FOR PRODUCTION"
+                    )
+                    self.lock_storage = "memory"
     
     async def acquire(
         self,

@@ -348,3 +348,19 @@ def create_async_mock(return_value=None):
     mock = AsyncMock()
     mock.return_value = return_value
     return mock
+
+
+# Import additional fixtures
+from tests.fixtures.mock_elf import (
+    MockELFFixture,
+    MockDWARFEntry,
+    create_firmware_fixture,
+    get_crash_scenario,
+    COREDUMP_FIXTURES,
+)
+from tests.fixtures.fake_flash import (
+    FakeFlashDevice,
+    FlashChaosScenario,
+    FlashState,
+    FlashSector,
+)

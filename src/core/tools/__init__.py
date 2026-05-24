@@ -76,6 +76,31 @@ from src.core.tools.flash_tools import (
     execute_flash_info,
 )
 
+# Codex-style agent improvement tools
+from src.core.tools.tool_schema_registry import (
+    ToolSchemaRegistry,
+    ValidationReport,
+    APISchema,
+    ValidationResult,
+)
+from src.core.tools.trace_analyzer import (
+    TraceAnalyzer,
+    TraceAnalysisResult,
+    LogEntry,
+    MisleadingLogDetector,
+)
+from src.core.tools.architecture_preservation import (
+    ArchitecturePreservation,
+    ChangeImpact,
+    PartialFixDetector,
+)
+from src.core.tools.root_cause_analyzer import (
+    RootCauseAnalyzer,
+    Symptom,
+    AnalysisResult,
+    FixValidation,
+)
+
 __all__ = [
     # Schema
     "Tool",
@@ -141,4 +166,20 @@ __all__ = [
     "execute_flash_info",
     # Build Tools
     "BuildTools",
+    # Codex-style tools
+    "ToolSchemaRegistry",
+    "ValidationReport",
+    "APISchema",
+    "ValidationResult",
+    "TraceAnalyzer",
+    "TraceAnalysisResult",
+    "LogEntry",
+    "MisleadingLogDetector",
+    "ArchitecturePreservation",
+    "ChangeImpact",
+    "PartialFixDetector",
+    "RootCauseAnalyzer",
+    "Symptom",
+    "AnalysisResult",
+    "FixValidation",
 ]

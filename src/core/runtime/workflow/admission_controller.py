@@ -165,13 +165,22 @@ class AdmissionController:
         self._backpressure_callbacks.append(callback)
 
     async def _trigger_backpressure(self) -> None:
-        """Trigger backpressure event."""
+        """Trigger backpressure event.
+        
+        CRITICAL: Must properly await async callbacks to avoid coroutine
+        backpressure issues.
+        """
         self._backpressure_events += 1
+        
+        level = await self.get_backpressure_level()
         
         for callback in self._backpressure_callbacks:
             try:
-                level = await self.get_backpressure_level()
-                callback(level)
+                # Handle both sync and async callbacks
+                if asyncio.iscoroutinefunction(callback):
+                    await callback(level)
+                else:
+                    callback(level)
             except Exception as e:
                 logger.error(f"Backpressure callback error: {e}")
 
