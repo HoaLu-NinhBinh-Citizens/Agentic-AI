@@ -6,8 +6,8 @@ Phase 2A provides:
 - Global tool registry
 """
 
-from infrastructure.mcp.config import MCPServerConfig, MCPConfig, MCPConfigLoader
-from infrastructure.mcp.manager import MCPClientManager, ConnectedServer, ToolInfo
+from src.infrastructure.mcp.config import MCPServerConfig, MCPConfig, MCPConfigLoader
+from src.infrastructure.mcp.manager import MCPClientManager, ConnectedServer, ToolInfo
 
 __all__ = [
     "MCPServerConfig",

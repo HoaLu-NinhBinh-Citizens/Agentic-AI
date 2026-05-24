@@ -1,7 +1,18 @@
 # MCP Server Configuration
 # Phase 2A - MCP Connectivity & Discovery
+# Phase 2C - AI_SUPPORT embedded engineering intelligence server
 
 servers:
+  # AI_SUPPORT - Embedded engineering intelligence (this project)
+  # Connects Cursor to AI_SUPPORT's hardware validation, reasoning, and KB
+  - name: "ai_support"
+    command: "python"
+    args:
+      - "-m"
+      - "infrastructure.mcp.ai_support_server"
+    transport: "stdio"
+    enabled: false
+
   # Filesystem server - provides file system operations
   # Note: On Windows, use a valid Windows path like %TEMP% or an absolute path
   - name: "filesystem"

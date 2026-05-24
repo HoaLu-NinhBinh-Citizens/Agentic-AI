@@ -1,0 +1,4 @@
+[console_scripts]
+agentic-ai = agentic_ai.cli:main
+ai-server = AI_support.run_api_server:main
+ai-support = AI_support.__main__:main
