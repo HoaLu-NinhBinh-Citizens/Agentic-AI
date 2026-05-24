@@ -15,7 +15,7 @@ from dataclasses import dataclass, field
 from datetime import datetime
 from typing import Any, AsyncIterator
 
-from .llm.client import (
+from ..llm.client import (
     LLMClient,
     LLMConfig,
     LLMResponse,
@@ -24,8 +24,8 @@ from .llm.client import (
     get_llm_client,
     configure_llm,
 )
-from .session.session_manager import Session
-from .tools.tool_registry import ToolRegistry, ToolCallRequest, ToolCallResponse
+from ..session.session_manager import Session
+from ..tools.tool_registry import ToolRegistry, ToolCallRequest, ToolCallResponse
 
 logger = logging.getLogger(__name__)
 

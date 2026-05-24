@@ -59,6 +59,8 @@ class AgenticCLI:
         from src.infrastructure.tools.builtin.file_tools import register_file_tools
         from src.infrastructure.tools.builtin.search_tools import register_search_tools
         from src.infrastructure.tools.builtin.shell_tools import register_shell_tools
+        from src.infrastructure.tools.builtin.code_tools import register_code_tools
+        from src.infrastructure.tools.builtin.web_tools import register_web_tools
         
         registry = get_registry()
         
@@ -66,6 +68,8 @@ class AgenticCLI:
         register_file_tools(registry)
         register_search_tools(registry)
         register_shell_tools(registry)
+        register_code_tools(registry)
+        register_web_tools(registry)
         
         self.registry = registry
         return registry

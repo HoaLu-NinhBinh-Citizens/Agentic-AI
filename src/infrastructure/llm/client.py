@@ -279,7 +279,8 @@ class LLMClient:
             payload["tools"] = tools
         
         headers = {"Content-Type": "application/json", "x-api-key": self.config.api_key}
-        if self.config.api_key else headers["anthropic-version"] = "2023-06-01"
+        if self.config.api_key:
+            headers["anthropic-version"] = "2023-06-01"
         
         try:
             async with httpx.AsyncClient(timeout=self.config.timeout) as client:

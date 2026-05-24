@@ -14,8 +14,8 @@ import re
 from pathlib import Path
 from typing import Any
 
-from .hashline import HashlineEditor, HashlinePatch, edit_file, preview_edit
-from .tool_registry import (
+from ..hashline import HashlineEditor, HashlinePatch, edit_file, preview_edit
+from ..tool_registry import (
     BaseTool,
     ToolCategory,
     ToolResult,
