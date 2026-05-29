@@ -35,44 +35,42 @@ class ToolRegistry:
         self._permissions: Dict[ToolPermission, Set[str]] = {}  # permission -> tool names
         self._lock = asyncio.Lock()  # W-011: Protect concurrent access
 
-    async def register(self, tool: Tool) -> None:
+    def register(self, tool: Tool) -> None:
+        """Register a tool.
+
+        This method is intentionally synchronous so it can be used from both
+        regular code paths and tests without needing an event loop.
+
+        The registry is not intended to be mutated concurrently in production; if
+        you need concurrent registrations, use a higher-level coordinator.
         """
-        Register a tool (async, thread-safe).
+        if tool.name in self._tools:
+            raise ValueError(f"Tool '{tool.name}' is already registered")
 
-        Args:
-            tool: Tool definition to register
+        # Validate tool
+        self._validate_tool(tool)
 
-        Raises:
-            ValueError: If tool with same name already exists
-        """
-        async with self._lock:
-            if tool.name in self._tools:
-                raise ValueError(f"Tool '{tool.name}' is already registered")
+        # Store tool
+        self._tools[tool.name] = tool
 
-            # Validate tool
-            self._validate_tool(tool)
+        # Update category index
+        if tool.category not in self._categories:
+            self._categories[tool.category] = []
+        self._categories[tool.category].append(tool.name)
 
-            # Store tool
-            self._tools[tool.name] = tool
+        # Update tag index
+        for tag in tool.tags:
+            if tag not in self._tags:
+                self._tags[tag] = set()
+            self._tags[tag].add(tool.name)
 
-            # Update category index
-            if tool.category not in self._categories:
-                self._categories[tool.category] = []
-            self._categories[tool.category].append(tool.name)
+        # Update permission index
+        for permission in tool.permissions:
+            if permission not in self._permissions:
+                self._permissions[permission] = set()
+            self._permissions[permission].add(tool.name)
 
-            # Update tag index
-            for tag in tool.tags:
-                if tag not in self._tags:
-                    self._tags[tag] = set()
-                self._tags[tag].add(tool.name)
-
-            # Update permission index
-            for permission in tool.permissions:
-                if permission not in self._permissions:
-                    self._permissions[permission] = set()
-                self._permissions[permission].add(tool.name)
-
-            logger.info("tool_registered", tool=tool.name, category=tool.category.value)
+        logger.info("tool_registered", tool=tool.name, category=tool.category.value)
 
     async def unregister(self, name: str) -> bool:
         """
@@ -116,18 +114,9 @@ class ToolRegistry:
             logger.info("tool_unregistered", tool=name)
             return True
 
-    async def get(self, name: str) -> Optional[Tool]:
-        """
-        Get a tool by name (async, thread-safe).
-
-        Args:
-            name: Tool name
-
-        Returns:
-            Tool definition or None if not found
-        """
-        async with self._lock:
-            return self._tools.get(name)
+    def get(self, name: str) -> Optional[Tool]:
+        """Get a tool by name."""
+        return self._tools.get(name)
 
     async def list_tools(self) -> List[Tool]:
         """

@@ -260,8 +260,8 @@ class FlashWALJournal:
                         computed_crc = self._compute_crc(data)
                         if computed_crc != stored_crc:
                             logger.warning(
-                                "wal_entry_crc_mismatch",
-                                entry_id=data.get("entry_id"),
+                                "wal_entry_crc_mismatch: entry_id=%s",
+                                data.get("entry_id"),
                             )
                             continue
                     
@@ -500,20 +500,20 @@ class ResumableFlashWriter:
             expected_checksum = state.compute_checksum()
             if state.state_checksum and state.state_checksum != expected_checksum:
                 logger.error(
-                    "resume_state_checksum_mismatch",
-                    transaction_id=transaction_id,
-                    expected=expected_checksum[:16],
-                    actual=state.state_checksum[:16],
+                    "resume_state_checksum_mismatch: tx=%s expected=%s actual=%s",
+                    transaction_id,
+                    expected_checksum[:16],
+                    state.state_checksum[:16],
                 )
                 return None
             
             # Validate state matches firmware
             if state.firmware_hash != firmware_hash:
                 logger.warning(
-                    "resume_state_firmware_mismatch",
-                    transaction_id=transaction_id,
-                    expected=firmware_hash,
-                    actual=state.firmware_hash,
+                    "resume_state_firmware_mismatch: tx=%s expected=%s actual=%s",
+                    transaction_id,
+                    firmware_hash,
+                    state.firmware_hash,
                 )
                 return None
             
@@ -521,7 +521,7 @@ class ResumableFlashWriter:
             if self._wal:
                 has_commit = await self._wal.has_commit(transaction_id)
                 if has_commit and state.is_complete():
-                    logger.info("transaction_already_committed", transaction_id=transaction_id)
+                    logger.info("transaction_already_committed: tx=%s", transaction_id)
                     return None
             
             self._current_state = state
@@ -530,7 +530,7 @@ class ResumableFlashWriter:
         except FileNotFoundError:
             return None
         except json.JSONDecodeError:
-            logger.error("resume_state_corrupted", path=path)
+            logger.error("resume_state_corrupted: path=%s", path)
             return None
     
     def _get_resume_path(self, transaction_id: str) -> str:
@@ -559,15 +559,19 @@ class ResumableFlashWriter:
                 
                 if actual_hash != expected_hash:
                     logger.warning(
-                        "sector_hash_mismatch",
-                        sector=sector_idx,
-                        expected=expected_hash[:16],
-                        actual=actual_hash[:16],
+                        "sector_hash_mismatch: sector=%s expected=%s actual=%s",
+                        sector_idx,
+                        expected_hash[:16],
+                        actual_hash[:16],
                     )
                     sectors_to_retry.append(sector_idx)
                     
             except Exception as e:
-                logger.error("sector_verify_failed", sector=sector_idx, error=str(e))
+                logger.error(
+                    "sector_verify_failed: sector=%s error=%s",
+                    sector_idx,
+                    str(e),
+                )
                 sectors_to_retry.append(sector_idx)
         
         return sectors_to_retry
@@ -760,12 +764,15 @@ class ResumableFlashWriter:
             # FIX: Atomic rename
             os.replace(temp_path, path)
             
-            # FIX: Sync directory
-            dir_fd = os.open(self._resume_state_path, os.O_RDONLY | os.O_DIRECTORY)
-            try:
-                os.fsync(dir_fd)
-            finally:
-                os.close(dir_fd)
+            # FIX: Sync directory metadata when supported (POSIX). On Windows,
+            # os.O_DIRECTORY may not exist; fsync on a directory is best-effort.
+            o_directory = getattr(os, "O_DIRECTORY", None)
+            if o_directory is not None:
+                dir_fd = os.open(self._resume_state_path, os.O_RDONLY | o_directory)
+                try:
+                    os.fsync(dir_fd)
+                finally:
+                    os.close(dir_fd)
                 
         except Exception:
             # Clean up temp file on error
@@ -780,7 +787,7 @@ class ResumableFlashWriter:
         path = self._get_resume_path(transaction_id)
         try:
             os.unlink(path)
-            logger.info("resume_state_cleared", transaction_id=transaction_id)
+            logger.info("resume_state_cleared: tx=%s", transaction_id)
         except FileNotFoundError:
             pass
         

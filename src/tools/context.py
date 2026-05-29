@@ -1,10 +1,6 @@
-"""Legacy alias for src.tools.context module."""
+"""Compatibility shim for `src.tools.context`.
 
-from src.core.tools.context import (
-    ToolContext,
-    ToolExecutionMode,
-    create_sandbox_context,
-    create_dry_run_context,
-)
+The canonical implementation lives in `src.core.tools.context`.
+"""
 
-__all__ = ["ToolContext", "ToolExecutionMode", "create_sandbox_context", "create_dry_run_context"]
+from src.core.tools.context import *  # noqa: F403

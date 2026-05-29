@@ -185,10 +185,10 @@ class TestResumableFlashWriter:
         return MockProbe()
     
     @pytest.fixture
-    def writer(self, tmp_path):
+    def writer(self, tmp_path, mock_probe):
         """Create writer with temp directory."""
         return ResumableFlashWriter(
-            probe=MockProbe(),
+            probe=mock_probe,
             resume_state_path=str(tmp_path / "resume"),
             resume_enabled=True,
         )
@@ -200,10 +200,10 @@ class TestResumableFlashWriter:
         assert state is None
     
     @pytest.mark.asyncio
-    async def test_save_and_load_state(self, tmp_path):
+    async def test_save_and_load_state(self, tmp_path, mock_probe):
         """Test saving and loading resume state."""
         writer = ResumableFlashWriter(
-            probe=MockProbe(),
+            probe=mock_probe,
             resume_state_path=str(tmp_path / "resume"),
             resume_enabled=True,
         )
@@ -222,10 +222,10 @@ class TestResumableFlashWriter:
         assert loaded.total_bytes_written == 500
     
     @pytest.mark.asyncio
-    async def test_clear_state(self, tmp_path):
+    async def test_clear_state(self, tmp_path, mock_probe):
         """Test clearing resume state."""
         writer = ResumableFlashWriter(
-            probe=MockProbe(),
+            probe=mock_probe,
             resume_state_path=str(tmp_path / "resume"),
             resume_enabled=True,
         )
@@ -243,10 +243,10 @@ class TestResumableFlashWriter:
         assert loaded is None
     
     @pytest.mark.asyncio
-    async def test_firmware_mismatch(self, tmp_path):
+    async def test_firmware_mismatch(self, tmp_path, mock_probe):
         """Test firmware hash mismatch detection."""
         writer = ResumableFlashWriter(
-            probe=MockProbe(),
+            probe=mock_probe,
             resume_state_path=str(tmp_path / "resume"),
             resume_enabled=True,
         )
@@ -264,10 +264,10 @@ class TestResumableFlashWriter:
         assert loaded is None
     
     @pytest.mark.asyncio
-    async def test_list_resumable(self, tmp_path):
+    async def test_list_resumable(self, tmp_path, mock_probe):
         """Test listing resumable transactions."""
         writer = ResumableFlashWriter(
-            probe=MockProbe(),
+            probe=mock_probe,
             resume_state_path=str(tmp_path / "resume"),
             resume_enabled=True,
         )

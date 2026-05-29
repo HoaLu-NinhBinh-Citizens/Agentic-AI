@@ -1,5 +1,6 @@
-"""Legacy alias for src.tools.cache module."""
+"""Compatibility shim for `src.tools.cache`.
 
-from src.core.tools.cache import ToolResultCache
+The canonical implementation lives in `src.core.tools.cache`.
+"""
 
-__all__ = ["ToolResultCache"]
+from src.core.tools.cache import *  # noqa: F403

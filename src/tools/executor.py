@@ -1,5 +1,6 @@
-"""Legacy alias for src.tools.executor module."""
+"""Compatibility shim for `src.tools.executor`.
 
-from src.core.tools.executor import ToolExecutor, ToolNotFoundError, ToolValidationError
+The canonical implementation lives in `src.core.tools.executor`.
+"""
 
-__all__ = ["ToolExecutor", "ToolNotFoundError", "ToolValidationError"]
+from src.core.tools.executor import *  # noqa: F403

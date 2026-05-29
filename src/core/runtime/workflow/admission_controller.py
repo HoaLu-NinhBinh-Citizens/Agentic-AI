@@ -77,10 +77,12 @@ class AdmissionController:
             if self._usage.pending_workflows >= self._limits.max_pending_workflows:
                 self._total_rejected += 1
                 reason = f"Too many pending workflows: {self._usage.pending_workflows}/{self._limits.max_pending_workflows}"
-                
+
                 if self._limits.reject_policy == "fail":
                     logger.warning(f"Admission rejected: {reason}")
-                    await self._trigger_backpressure()
+                    # Avoid deadlock: we're holding _lock; _trigger_backpressure() calls
+                    # get_backpressure_level() which also acquires _lock.
+                    asyncio.create_task(self._trigger_backpressure())
                 return False, reason
             
             self._total_accepted += 1

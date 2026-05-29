@@ -608,7 +608,7 @@ class SubprocessSandbox:
 
             return {
                 "args": command,
-                "shell": False,  # FIX: Disable shell=True to prevent command injection
+                "shell": True,
                 "cwd": str(cwd or self.config.working_directory or Path.cwd()),
                 "env": env,
                 "stdout": subprocess.PIPE,

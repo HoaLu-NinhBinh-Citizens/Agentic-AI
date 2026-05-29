@@ -115,6 +115,9 @@ class Config:
         "build.static_analysis.enabled": True,
         "build.flash.tool": "stlink",
         "build.flash.verify": True,
+        # Workflow durability
+        "workflow.store.backend": "sqlite",  # sqlite|postgres
+        "workflow.store.postgres.dsn": "",
         # Streaming
         "streaming.enabled": True,
         "streaming.show_progress": False,

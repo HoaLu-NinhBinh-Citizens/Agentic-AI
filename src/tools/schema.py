@@ -1,14 +1,6 @@
-"""Legacy alias for src.tools.schema module."""
+"""Compatibility shim for `src.tools.schema`.
 
-from src.core.tools.schema import (
-    Tool,
-    ToolParameter,
-    ToolResult,
-    ToolPermission,
-    ToolCategory,
-    ParameterType,
-    ToolExecutionRequest,
-    tool,
-)
+The canonical implementation lives in `src.core.tools.schema`.
+"""
 
-__all__ = ["Tool", "ToolParameter", "ToolResult", "ToolPermission", "ToolCategory", "ParameterType", "ToolExecutionRequest", "tool"]
+from src.core.tools.schema import *  # noqa: F403

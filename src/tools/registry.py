@@ -1,5 +1,6 @@
-"""Legacy alias for src.tools.registry module."""
+"""Compatibility shim for `src.tools.registry`.
 
-from src.core.tools.registry import ToolRegistry, get_tool_registry
+The canonical implementation lives in `src.core.tools.registry`.
+"""
 
-__all__ = ["ToolRegistry", "get_tool_registry"]
+from src.core.tools.registry import *  # noqa: F403
