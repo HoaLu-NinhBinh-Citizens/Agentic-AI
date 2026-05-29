@@ -21,9 +21,11 @@ only properly signed and verified firmware can be flashed to targets.
 
 from __future__ import annotations
 
+import base64
 import hashlib
 import json
 import logging
+import os
 import struct
 import time
 from dataclasses import dataclass, field
@@ -1287,3 +1289,618 @@ def attach_sbom_to_manifest(
     """
     manifest.metadata["sbom"] = sbom.to_dict()
     return manifest
+
+
+# =============================================================================
+# AUDIT LOGGER (P0-D)
+# =============================================================================
+
+
+class AuditLogger:
+    """Audit logger for cryptographic operations.
+    
+    P0-D: Logs all sign/verify/key-rotation operations with:
+    - Timestamp
+    - Operation type
+    - Operator identity
+    - Key ID
+    - Result (success/failure)
+    
+    This provides non-repudiation for security-critical operations.
+    """
+    
+    def __init__(
+        self,
+        log_file: str = "audit.log",
+        operator_id: str = "system",
+    ):
+        """
+        Args:
+            log_file: Path to audit log file
+            operator_id: Identity of the operator performing operations
+        """
+        self.log_file = log_file
+        self.operator_id = operator_id
+        self._log_handler: logging.FileHandler | None = None
+        self._setup_handler()
+    
+    def _setup_handler(self) -> None:
+        """Setup file handler for audit logging."""
+        try:
+            self._log_handler = logging.FileHandler(
+                self.log_file,
+                mode="a",
+                encoding="utf-8",
+            )
+            self._log_handler.setFormatter(
+                logging.Formatter(
+                    "%(asctime)s | %(levelname)s | %(message)s",
+                    datefmt="%Y-%m-%dT%H:%M:%S",
+                )
+            )
+            self._log_handler.setLevel(logging.INFO)
+            
+            audit_logger = logging.getLogger(f"audit.{self.log_file}")
+            audit_logger.addHandler(self._log_handler)
+            audit_logger.setLevel(logging.INFO)
+            audit_logger.propagate = False
+        except Exception as e:
+            logger.warning(f"Failed to setup audit log handler: {e}")
+    
+    def _log(
+        self,
+        operation: str,
+        key_id: str,
+        success: bool,
+        details: str = "",
+    ) -> None:
+        """Log an audit event.
+        
+        Args:
+            operation: Operation type (SIGN, VERIFY, KEY_ROTATE, KEY_REVOKE, etc.)
+            key_id: Key identifier
+            success: Whether operation succeeded
+            details: Additional details
+        """
+        status = "SUCCESS" if success else "FAILURE"
+        details_str = f" | {details}" if details else ""
+        
+        message = (
+            f"OP={operation} | "
+            f"OPERATOR={self.operator_id} | "
+            f"KEY={key_id} | "
+            f"STATUS={status}{details_str}"
+        )
+        
+        audit_logger = logging.getLogger(f"audit.{self.log_file}")
+        if success:
+            audit_logger.info(message)
+        else:
+            audit_logger.error(message)
+    
+    def log_sign(
+        self,
+        key_id: str,
+        artifact_id: str,
+        success: bool,
+        error: str = "",
+    ) -> None:
+        """Log a signing operation."""
+        details = f"artifact={artifact_id}"
+        if error:
+            details += f" | error={error}"
+        self._log("SIGN", key_id, success, details)
+    
+    def log_verify(
+        self,
+        key_id: str,
+        artifact_id: str,
+        success: bool,
+        verification_status: str = "",
+        error: str = "",
+    ) -> None:
+        """Log a verification operation."""
+        details = f"artifact={artifact_id}"
+        if verification_status:
+            details += f" | status={verification_status}"
+        if error:
+            details += f" | error={error}"
+        self._log("VERIFY", key_id, success, details)
+    
+    def log_key_generate(
+        self,
+        key_id: str,
+        success: bool,
+        scheme: str = "",
+        error: str = "",
+    ) -> None:
+        """Log a key generation operation."""
+        details = f"scheme={scheme}" if scheme else ""
+        if error:
+            details += f" | error={error}" if details else f"error={error}"
+        self._log("KEY_GENERATE", key_id, success, details)
+    
+    def log_key_rotate(
+        self,
+        old_key_id: str,
+        new_key_id: str,
+        success: bool,
+        error: str = "",
+    ) -> None:
+        """Log a key rotation operation."""
+        details = f"new_key={new_key_id}"
+        if error:
+            details += f" | error={error}"
+        self._log("KEY_ROTATE", old_key_id, success, details)
+    
+    def log_key_revoke(
+        self,
+        key_id: str,
+        success: bool,
+        reason: str = "",
+        error: str = "",
+    ) -> None:
+        """Log a key revocation operation."""
+        details = f"reason={reason}" if reason else ""
+        if error:
+            details += f" | error={error}" if details else f"error={error}"
+        self._log("KEY_REVOKE", key_id, success, details)
+    
+    def log_key_import(
+        self,
+        key_id: str,
+        success: bool,
+        source: str = "",
+        error: str = "",
+    ) -> None:
+        """Log a key import operation."""
+        details = f"source={source}" if source else ""
+        if error:
+            details += f" | error={error}" if details else f"error={error}"
+        self._log("KEY_IMPORT", key_id, success, details)
+    
+    def close(self) -> None:
+        """Close the audit log handler."""
+        if self._log_handler:
+            self._log_handler.close()
+
+
+# =============================================================================
+# FILE-BASED KEY STORE (P0-D)
+# =============================================================================
+
+
+class FileKeyStore:
+    """File-based encrypted key store using Fernet encryption.
+    
+    P0-D: Persists keys to encrypted JSON files with:
+    - Fernet (AES-128-CBC + HMAC-SHA256) encryption for private keys
+    - Metadata stored in plaintext JSON
+    - Master key derived from passphrase
+    
+    This provides secure at-rest encryption for signing keys.
+    """
+    
+    def __init__(
+        self,
+        store_path: str = "keystore.json",
+        passphrase: str | None = None,
+    ):
+        """
+        Args:
+            store_path: Path to keystore file
+            passphrase: Passphrase for encryption (None prompts if needed)
+        """
+        self.store_path = store_path
+        self._passphrase = passphrase
+        self._fernet: "Fernet | None" = None
+        self._keys: dict[str, dict[str, Any]] = {}
+        self._metadata: dict[str, Any] = {}
+        
+        if HAS_CRYPTOGRAPHY:
+            self._init_fernet()
+        
+        self._load()
+    
+    def _init_fernet(self) -> None:
+        """Initialize Fernet with passphrase-derived key."""
+        if not HAS_CRYPTOGRAPHY:
+            return
+        
+        from cryptography.fernet import Fernet
+        from cryptography.hazmat.primitives import hashes
+        from cryptography.hazmat.primitives.kdf.pbkdf2 import PBKDF2HMAC
+        
+        passphrase = self._passphrase
+        if not passphrase:
+            import getpass
+            passphrase = getpass.getpass("Enter keystore passphrase: ")
+        
+        salt = self._metadata.get("salt")
+        if not salt:
+            import os
+            import base64
+            salt = os.urandom(16)
+            self._metadata["salt"] = base64.b64encode(salt).decode()
+        
+        kdf = PBKDF2HMAC(
+            algorithm=hashes.SHA256(),
+            length=32,
+            salt=salt,
+            iterations=480000,
+        )
+        key = base64.urlsafe_b64encode(kdf.derive(passphrase.encode()))
+        self._fernet = Fernet(key)
+    
+    def _load(self) -> None:
+        """Load keys from file."""
+        if not os.path.exists(self.store_path):
+            return
+        
+        try:
+            with open(self.store_path, "r", encoding="utf-8") as f:
+                data = json.load(f)
+            
+            self._metadata = data.get("metadata", {})
+            encrypted_keys = data.get("keys", {})
+            
+            if self._fernet:
+                for key_id, key_data in encrypted_keys.items():
+                    encrypted_pem = base64.b64decode(key_data["encrypted_private_key"])
+                    decrypted_pem = self._fernet.decrypt(encrypted_pem)
+                    key_data["private_key_pem"] = decrypted_pem.decode()
+                    del key_data["encrypted_private_key"]
+                    self._keys[key_id] = key_data
+            else:
+                self._keys = {
+                    k: {**v, "private_key_pem": base64.b64decode(v.get("encrypted_private_key", "")).decode()}
+                    for k, v in encrypted_keys.items()
+                }
+            
+            logger.info("keystore_loaded: path=%s key_count=%d", self.store_path, len(self._keys))
+        except Exception as e:
+            logger.error("keystore_load_failed: path=%s error=%s", self.store_path, e)
+    
+    def _save(self) -> None:
+        """Save keys to file."""
+        import base64
+        
+        encrypted_keys = {}
+        for key_id, key_data in self._keys.items():
+            private_pem = key_data.get("private_key_pem", "")
+            if private_pem and self._fernet:
+                encrypted_pem = self._fernet.encrypt(private_pem.encode())
+                key_data = {**key_data}
+                key_data["encrypted_private_key"] = base64.b64encode(encrypted_pem).decode()
+                del key_data["private_key_pem"]
+            encrypted_keys[key_id] = key_data
+        
+        data = {
+            "metadata": self._metadata,
+            "keys": encrypted_keys,
+            "version": "1.0",
+        }
+        
+        with open(self.store_path, "w", encoding="utf-8") as f:
+            json.dump(data, f, indent=2)
+        
+        logger.info("keystore_saved: path=%s key_count=%d", self.store_path, len(self._keys))
+    
+    def store_key(
+        self,
+        key_id: str,
+        private_key_pem: bytes,
+        public_key_pem: bytes,
+        fingerprint: str,
+        metadata: dict[str, Any] | None = None,
+    ) -> None:
+        """Store a key in the keystore.
+        
+        Args:
+            key_id: Unique key identifier
+            private_key_pem: PEM-encoded private key
+            public_key_pem: PEM-encoded public key
+            fingerprint: Key fingerprint
+            metadata: Additional metadata
+        """
+        self._keys[key_id] = {
+            "private_key_pem": private_key_pem.decode() if isinstance(private_key_pem, bytes) else private_key_pem,
+            "public_key_pem": public_key_pem.decode() if isinstance(public_key_pem, bytes) else public_key_pem,
+            "fingerprint": fingerprint,
+            "metadata": metadata or {},
+        }
+        self._save()
+        logger.info("key_stored: key_id=%s", key_id)
+    
+    def get_key(self, key_id: str) -> dict[str, Any] | None:
+        """Get a key from the keystore."""
+        return self._keys.get(key_id)
+    
+    def list_keys(self) -> list[str]:
+        """List all key IDs in the keystore."""
+        return list(self._keys.keys())
+    
+    def delete_key(self, key_id: str) -> bool:
+        """Delete a key from the keystore."""
+        if key_id in self._keys:
+            del self._keys[key_id]
+            self._save()
+            logger.info("key_deleted: key_id=%s", key_id)
+            return True
+        return False
+    
+    def has_key(self, key_id: str) -> bool:
+        """Check if key exists."""
+        return key_id in self._keys
+
+
+# =============================================================================
+# HSM KEY STORE INTERFACE (P0-D)
+# =============================================================================
+
+
+class HSMKeyStore:
+    """HSM (Hardware Security Module) key store interface.
+    
+    P0-D: Abstract interface for HSM integration.
+    Implementations should integrate with:
+    - Cloud HSM (AWS CloudHSM, Azure Dedicated HSM)
+    - Cloud KMS (AWS KMS, Azure Key Vault, GCP KMS)
+    - USB tokens (YubiHSM, Nitrokey HSM)
+    - Smart cards
+    
+    The interface ensures keys never leave the HSM boundary.
+    
+    Example implementations to add:
+    - YubiHSMKeyStore
+    - AWSKMSKeyStore
+    - AzureKeyVaultKeyStore
+    """
+    
+    def __init__(self, config: dict[str, Any] | None = None):
+        """
+        Args:
+            config: HSM configuration (endpoint, credentials, etc.)
+        """
+        self.config = config or {}
+        self._connected = False
+    
+    def connect(self) -> bool:
+        """Connect to the HSM.
+        
+        Returns:
+            True if connected successfully
+        """
+        raise NotImplementedError("HSM implementation required")
+    
+    def disconnect(self) -> None:
+        """Disconnect from the HSM."""
+        raise NotImplementedError("HSM implementation required")
+    
+    def store_key(
+        self,
+        key_id: str,
+        key_type: str,
+        metadata: dict[str, Any] | None = None,
+    ) -> bool:
+        """Store key reference in HSM.
+        
+        The actual private key material is generated and stored within the HSM.
+        
+        Args:
+            key_id: Unique key identifier
+            key_type: Type of key (ecdsa_p256, rsa_2048, ed25519)
+            metadata: Additional metadata
+            
+        Returns:
+            True if stored successfully
+        """
+        raise NotImplementedError("HSM implementation required")
+    
+    def sign(self, key_id: str, data: bytes) -> bytes:
+        """Sign data using key in HSM.
+        
+        Args:
+            key_id: Key identifier
+            data: Data to sign
+            
+        Returns:
+            Signature bytes
+        """
+        raise NotImplementedError("HSM implementation required")
+    
+    def get_public_key(self, key_id: str) -> bytes | None:
+        """Get public key from HSM.
+        
+        Args:
+            key_id: Key identifier
+            
+        Returns:
+            PEM-encoded public key
+        """
+        raise NotImplementedError("HSM implementation required")
+    
+    def list_keys(self) -> list[str]:
+        """List all key IDs in HSM.
+        
+        Returns:
+            List of key IDs
+        """
+        raise NotImplementedError("HSM implementation required")
+    
+    def delete_key(self, key_id: str) -> bool:
+        """Delete key from HSM.
+        
+        Args:
+            key_id: Key identifier
+            
+        Returns:
+            True if deleted
+        """
+        raise NotImplementedError("HSM implementation required")
+    
+    def is_available(self) -> bool:
+        """Check if HSM is available.
+        
+        Returns:
+            True if HSM is connected and operational
+        """
+        raise NotImplementedError("HSM implementation required")
+
+
+# =============================================================================
+# KEY ROTATION MANAGER WITH PERSISTENCE (P0-D)
+# =============================================================================
+
+
+class PersistentKeyRotationManager(KeyRotationManager):
+    """Key rotation manager with file-based persistence.
+    
+    P0-D: Extends KeyRotationManager with:
+    - Encrypted keystore.json persistence
+    - Automatic save on key operations
+    - FileKeyStore integration
+    - HSMKeyStore support (future)
+    
+    The keystore.json structure:
+    {
+        "version": "1.0",
+        "active_key_id": "...",
+        "rotation_overlap_days": 30,
+        "keys": {
+            "key_id": {
+                "key_id": "...",
+                "key_type": "production",
+                "fingerprint": "...",
+                "state": "active",
+                "created_at": "...",
+                "activated_at": "...",
+                "expires_at": "...",
+                "revoked_at": null,
+                "rotation_target": null,
+                "signature_count": 0,
+                "encrypted_private_key": "..." (base64 encoded)
+            }
+        }
+    }
+    """
+    
+    def __init__(
+        self,
+        key_store_path: str = "keystore.json",
+        passphrase: str | None = None,
+        rotation_overlap_days: int = 30,
+        audit_logger: AuditLogger | None = None,
+        hsm_store: HSMKeyStore | None = None,
+    ):
+        """
+        Args:
+            key_store_path: Path to keystore.json
+            passphrase: Passphrase for encryption
+            rotation_overlap_days: Days to keep old key valid after rotation
+            audit_logger: Audit logger for operations
+            hsm_store: HSM key store (optional)
+        """
+        super().__init__(
+            key_store_path=key_store_path,
+            rotation_overlap_days=rotation_overlap_days,
+        )
+        
+        self._file_store = FileKeyStore(store_path=key_store_path, passphrase=passphrase)
+        self._audit = audit_logger or AuditLogger()
+        self._hsm_store = hsm_store
+        self._operator_id = "system"
+        
+        self._load_keys()
+    
+    def _load_keys(self) -> None:
+        """Load keys from file store."""
+        for key_id in self._file_store.list_keys():
+            key_data = self._file_store.get_key(key_id)
+            if key_data:
+                key = SigningKey(
+                    key_id=key_id,
+                    key_type=KeyType(key_data.get("key_type", "production")),
+                    private_key_pem=key_data.get("private_key_pem", "").encode() if key_data.get("private_key_pem") else b"",
+                    public_key_pem=key_data.get("public_key_pem", "").encode() if key_data.get("public_key_pem") else b"",
+                    fingerprint=key_data.get("fingerprint", ""),
+                    state=KeyState(key_data.get("state", "active")),
+                    created_at=key_data.get("created_at", ""),
+                    activated_at=key_data.get("activated_at", ""),
+                    expires_at=key_data.get("expires_at", ""),
+                    revoked_at=key_data.get("revoked_at", ""),
+                    rotation_target=key_data.get("rotation_target", ""),
+                    signature_count=key_data.get("signature_count", 0),
+                )
+                self._keys[key_id] = key
+        
+        metadata = {}
+        if os.path.exists(self.key_store_path):
+            try:
+                with open(self.key_store_path, "r", encoding="utf-8") as f:
+                    metadata = json.load(f).get("metadata", {})
+            except Exception:
+                pass
+        
+        self._active_key_id = metadata.get("active_key_id")
+        
+        logger.info("keys_loaded: count=%d active=%s", len(self._keys), self._active_key_id)
+    
+    def _save_keys(self) -> None:
+        """Save keys to file store."""
+        for key_id, key in self._keys.items():
+            self._file_store.store_key(
+                key_id=key_id,
+                private_key_pem=key.private_key_pem,
+                public_key_pem=key.public_key_pem,
+                fingerprint=key.fingerprint,
+                metadata=key.to_dict(),
+            )
+    
+    def generate_key(
+        self,
+        key_id: str,
+        scheme: SignatureScheme = SignatureScheme.ECDSA_P256,
+        key_type: KeyType = KeyType.PRODUCTION,
+        validity_days: int = 365,
+    ) -> SigningKey:
+        """Generate a new signing key with persistence."""
+        key = super().generate_key(key_id, scheme, key_type, validity_days)
+        self._save_keys()
+        self._audit.log_key_generate(key_id, True, scheme.value)
+        return key
+    
+    def activate_key(self, key_id: str) -> bool:
+        """Activate a key with persistence."""
+        result = super().activate_key(key_id)
+        if result:
+            self._save_keys()
+            self._audit.log_key_generate(key_id, True, details=f"activated")
+        return result
+    
+    def rotate_key(self, new_key_id: str) -> tuple[bool, str]:
+        """Perform key rotation with persistence."""
+        old_key_id = self._active_key_id or "none"
+        result, message = super().rotate_key(new_key_id)
+        
+        if result:
+            self._save_keys()
+            self._audit.log_key_rotate(old_key_id, new_key_id, True)
+        else:
+            self._audit.log_key_rotate(old_key_id, new_key_id, False, message)
+        
+        return result, message
+    
+    def revoke_key(self, key_id: str, reason: str = "") -> bool:
+        """Revoke a key with persistence."""
+        result = super().revoke_key(key_id, reason)
+        if result:
+            self._save_keys()
+            self._audit.log_key_revoke(key_id, True, reason)
+        return result
+    
+    def set_operator(self, operator_id: str) -> None:
+        """Set operator identity for audit logging."""
+        self._operator_id = operator_id
+        if self._audit:
+            self._audit.operator_id = operator_id

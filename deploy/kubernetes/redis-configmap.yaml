@@ -1,0 +1,60 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: redis-config
+  namespace: aisupport
+  labels:
+    app: redis
+    component: config
+data:
+  redis.conf: |
+    # Redis Configuration for AISupport
+    # TLS Configuration
+    tls-port 6379
+    port 0
+    tls-cert-file /certs/redis.crt
+    tls-key-file /certs/redis.key
+    tls-ca-cert-file /certs/ca.crt
+    tls-prefer-server-ciphers yes
+
+    # Security
+    requirepass ${REDIS_PASSWORD}
+    masterauth ${REDIS_PASSWORD}
+
+    # Persistence
+    save ""
+    appendonly no
+
+    # Performance
+    tcp-backlog 511
+    timeout 0
+    tcp-keepalive 300
+
+    # Memory
+    maxmemory 256mb
+    maxmemory-policy allkeys-lru
+
+    # Logging
+    logfile ""
+
+  sentinel.conf: |
+    # Redis Sentinel Configuration for AISupport
+    port 26379
+    dir /tmp
+    logfile ""
+
+    # Master monitoring
+    sentinel monitor mymaster ${REDIS_PRIMARY_HOST} 6379 2
+    sentinel down-after-milliseconds mymaster 5000
+    sentinel parallel-syncs mymaster 1
+    sentinel failover-timeout mymaster 10000
+    sentinel auth-pass mymaster ${REDIS_PASSWORD}
+
+    # Sentinel security
+    requirepass ${REDIS_PASSWORD}
+
+    # TLS for Sentinel
+    tls-port 26379
+    tls-cert-file /certs/redis.crt
+    tls-key-file /certs/redis.key
+    tls-ca-cert-file /certs/ca.crt

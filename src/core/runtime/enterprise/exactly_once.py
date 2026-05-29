@@ -4,15 +4,21 @@ Ensures exactly-once semantics for activities:
 - Idempotency key generation
 - Side effect registry
 - Result caching for replay
+
+P0-Hardening:
+- RedisIdempotencyStore: durable, Redis-backed implementation
+- IdempotencyStoreFactory: creates store by config
+- ResultIdempotencyStore: Redis source-of-truth with in-memory L1 cache
 """
 
 from __future__ import annotations
 
 import hashlib
+import json
 import time
 import uuid
 from dataclasses import dataclass, field
-from typing import Any, Optional, Callable
+from typing import Any, Callable, Optional
 from enum import Enum
 
 
@@ -105,6 +111,231 @@ class InMemoryIdempotencyStore(IdempotencyStore):
             del self._records[key]
         
         return len(expired)
+
+
+# =============================================================================
+# P0-DURABLE: REDIS-BACKED IDEMPOTENCY STORE
+# =============================================================================
+
+
+class RedisIdempotencyStore(IdempotencyStore):
+    """P0-Durable: Redis-backed idempotency store.
+
+    Schema per key:
+      HSET idempotency:{workflow_id}:{step_id}:{attempt}
+        status       -> PENDING | COMPLETED | FAILED
+        workflow_id  -> workflow ID
+        activity_id  -> activity ID
+        result       -> JSON-encoded result (COMPLETED)
+        error        -> error string (FAILED)
+        created_at   -> unix timestamp
+        completed_at -> unix timestamp
+        ttl_hours    -> TTL in hours
+
+    TTL is set per-key (workflow-scoped, default 168h = 7 days).
+    """
+
+    _KEY_PREFIX = "idempotency"
+
+    def __init__(
+        self,
+        redis_url: str = "redis://localhost:6379",
+        ttl_hours: int = 168,
+    ):
+        self._redis_url = redis_url
+        self._redis: Any = None
+        self._connected = False
+        self._default_ttl_hours = ttl_hours
+
+    async def connect(self) -> bool:
+        """Connect to Redis."""
+        if self._connected:
+            return True
+        try:
+            import redis.asyncio as redis
+            self._redis = redis.from_url(
+                self._redis_url,
+                decode_responses=False,
+            )
+            await self._redis.ping()
+            self._connected = True
+            return True
+        except Exception:
+            return False
+
+    async def close(self) -> None:
+        """Close Redis connection."""
+        if self._redis and self._connected:
+            await self._redis.close()
+            self._connected = False
+
+    def _make_key(self, idempotency_key: str) -> str:
+        return f"{self._KEY_PREFIX}:{idempotency_key}"
+
+    def _ttl_seconds(self, ttl_hours: int) -> int:
+        return ttl_hours * 3600
+
+    async def get(self, key: str) -> Optional[IdempotencyRecord]:
+        """Get idempotency record from Redis."""
+        if not self._connected:
+            await self.connect()
+
+        full_key = self._make_key(key)
+        try:
+            data = await self._redis.hgetall(full_key)
+            if not data:
+                return None
+
+            def decode(v: Any) -> str:
+                return v.decode() if isinstance(v, bytes) else str(v)
+
+            fields = {k.decode() if isinstance(k, bytes) else k: decode(v) for k, v in data.items()}
+
+            return IdempotencyRecord(
+                idempotency_key=key,
+                workflow_id=fields.get("workflow_id", ""),
+                activity_id=fields.get("activity_id", ""),
+                status=IdempotencyStatus(fields.get("status", "pending")),
+                result=json.loads(fields["result"]) if "result" in fields else None,
+                error=fields.get("error"),
+                created_at=int(fields.get("created_at", 0)),
+                completed_at=int(fields["completed_at"]) if "completed_at" in fields else None,
+                ttl_hours=int(fields.get("ttl_hours", self._default_ttl_hours)),
+            )
+        except Exception:
+            return None
+
+    async def save(self, record: IdempotencyRecord) -> None:
+        """Save idempotency record to Redis with TTL."""
+        if not self._connected:
+            await self.connect()
+
+        full_key = self._make_key(record.idempotency_key)
+        ttl = self._ttl_seconds(record.ttl_hours)
+        try:
+            await self._redis.hset(full_key, mapping={
+                "idempotency_key": record.idempotency_key,
+                "workflow_id": record.workflow_id,
+                "activity_id": record.activity_id,
+                "status": record.status.value,
+                "created_at": str(record.created_at),
+                "ttl_hours": str(record.ttl_hours),
+            })
+            await self._redis.expire(full_key, ttl)
+        except Exception:
+            pass
+
+    async def update_result(
+        self,
+        key: str,
+        status: IdempotencyStatus,
+        result: Optional[Any] = None,
+        error: Optional[str] = None,
+    ) -> bool:
+        """Update result of idempotent operation in Redis."""
+        if not self._connected:
+            await self.connect()
+
+        full_key = self._make_key(key)
+        try:
+            updates: dict[str, Any] = {
+                "status": status.value,
+                "completed_at": str(int(time.time())),
+            }
+            if result is not None:
+                updates["result"] = json.dumps(result)
+            if error is not None:
+                updates["error"] = error
+
+            await self._redis.hset(full_key, mapping=updates)
+            return True
+        except Exception:
+            return False
+
+    async def cleanup_expired(self) -> int:
+        """Redis handles expiry via TTL; this is a no-op."""
+        return 0
+
+
+class ResultIdempotencyStore:
+    """P0-Durable: Redis source-of-truth with in-memory L1 cache.
+
+    Wraps both stores:
+    - RedisIdempotencyStore as authoritative backend (durable)
+    - InMemoryIdempotencyStore as L1 read cache (fast)
+
+    On read: check L1 first, fall back to Redis.
+    On write: write to Redis, then populate L1.
+    """
+
+    def __init__(
+        self,
+        redis_url: str = "redis://localhost:6379",
+        l1_store: Optional[InMemoryIdempotencyStore] = None,
+    ):
+        self._redis_store = RedisIdempotencyStore(redis_url=redis_url)
+        self._l1_store = l1_store or InMemoryIdempotencyStore()
+
+    async def connect(self) -> bool:
+        return await self._redis_store.connect()
+
+    async def get(self, key: str) -> Optional[IdempotencyRecord]:
+        """Read-through: L1 cache, then Redis."""
+        record = await self._l1_store.get(key)
+        if record is not None:
+            return record
+        record = await self._redis_store.get(key)
+        if record is not None:
+            # Populate L1
+            await self._l1_store.save(record)
+        return record
+
+    async def save(self, record: IdempotencyRecord) -> None:
+        """Write-through: Redis (authoritative), then L1."""
+        await self._redis_store.save(record)
+        await self._l1_store.save(record)
+
+    async def update_result(
+        self,
+        key: str,
+        status: IdempotencyStatus,
+        result: Optional[Any] = None,
+        error: Optional[str] = None,
+    ) -> bool:
+        """Write-through: Redis, then L1."""
+        ok = await self._redis_store.update_result(key, status, result, error)
+        if ok:
+            await self._l1_store.update_result(key, status, result, error)
+        return ok
+
+    async def cleanup_expired(self) -> int:
+        return await self._redis_store.cleanup_expired()
+
+
+class IdempotencyStoreFactory:
+    """Factory for creating IdempotencyStore by configuration."""
+
+    @staticmethod
+    def create(
+        backend: str = "memory",
+        redis_url: str = "redis://localhost:6379",
+    ) -> IdempotencyStore:
+        """Create an idempotency store by backend type.
+
+        Args:
+            backend: "memory" for InMemoryIdempotencyStore,
+                     "redis" for RedisIdempotencyStore,
+                     "cached" for ResultIdempotencyStore.
+            redis_url: Redis connection URL for redis/cached backends.
+        """
+        if backend == "memory":
+            return InMemoryIdempotencyStore()
+        elif backend == "redis":
+            return RedisIdempotencyStore(redis_url=redis_url)
+        elif backend == "cached":
+            return ResultIdempotencyStore(redis_url=redis_url)
+        else:
+            raise ValueError(f"Unknown idempotency backend: {backend}")
 
 
 class IdempotencyKeyGenerator:

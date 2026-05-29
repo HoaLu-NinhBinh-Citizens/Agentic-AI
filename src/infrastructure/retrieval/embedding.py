@@ -1,10 +1,15 @@
 import hashlib
 import time
+from concurrent.futures import ThreadPoolExecutor
 from typing import Dict, List, Optional
 
 import requests
 
 from src.core.config.agent_prompts import VECTOR_EMBED_MODEL
+
+
+# Shared thread pool for blocking HTTP calls to avoid thread pool exhaustion
+_EXECUTOR = ThreadPoolExecutor(max_workers=10)
 
 
 class OllamaEmbeddingClient:
@@ -46,36 +51,57 @@ class OllamaEmbeddingClient:
             seen_uncached.add(key)
             uncached_keys.append(key)
             uncached_texts.append(text)
+
+        # Run blocking HTTP calls in thread pool so caller thread is not frozen
         try:
-            response = requests.post(
-                f"{self.url}/api/embed",
-                json={"model": self.model, "input": uncached_texts},
-                timeout=(self.connect_timeout_seconds, self.read_timeout_seconds),
-            )
-            response.raise_for_status()
-            embeddings = response.json().get("embeddings", [])
-            if isinstance(embeddings, list) and len(embeddings) == len(uncached_texts):
+            response = _EXECUTOR.submit(
+                self._fetch_embeddings_batch, uncached_keys, uncached_texts
+            ).result()
+            if response is not None:
                 self._disabled_until = 0.0
-                for key, item in zip(uncached_keys, embeddings):
+                for key, item in zip(uncached_keys, response):
                     self._cache[key] = self._coerce_vector(item)
                 return [list(self._cache[key]) for key in cache_keys]
         except Exception:
             self._disabled_until = time.time() + self.cooldown_seconds
 
+        # Fallback: single embeddings API
         try:
             for key, text in zip(uncached_keys, uncached_texts):
-                response = requests.post(
-                    f"{self.url}/api/embeddings",
-                    json={"model": self.model, "prompt": text},
-                    timeout=(self.connect_timeout_seconds, self.read_timeout_seconds),
-                )
-                response.raise_for_status()
-                self._cache[key] = self._coerce_vector(response.json().get("embedding", []))
+                embedding = _EXECUTOR.submit(
+                    self._fetch_embedding_single, text
+                ).result()
+                self._cache[key] = self._coerce_vector(embedding)
         except Exception:
             self._disabled_until = time.time() + self.cooldown_seconds
             raise
         self._disabled_until = 0.0
         return [list(self._cache[key]) for key in cache_keys]
+
+    def _fetch_embeddings_batch(
+        self, keys: List[str], texts: List[str]
+    ) -> Optional[List[List[float]]]:
+        """Fetch batch embeddings via /api/embed (blocking, runs in thread pool)."""
+        response = requests.post(
+            f"{self.url}/api/embed",
+            json={"model": self.model, "input": texts},
+            timeout=(self.connect_timeout_seconds, self.read_timeout_seconds),
+        )
+        response.raise_for_status()
+        embeddings = response.json().get("embeddings", [])
+        if isinstance(embeddings, list) and len(embeddings) == len(texts):
+            return embeddings
+        return None
+
+    def _fetch_embedding_single(self, text: str) -> List[float]:
+        """Fetch single embedding via /api/embeddings (blocking, runs in thread pool)."""
+        response = requests.post(
+            f"{self.url}/api/embeddings",
+            json={"model": self.model, "prompt": text},
+            timeout=(self.connect_timeout_seconds, self.read_timeout_seconds),
+        )
+        response.raise_for_status()
+        return response.json().get("embedding", [])
 
     def _coerce_vector(self, values: object) -> List[float]:
         if not isinstance(values, list):
@@ -96,4 +122,3 @@ class OllamaEmbeddingClient:
 
     def is_temporarily_unavailable(self) -> bool:
         return time.time() < self._disabled_until
-

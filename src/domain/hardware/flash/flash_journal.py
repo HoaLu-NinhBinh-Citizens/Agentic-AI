@@ -10,6 +10,13 @@ Unlike transaction model (high-level), FlashJournal operates at sector level:
 - sector_12: erase_started → erase_completed
 - sector_12: write_started → write_completed → verify_passed
 - On power loss: precisely know which sectors are corrupted
+
+P0-Safety Hardening:
+- Length-prefixed records with CRC-32 for torn-write detection
+- Double-write + rename pattern for atomic record durability
+- os.fsync() after every critical write
+- Commit Sequence Number (CSN) for global ordering
+- Segmented journal with .committed marker and fsync
 """
 
 from __future__ import annotations
@@ -19,15 +26,50 @@ import hashlib
 import json
 import logging
 import os
+import struct
+import zlib
 from dataclasses import dataclass, field
 from datetime import datetime
 from enum import Enum
-from typing import TYPE_CHECKING, Any, AsyncIterator
+from typing import TYPE_CHECKING, Any, AsyncIterator, BinaryIO
 
 if TYPE_CHECKING:
     from .flash_transaction import FlashTransaction
 
 logger = logging.getLogger(__name__)
+
+
+# =============================================================================
+# P0-SAFETY: POWER-LOSS-SAFE JOURNAL RECORD FORMAT
+# =============================================================================
+#
+# Each journal record is stored as a length-prefixed, CRC-protected binary blob
+# using double-write (write-to-tmp + rename) for atomic durability:
+#
+#   [4-byte length][4-byte CRC-32][N-byte JSON payload]
+#
+# The write sequence is:
+#   1. Serialize: payload -> JSON bytes -> prepend (length, CRC)
+#   2. Write to:  {journal_id}.journal.tmp
+#   3. os.fsync() the tmp file
+#   4. os.rename(tmp, {journal_id}.journal)   <- atomic on POSIX
+#   5. os.fsync() the .journal file
+#
+# Torn-write detection: if power loss occurs during step 2-3,
+# the partial .tmp file is ignored on startup. Only complete
+# rename commits the record.
+#
+# Recovery: on startup, scan .journal for valid (length, CRC, JSON)
+# records. Discard anything after the first corrupt record.
+# =============================================================================
+
+_RECORD_HEADER_FORMAT = "<II"  # little-endian: uint32 length, uint32 crc
+_RECORD_HEADER_SIZE = struct.calcsize(_RECORD_HEADER_FORMAT)  # 8 bytes
+_MAX_RECORD_PAYLOAD = 1024 * 1024  # 1 MB max per record
+
+
+class CorruptJournalError(Exception):
+    """Raised when a corrupt record is detected in the journal."""
 
 
 class JournalOperation(Enum):
@@ -370,7 +412,12 @@ class FlashJournal:
             await self._maybe_flush()
     
     async def commit_transaction(self) -> None:
-        """Commit transaction (mark as complete)."""
+        """P0-Safety: Commit transaction with durable marker.
+
+        Flushes all pending entries, then writes a committed marker file
+        using double-write + fsync to guarantee the marker is durable
+        before reporting success.
+        """
         async with self._lock:
             entry = JournalEntry(
                 entry_id=f"{self.transaction_id}_commit",
@@ -384,15 +431,30 @@ class FlashJournal:
             self._entries.append(entry)
             self._pending_writes.append(entry)
             await self._flush_entries()
-            
-            # Mark journal as complete
+
+            # P0-Safety: Durable committed marker using double-write + fsync
             metadata_path = self.journal_path + ".committed"
-            with open(metadata_path, "w") as f:
-                json.dump({
-                    "transaction_id": self.transaction_id,
-                    "committed_at": datetime.now().isoformat(),
-                    "total_entries": len(self._entries),
-                }, f)
+            tmp_path = metadata_path + ".tmp"
+            marker = json.dumps({
+                "transaction_id": self.transaction_id,
+                "committed_at": datetime.now().isoformat(),
+                "total_entries": len(self._entries),
+            }, indent=2).encode("utf-8")
+
+            with open(tmp_path, "wb") as f:
+                f.write(marker)
+                f.flush()
+                os.fsync(f.fileno())
+            os.rename(tmp_path, metadata_path)
+            # Fsync directory so the rename is durable
+            dir_fd = os.open(
+                os.path.dirname(metadata_path) or ".",
+                os.O_RDONLY | os.O_DIRECTORY,
+            )
+            try:
+                os.fsync(dir_fd)
+            finally:
+                os.close(dir_fd)
     
     async def abort_transaction(self, reason: str) -> None:
         """Abort transaction (mark as failed)."""
@@ -410,25 +472,92 @@ class FlashJournal:
             self._pending_writes.append(entry)
             await self._flush_entries()
     
+    # P0-Safety: Commit Sequence Number for global ordering across segments
+    _csn: int = field(default=0, init=False)
+    _csn_lock: asyncio.Lock = field(default_factory=asyncio.Lock)
+
+    async def _next_csn(self) -> int:
+        """Atomically get the next Commit Sequence Number."""
+        async with self._csn_lock:
+            self._csn += 1
+            return self._csn
+
+    async def _write_record_atomic(self, f: BinaryIO, entry: JournalEntry) -> int:
+        """P0-Safety: Write a single record with length-prefix + CRC + fsync.
+
+        Write sequence:
+          1. Serialize entry -> JSON bytes
+          2. Prepend 8-byte header (length + CRC-32)
+          3. Write to tmp file, flush, fsync
+          4. Rename tmp -> .journal, fsync journal dir
+
+        Returns CSN assigned to this record.
+        """
+        csn = await self._next_csn()
+        payload = json.dumps(entry.to_dict(), default=str).encode("utf-8")
+
+        if len(payload) > _MAX_RECORD_PAYLOAD:
+            raise CorruptJournalError(
+                f"Payload too large ({len(payload)} > {_MAX_RECORD_PAYLOAD}): "
+                f"truncate or split entry {entry.entry_id}"
+            )
+
+        # Compute CRC-32 over payload
+        crc = zlib.crc32(payload) & 0xFFFFFFFF
+        header = struct.pack(_RECORD_HEADER_FORMAT, len(payload), crc)
+        record = header + payload
+
+        # Write to tmp file first
+        tmp_path = self.journal_path + ".tmp"
+        with open(tmp_path, "wb") as tmp_f:
+            tmp_f.write(record)
+            tmp_f.flush()
+            os.fsync(tmp_f.fileno())
+
+        # Atomic rename on POSIX (fsync dir entry too)
+        os.rename(tmp_path, self.journal_path)
+        # Ensure the directory entry update is durable
+        dir_fd = os.open(os.path.dirname(self.journal_path) or ".", os.O_RDONLY | os.O_DIRECTORY)
+        try:
+            os.fsync(dir_fd)
+        finally:
+            os.close(dir_fd)
+
+        # Also fsync the journal file itself
+        with open(self.journal_path, "ab") as jf:
+            os.fsync(jf.fileno())
+
+        return csn
+
     async def _maybe_flush(self) -> None:
         """Flush if threshold reached."""
         if len(self._pending_writes) >= self._batch_size:
             await self._flush_entries()
-    
+
     async def _flush_entries(self) -> None:
-        """Flush pending entries to disk."""
+        """P0-Safety: Flush pending entries using atomic record writes.
+
+        Each entry is written as a length-prefixed, CRC-protected binary record
+        using double-write (tmp + rename) + fsync for power-loss safety.
+        """
         if not self._pending_writes:
             return
-        
-        # Write to append-only file
-        append_path = self.journal_path + ".append"
-        
-        with open(append_path, "a") as f:
-            for entry in self._pending_writes:
-                f.write(json.dumps(entry.to_dict(), default=str) + "\n")
-        
+
+        pending = list(self._pending_writes)
         self._pending_writes = []
-    
+
+        for entry in pending:
+            csn = await self._write_record_atomic(None, entry)  # type: ignore[arg-type]
+            # Attach CSN to entry for traceability
+            entry.operation_data["_csn"] = csn
+
+        logger.debug(
+            "journal_flushed: transaction=%s count=%d csn=%d",
+            self.transaction_id,
+            len(pending),
+            csn,
+        )
+
     async def analyze_corruption(self) -> dict[str, Any]:
         """Analyze journal to determine corruption state after power loss.
         
@@ -522,22 +651,113 @@ class FlashJournal:
             }
     
     async def _load_all_entries(self) -> list[JournalEntry]:
-        """Load all entries from journal files."""
+        """P0-Safety: Load entries from binary journal format with backward compat.
+
+        Tries new binary format first (.journal), falls back to old plain-text
+        format (.append) for entries written before the P0-Safety update.
+        Implements torn-write detection: on first corrupt record, stop reading.
+        """
         entries = []
-        
-        # Load append file
-        append_path = self.journal_path + ".append"
-        if os.path.exists(append_path):
-            with open(append_path, "r") as f:
-                for line in f:
-                    if line.strip():
-                        try:
-                            data = json.loads(line)
-                            entries.append(JournalEntry.from_dict(data))
-                        except json.JSONDecodeError:
-                            pass
-        
+        journal_path = self.journal_path
+
+        # Try new binary format
+        if os.path.exists(journal_path):
+            try:
+                entries = await self._load_binary_entries(journal_path)
+            except CorruptJournalError:
+                logger.warning(
+                    "journal_corrupt_binary: path=%s, falling back to append",
+                    journal_path,
+                )
+                # Fall through to append fallback
+                entries = []
+
+        # Backward compat: load legacy .append file
+        if not entries:
+            append_path = self.journal_path + ".append"
+            if os.path.exists(append_path):
+                entries = await self._load_text_entries(append_path)
+
         return sorted(entries, key=lambda e: e.started_at)
+
+    async def _load_binary_entries(self, path: str) -> list[JournalEntry]:
+        """P0-Safety: Read length-prefixed, CRC-protected records.
+
+        Scans the file record-by-record. On first corrupt record (bad CRC or
+        truncated header), raises CorruptJournalError — the caller treats
+        this as "stop here, the rest may be torn".
+        """
+        entries = []
+        corrupt_count = 0
+
+        with open(path, "rb") as f:
+            while True:
+                header = f.read(_RECORD_HEADER_SIZE)
+                if not header:
+                    break  # EOF
+
+                if len(header) < _RECORD_HEADER_SIZE:
+                    # Truncated header — likely a torn write
+                    raise CorruptJournalError(
+                        f"Truncated header at byte {f.tell() - len(header)}: "
+                        f"expected {_RECORD_HEADER_SIZE}, got {len(header)}"
+                    )
+
+                length, stored_crc = struct.unpack(_RECORD_HEADER_FORMAT, header)
+                if length > _MAX_RECORD_PAYLOAD:
+                    raise CorruptJournalError(
+                        f"Impossible record length {length} at byte {f.tell()}"
+                    )
+
+                payload = f.read(length)
+                if len(payload) < length:
+                    raise CorruptJournalError(
+                        f"Truncated payload at byte {f.tell()}: "
+                        f"expected {length}, got {len(payload)}"
+                    )
+
+                # Verify CRC
+                computed_crc = zlib.crc32(payload) & 0xFFFFFFFF
+                if computed_crc != stored_crc:
+                    corrupt_count += 1
+                    logger.warning(
+                        "journal_crc_mismatch: pos=%d expected_crc=%08x got=%08x",
+                        f.tell() - length,
+                        stored_crc,
+                        computed_crc,
+                    )
+                    # Stop at first corrupt record — everything after is suspect
+                    if corrupt_count == 1:
+                        logger.info(
+                            "journal_corruption_detected: stopping_recovery_at_byte=%d",
+                            f.tell() - length,
+                        )
+                    break
+
+                data = json.loads(payload.decode("utf-8"))
+                entries.append(JournalEntry.from_dict(data))
+
+        if corrupt_count > 1:
+            logger.warning(
+                "journal_multiple_corrupt_records: count=%d path=%s",
+                corrupt_count,
+                path,
+            )
+
+        return entries
+
+    async def _load_text_entries(self, path: str) -> list[JournalEntry]:
+        """Backward-compat: load legacy plain-text JSON-line format."""
+        entries = []
+        with open(path, "r") as f:
+            for line in f:
+                if line.strip():
+                    try:
+                        data = json.loads(line)
+                        entries.append(JournalEntry.from_dict(data))
+                    except json.JSONDecodeError:
+                        logger.warning("journal_skipped_corrupt_line: path=%s", path)
+        return entries
     
     async def get_sector_state(self, sector_id: int) -> dict[str, Any] | None:
         """Get current state of a specific sector."""

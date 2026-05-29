@@ -54,24 +54,28 @@ class EmbeddingModel:
         """Load ONNX Runtime model."""
         try:
             import onnxruntime as ort
+            from concurrent.futures import ThreadPoolExecutor
             from transformers import AutoTokenizer
-            
+
             sess_options = ort.SessionOptions()
             sess_options.graph_optimization_level = (
                 ort.GraphOptimizationLevel.ORT_ENABLE_ALL
             )
-            
+
             # Download model if needed
             cache_dir = Path.home() / ".cache" / "ai-support" / "models"
             model_path = cache_dir / f"{self.model_name.replace('/', '_')}.onnx"
-            
+
             if not model_path.exists():
                 cache_dir.mkdir(parents=True, exist_ok=True)
-                self._download_and_convert_model(model_path)
-            
+                # Run blocking model download in a thread so current thread is not frozen
+                with ThreadPoolExecutor(max_workers=1) as executor:
+                    future = executor.submit(self._download_and_convert_model, model_path)
+                    future.result()
+
             session = ort.InferenceSession(str(model_path), sess_options)
             tokenizer = AutoTokenizer.from_pretrained(self.model_name)
-            
+
             return session, tokenizer
         except ImportError as e:
             raise EmbeddingError(f"ONNX Runtime not available: {e}")
@@ -107,21 +111,27 @@ class EmbeddingModel:
         )
         print(f"Model saved to {output_path}")
     
-    def _load_transformers(self):
+    def _load_transformers(self) -> tuple[Any, Any]:
         """Load transformers model."""
         try:
+            from concurrent.futures import ThreadPoolExecutor
             from transformers import AutoTokenizer, AutoModel
             import torch
-            
-            tokenizer = AutoTokenizer.from_pretrained(self.model_name)
-            model = AutoModel.from_pretrained(self.model_name)
-            
-            if self.device == "cuda" and torch.cuda.is_available():
-                model = model.cuda()
-            elif self.device == "mps":
-                model = model.to("mps")
-            
-            model.eval()
+
+            def _sync_load():
+                tokenizer = AutoTokenizer.from_pretrained(self.model_name)
+                model = AutoModel.from_pretrained(self.model_name)
+                if self.device == "cuda" and torch.cuda.is_available():
+                    model = model.cuda()
+                elif self.device == "mps":
+                    model = model.to("mps")
+                model.eval()
+                return tokenizer, model
+
+            # Run blocking model download in a thread so current thread is not frozen
+            with ThreadPoolExecutor(max_workers=1) as executor:
+                tokenizer, model = executor.submit(_sync_load).result()
+
             return model, tokenizer
         except ImportError as e:
             raise EmbeddingError(f"Transformers not available: {e}")

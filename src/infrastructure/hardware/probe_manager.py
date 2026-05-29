@@ -1,4 +1,8 @@
-"""Debug probe lifecycle manager (Phase 6.1)."""
+"""Debug probe lifecycle manager (Phase 6.1).
+
+P0-Hardening: Integrates FenceAwareProbeAdapter to enforce fence token
+validation on every erase/write/verify operation when a lock is held.
+"""
 
 from __future__ import annotations
 
@@ -19,12 +23,27 @@ DEFAULT_TARGETS_PATH = Path(__file__).resolve().parents[3] / "configs" / "hardwa
 
 
 class ProbeManager:
-    """Discover, connect, and track debug probes."""
+    """Discover, connect, and track debug probes.
 
-    def __init__(self, targets_path: Path | None = None) -> None:
+    P0-Hardening: When a lock_manager + fence_token are provided, probes are
+    wrapped with FenceAwareProbeAdapter to enforce token validation on every
+    erase/write/verify operation.
+    """
+
+    def __init__(
+        self,
+        targets_path: Path | None = None,
+        lock_manager: Any = None,
+        fence_token: Any = None,
+        target_name: str = "",
+    ) -> None:
         self._targets_path = targets_path or DEFAULT_TARGETS_PATH
         self._probes: dict[str, BaseProbe] = {}
+        self._fenced_probes: dict[str, Any] = {}
         self._targets: dict[str, dict[str, Any]] = {}
+        self._lock_manager = lock_manager
+        self._fence_token = fence_token
+        self._target_name = target_name
 
     def load_targets(self) -> dict[str, dict[str, Any]]:
         """Load target definitions from YAML."""
@@ -83,6 +102,38 @@ class ProbeManager:
 
     def get_probe(self, probe_id: str) -> BaseProbe | None:
         return self._probes.get(probe_id)
+
+    def get_fenced_probe(self, probe_id: str) -> Any:
+        """P0-Hardening: Get a fence-enforced probe wrapper.
+
+        Returns a FenceAwareProbeAdapter if lock_manager and fence_token are
+        configured, otherwise returns the raw probe.
+
+        Usage:
+            fenced = probe_manager.get_fenced_probe(probe_id)
+            await fenced.erase(0x08000000, 4096)  # Token validated automatically
+        """
+        if self._lock_manager is None or self._fence_token is None:
+            return self._probes.get(probe_id)
+
+        if probe_id in self._fenced_probes:
+            return self._fenced_probes[probe_id]
+
+        raw = self._probes.get(probe_id)
+        if raw is None:
+            return None
+
+        # Lazily create and cache the fence-aware wrapper
+        from src.infrastructure.hardware.fence_aware_probe import FenceAwareProbeAdapter
+
+        fenced = FenceAwareProbeAdapter(
+            underlying_probe=raw,
+            lock_manager=self._lock_manager,
+            fence_token=self._fence_token,
+            target_name=self._target_name,
+        )
+        self._fenced_probes[probe_id] = fenced
+        return fenced
 
     def get_memory_probe(self, probe_id: str) -> ProbePort | None:
         probe = self._probes.get(probe_id)

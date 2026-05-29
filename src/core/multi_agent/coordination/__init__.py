@@ -42,19 +42,6 @@ from src.core.multi_agent.coordination.types import (
     DeadLetterAlertConfig,
     BackpressureResponse,
     LeaderInfo,
-    # Phase 5F types
-    SecretAction,
-    BreakGlassAction,
-    ExperimentStatus,
-    ErrorType,
-    ResourceType,
-    SecretsAuditRecord,
-    BreakGlassEvent,
-    BreakGlassToken,
-    DRRestoreRecord,
-    CostRecord,
-    BaselineMetrics,
-    ExperimentResult,
 )
 
 from src.core.multi_agent.coordination.config import (
@@ -113,15 +100,6 @@ from src.core.multi_agent.coordination.coordinator import (
     MultiAgentCoordinator,
 )
 
-# Phase 5F: Reliability, Governance & Safety
-from src.core.multi_agent.coordination.saga_compensation import (
-    SagaAtomicCompensation,
-    CircuitErrorClassifier,
-    SagaResult,
-    CompensationStep,
-    ErrorType,
-)
-
 from src.core.multi_agent.coordination.rate_limiter import (
     SlidingLogRateLimiter,
     RateLimitResult,
@@ -133,21 +111,11 @@ from src.core.multi_agent.coordination.policy_cache import (
     Policy,
 )
 
-from src.core.multi_agent.coordination.injection_explainer import (
-    InjectionExplainer,
-    InjectionExplanation,
-)
-
 from src.core.multi_agent.coordination.fair_share_quota import (
     FairShareQuota,
     ErrorBudgetPolicy,
     AllocationResult,
     ErrorBudgetStatus,
-)
-
-from src.core.multi_agent.coordination.chaos_secrets import (
-    ChaosSteadyState,
-    SecretsAuditLog,
 )
 
 from src.core.multi_agent.coordination.governance import (
@@ -172,7 +140,6 @@ __all__ = [
     "BackpressureResponse",
     "LeaderInfo",
     # Phase 5F Types
-    "SecretAction",
     "BreakGlassAction",
     "ExperimentStatus",
     "ErrorType",
@@ -196,23 +163,15 @@ __all__ = [
     "DeadLetterAlertConfig",
     "TenantIsolationConfig",
     # Phase 5F Components
-    "SagaAtomicCompensation",
-    "CircuitErrorClassifier",
-    "SagaResult",
-    "CompensationStep",
     "SlidingLogRateLimiter",
     "RateLimitResult",
     "PolicyCacheInvalidator",
     "SandboxEgressPolicy",
     "Policy",
-    "InjectionExplainer",
-    "InjectionExplanation",
     "FairShareQuota",
     "ErrorBudgetPolicy",
     "AllocationResult",
     "ErrorBudgetStatus",
-    "ChaosSteadyState",
-    "SecretsAuditLog",
     "BreakGlassAlert",
     "DRMetrics",
     "ChargebackReporter",

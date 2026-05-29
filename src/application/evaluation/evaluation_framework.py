@@ -120,33 +120,36 @@ class StatisticalAnalyzer:
     @staticmethod
     def t_test(sample1: list[float], sample2: list[float]) -> tuple[float, float]:
         """Perform t-test. Returns (t_statistic, p_value)."""
-        if len(sample1) < 2 or len(sample2) < 2:
+        n1, n2 = len(sample1), len(sample2)
+        if n1 < 2 or n2 < 2:
             return 0.0, 1.0
-        
+
         mean1, mean2 = statistics.mean(sample1), statistics.mean(sample2)
         var1, var2 = statistics.variance(sample1), statistics.variance(sample2)
-        n1, n2 = len(sample1), len(sample2)
-        
+
         # Welch's t-test
         se = ((var1 / n1) + (var2 / n2)) ** 0.5
         if se == 0:
             return 0.0, 1.0
-        
+
         t_stat = (mean1 - mean2) / se
         # Simplified p-value (would use scipy in production)
         p_value = 0.05 if abs(t_stat) > 2 else 0.5
-        
+
         return t_stat, p_value
     
     @staticmethod
     def confidence_interval(data: list[float], confidence: float = 0.95) -> tuple[float, float]:
         """Calculate confidence interval."""
-        if len(data) < 2:
-            return (data[0] if data else 0.0, data[0] if data else 0.0)
-        
+        if len(data) == 0:
+            return 0.0, 0.0
+        if len(data) == 1:
+            val = data[0]
+            return val, val
+
         mean = statistics.mean(data)
         se = statistics.stdev(data) / (len(data) ** 0.5)
-        
+
         # Z-score for 95% confidence
         z = 1.96
         return (mean - z * se, mean + z * se)
@@ -165,8 +168,8 @@ class EvaluationFramework:
     
     def create_suite(self, name: str) -> EvaluationSuite:
         """Create evaluation suite."""
-        import hashlib
-        suite_id = hashlib.md5(f"{name}:{datetime.now().isoformat()}".encode()).hexdigest()[:8]
+        import hashlib  # local import: only needed for deterministic suite ID
+        suite_id = hashlib.md5(name.encode()).hexdigest()[:8]
         
         suite = EvaluationSuite(suite_id=suite_id, name=name)
         self._suites[suite_id] = suite

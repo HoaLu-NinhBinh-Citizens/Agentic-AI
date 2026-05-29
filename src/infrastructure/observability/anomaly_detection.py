@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import logging
 import statistics
+import uuid
 from collections import deque
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta
@@ -18,6 +19,23 @@ from enum import Enum
 from typing import Any
 
 logger = logging.getLogger(__name__)
+
+
+# ─── Magic numbers as named constants ──────────────────────────────────────────
+
+class AnomalyDefaults:
+    """Named defaults for anomaly detection thresholds."""
+    ZSCORE_THRESHOLD = 3.0
+    IQR_MULTIPLIER = 1.5
+    MIN_WINDOW_SIZE = 10      # minimum points before detection runs
+    CRITICAL_ZSCORE = 5.0
+    CRITICAL_IQR_DEV = 3.0
+    HIGH_ZSCORE = 4.0
+    HIGH_IQR_DEV = 2.0
+    MEDIUM_ZSCORE = 3.0
+    MEDIUM_IQR_DEV = 1.5
+    CONFIDENCE_DIVISOR = 10  # used in confidence = (zscore + iqr_dev) / 10
+    TREND_DEVIATION_PCT = 0.2  # 20% mean shift to classify as TREND
 
 
 class AnomalyType(Enum):
@@ -73,7 +91,8 @@ class Anomaly:
 class StatisticalDetector:
     """Statistical anomaly detection using z-scores and IQR."""
     
-    def __init__(self, z_threshold: float = 3.0, iqr_multiplier: float = 1.5) -> None:
+    def __init__(self, z_threshold: float = AnomalyDefaults.ZSCORE_THRESHOLD,
+                 iqr_multiplier: float = AnomalyDefaults.IQR_MULTIPLIER) -> None:
         self._z_threshold = z_threshold
         self._iqr_multiplier = iqr_multiplier
     
@@ -116,8 +135,10 @@ class StatisticalDetector:
 class TimeSeriesDetector:
     """Time series anomaly detection."""
     
-    def __init__(self, window_size: int = 60) -> None:
+    def __init__(self, window_size: int = 60,
+                 min_window: int = AnomalyDefaults.MIN_WINDOW_SIZE) -> None:
         self._window_size = window_size
+        self._min_window = min_window
         self._windows: dict[str, deque] = {}  # metric_name -> deque of points
         self._statistical = StatisticalDetector()
     
@@ -129,7 +150,7 @@ class TimeSeriesDetector:
     
     def detect(self, metric_name: str, point: TimeSeriesPoint) -> Anomaly | None:
         """Detect anomaly in time series."""
-        if metric_name not in self._windows or len(self._windows[metric_name]) < 10:
+        if metric_name not in self._windows or len(self._windows[metric_name]) < self._min_window:
             return None
         
         window_values = [p.value for p in self._windows[metric_name]]
@@ -146,16 +167,16 @@ class TimeSeriesDetector:
         
         # Calculate severity
         severity = Severity.LOW
-        if zscore > 5 or iqr_dev > 3:
+        if zscore > AnomalyDefaults.CRITICAL_ZSCORE or iqr_dev > AnomalyDefaults.CRITICAL_IQR_DEV:
             severity = Severity.CRITICAL
-        elif zscore > 4 or iqr_dev > 2:
+        elif zscore > AnomalyDefaults.HIGH_ZSCORE or iqr_dev > AnomalyDefaults.HIGH_IQR_DEV:
             severity = Severity.HIGH
-        elif zscore > 3 or iqr_dev > 1.5:
+        elif zscore > AnomalyDefaults.MEDIUM_ZSCORE or iqr_dev > AnomalyDefaults.MEDIUM_IQR_DEV:
             severity = Severity.MEDIUM
-        
+
         # Calculate expected value
         expected = statistics.mean(window_values)
-        
+
         return Anomaly(
             anomaly_id=self._generate_id(),
             board_id=point.metadata.get("board_id", "unknown"),
@@ -166,7 +187,7 @@ class TimeSeriesDetector:
             value=point.value,
             expected_value=expected,
             deviation=max(zscore / self._statistical._z_threshold, iqr_dev / self._statistical._iqr_multiplier),
-            confidence=min(1.0, (zscore + iqr_dev) / 10),
+            confidence=min(1.0, (zscore + iqr_dev) / AnomalyDefaults.CONFIDENCE_DIVISOR),
             window_start=window_times[0],
             window_end=window_times[-1],
             possible_causes=self._suggest_causes(metric_name, point.value, expected),
@@ -186,7 +207,7 @@ class TimeSeriesDetector:
             recent_mean = statistics.mean(recent)
             older_mean = statistics.mean(older)
             
-            if abs(recent_mean - older_mean) / (older_mean if older_mean != 0 else 1) > 0.2:
+            if abs(recent_mean - older_mean) / (older_mean if older_mean != 0 else 1) > AnomalyDefaults.TREND_DEVIATION_PCT:
                 return AnomalyType.TREND
         
         return AnomalyType.POINT
@@ -239,9 +260,7 @@ class TimeSeriesDetector:
     
     def _generate_id(self) -> str:
         """Generate anomaly ID."""
-        import hashlib
-        content = f"{datetime.now().isoformat()}"
-        return hashlib.md5(content.encode()).hexdigest()[:8]
+        return uuid.uuid4().hex[:8]
 
 
 class FleetAnomalyCorrelator:

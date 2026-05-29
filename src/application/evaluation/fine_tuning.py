@@ -19,6 +19,28 @@ from typing import Any
 logger = logging.getLogger(__name__)
 
 
+# ─── Magic numbers as named constants ──────────────────────────────────────────
+
+@dataclass
+class FineTuneDefaults:
+    """Default values for fine-tuning configuration.
+
+    All numeric thresholds are in one place so they can be tuned
+    without hunting through the code.
+    """
+    EPOCHS: int = 3
+    BATCH_SIZE: int = 4
+    LEARNING_RATE: float = 2e-5
+    MAX_SEQ_LENGTH: int = 2048
+    TRAIN_SPLIT: float = 0.9
+    VALIDATION_SPLIT: float = 0.1
+    LORA_R: int = 16
+    LORA_ALPHA: int = 32
+    LORA_DROPOUT: float = 0.05
+    GRADIENT_ACCUMULATION_STEPS: int = 4
+    WARMUP_STEPS: int = 100
+
+
 class DatasetFormat(Enum):
     """Training dataset formats."""
     JSONL = "jsonl"
@@ -38,27 +60,27 @@ class FineTuneConfig:
     """Fine-tuning configuration."""
     base_model: str  # e.g., "llama3", "mistral"
     model_type: ModelType
-    
+
     # Training
-    epochs: int = 3
-    batch_size: int = 4
-    learning_rate: float = 2e-5
-    max_seq_length: int = 2048
-    
+    epochs: int = FineTuneDefaults.EPOCHS
+    batch_size: int = FineTuneDefaults.BATCH_SIZE
+    learning_rate: float = FineTuneDefaults.LEARNING_RATE
+    max_seq_length: int = FineTuneDefaults.MAX_SEQ_LENGTH
+
     # Dataset
-    train_split: float = 0.9
-    validation_split: float = 0.1
-    
+    train_split: float = FineTuneDefaults.TRAIN_SPLIT
+    validation_split: float = FineTuneDefaults.VALIDATION_SPLIT
+
     # Optimization
     use_lora: bool = True
-    lora_r: int = 16
-    lora_alpha: int = 32
-    lora_dropout: float = 0.05
-    
+    lora_r: int = FineTuneDefaults.LORA_R
+    lora_alpha: int = FineTuneDefaults.LORA_ALPHA
+    lora_dropout: float = FineTuneDefaults.LORA_DROPOUT
+
     # Hardware
-    gradient_accumulation_steps: int = 4
-    warmup_steps: int = 100
-    
+    gradient_accumulation_steps: int = FineTuneDefaults.GRADIENT_ACCUMULATION_STEPS
+    warmup_steps: int = FineTuneDefaults.WARMUP_STEPS
+
     # Output
     output_dir: str = "models/fine-tuned"
 
@@ -166,10 +188,14 @@ class DatasetPreparator:
         return original - dataset.total_samples
     
     def filter_by_quality(self, dataset_id: str, min_score: float) -> int:
-        """Filter low quality samples.
+        """Record quality filter threshold.
 
-        Removes samples with quality_score below min_score threshold.
-        min_score must be in (0.0, 1.0]. When min_score=1.0, all samples are kept.
+        The Dataset dataclass stores only aggregate stats (no per-sample quality scores),
+        so actual filtering cannot be performed. This method records the threshold
+        and returns the total sample count.
+
+        Returns:
+            Total sample count in dataset (filtering is not performed in this version).
         """
         dataset = self._datasets.get(dataset_id)
         if not dataset:
@@ -182,15 +208,13 @@ class DatasetPreparator:
             )
             return dataset.total_samples
 
-        original = dataset.total_samples
         dataset.quality_threshold = min_score
         logger.info(
-            "Quality filter set: dataset_id=%s threshold=%s original=%s",
+            "Quality filter threshold set: dataset_id=%s threshold=%s",
             dataset_id,
             min_score,
-            original,
         )
-        return original
+        return dataset.total_samples
 
 
 class FineTuner:

@@ -8,23 +8,29 @@ Provides:
 - HTTP metrics server
 - Health checks (liveness and readiness)
 - Circuit breaker for fault tolerance
-- OpenTelemetry tracing with span management
+- OpenTelemetry tracing with SDK integration
 - Execution graph and causal chain logging
+- Replay trace capture and forensic diff
 
 Usage:
     from src.infrastructure.observability import (
         StructuredLogger,
         LogContext,
-        ConfigManager,
-        MetricsCollector,
-        MetricsServer,
-        OtelTracer,
-        TraceContext,
-        Span,
+        LogLevel,
+        get_logger,
         configure_tracing,
+        get_tracer,
+        get_current_trace_id,
+        set_workflow_id,
+        set_transaction_id,
+        set_artifact_id,
+        set_target_id,
+        set_probe_id,
+        set_fence_token,
+        TraceContext,
         HealthChecker,
         HealthStatus,
-        MetricsRegistry,
+        MetricsCollector,
     )
 """
 
@@ -35,6 +41,14 @@ from .structured_logging import (
     LogLevel,
     LogFormat,
     get_logger,
+    TraceContext,
+    get_current_trace_context,
+    set_workflow_id,
+    set_transaction_id,
+    set_artifact_id,
+    set_target_id,
+    set_probe_id,
+    set_fence_token,
 )
 
 from .config_manager import (
@@ -71,18 +85,17 @@ from .metrics import (
 )
 
 from .otel import (
-    OtelTracer,
-    TraceContext,
-    Span,
-    SpanStatus,
-    SpanKind,
-    TraceConfig,
-    TraceExporter,
-    ConsoleExporter,
-    OtlpExporter,
-    JaegerExporter,
     configure_tracing,
     get_tracer,
+    get_current_trace_id,
+    get_current_span_id,
+    get_replay_exporter,
+    ReplaySpanExporter,
+    TraceConfig,
+    TraceId,
+    traced,
+    SpanStatus,
+    SpanKind,
 )
 
 __all__ = [
@@ -93,6 +106,14 @@ __all__ = [
     "LogLevel",
     "LogFormat",
     "get_logger",
+    "TraceContext",
+    "get_current_trace_context",
+    "set_workflow_id",
+    "set_transaction_id",
+    "set_artifact_id",
+    "set_target_id",
+    "set_probe_id",
+    "set_fence_token",
     # Config
     "ConfigManager",
     "ConfigSource",
@@ -116,16 +137,15 @@ __all__ = [
     "ThreadedHTTPServer",
     "start_metrics_server",
     # Tracing
-    "OtelTracer",
-    "TraceContext",
-    "Span",
-    "SpanStatus",
-    "SpanKind",
-    "TraceConfig",
-    "TraceExporter",
-    "ConsoleExporter",
-    "OtlpExporter",
-    "JaegerExporter",
     "configure_tracing",
     "get_tracer",
+    "get_current_trace_id",
+    "get_current_span_id",
+    "get_replay_exporter",
+    "ReplaySpanExporter",
+    "TraceConfig",
+    "TraceId",
+    "traced",
+    "SpanStatus",
+    "SpanKind",
 ]

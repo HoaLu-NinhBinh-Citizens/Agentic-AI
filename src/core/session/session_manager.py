@@ -1,28 +1,36 @@
-"""Session manager with persistence support.
+"""Session manager facade for backward compatibility.
 
-Provides in-memory session management with full lifecycle support.
-Sessions are persisted to SQLite for crash recovery.
+DEPRECATED: This module is kept for backward compatibility only.
 
-Note: For Phase 1B and later, use PersistentSessionManager from
-core.session.persistent_manager for full SQLite-backed persistence.
+For new code, import directly from core.session.persistent_manager:
+    from core.session.persistent_manager import PersistentSessionManager
+
+The SessionManagerFacade wraps PersistentSessionManager and provides the same
+API as the legacy SessionManager, while enabling tool registry lifecycle
+management for Phase 2B/2C.
+
+Usage (deprecated):
+    from core.session.session_manager import SessionManagerFacade
+    facade = SessionManagerFacade(db_path="data/sessions.db")
+    await facade.initialize()
+
+Usage (preferred):
+    from core.session.persistent_manager import PersistentSessionManager
+    from infrastructure.persistence.sqlite.session_store import SessionStore
+    store = SessionStore(Path("data/sessions.db"))
+    manager = PersistentSessionManager(store)
+    await manager.initialize()
 """
 
 from __future__ import annotations
 
 import asyncio
-import json
 import logging
 import time
 import uuid
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any
-
-try:
-    import aiosqlite
-    HAS_SQLITE = True
-except ImportError:
-    HAS_SQLITE = False
+from typing import TYPE_CHECKING, Any
 
 try:
     from cachetools import TTLCache
@@ -30,238 +38,309 @@ try:
 except ImportError:
     HAS_CACHETOOLS = False
 
+from infrastructure.persistence.sqlite.session_store import SessionStore
+from core.session.persistent_manager import PersistentSessionManager
+
+if TYPE_CHECKING:
+    from application.orchestration.tool_execution.config import ToolExecutionConfig
+    from core.agent.tool_registry import ToolRegistry
+
 logger = logging.getLogger(__name__)
 
 
-class SessionManager:
-    """Manages agent sessions with optional SQLite persistence.
+class SessionManagerFacade:
+    """Facade wrapping PersistentSessionManager with legacy SessionManager API.
 
-    FIX W-001: Added persistence to prevent session loss on restart.
+    This class exists to preserve backward compatibility while delegating all
+    session operations to PersistentSessionManager. Tool registry lifecycle
+    (ToolTracker, ToolRegistry, MCPToolExecutor) is managed here via the
+    wrapped PersistentSessionManager.
 
-    W-012 Fix: TTLCache replaces unbounded dict to prevent OOM after 8h.
-    W-012 Fix: get_session() is now async and holds lock to fix read race.
+    Differences from legacy SessionManager:
+    - create_session and get_session are async (matching PersistentSessionManager).
+    - delete_session accepts an optional grace_period parameter.
+    - Exposes set_mcp_manager, set_config, get_tool_registry for tool lifecycle.
+    - Stores optional 'data' dict in memory only (not persisted to SQLite store).
     """
-
-    _DEFAULT_MAX_SESSIONS = 1000
-    _DEFAULT_TTL_SECONDS = 3600.0  # 1 hour idle before eviction
 
     def __init__(
         self,
-        db_path: str | None = None,
+        db_path: str | Path | None = None,
         auto_persist: bool = True,
         max_sessions: int | None = None,
         session_ttl_seconds: float | None = None,
-    ):
+        mcp_manager: Any = None,
+        config: Any = None,
+    ) -> None:
         """
         Args:
-            db_path: Optional SQLite database path for persistence.
+            db_path: SQLite database path for persistence.
             auto_persist: If True, sessions are persisted to SQLite.
             max_sessions: Max in-memory sessions (default 1000).
             session_ttl_seconds: TTL per session in seconds (default 3600s).
+            mcp_manager: Optional MCP client manager for tool execution.
+            config: Optional ToolExecutionConfig.
         """
-        self._db_path = db_path
-        self._auto_persist = auto_persist and HAS_SQLITE
-        self._conn = None
-        self._lock = asyncio.Lock()
-        self._initialized = False
-        self._persist_needed = False
+        self._db_path = Path(db_path) if db_path else SessionStore()._db_path
+        self._auto_persist = auto_persist
 
-        max_sess = max_sessions or self._DEFAULT_MAX_SESSIONS
-        ttl = session_ttl_seconds or self._DEFAULT_TTL_SECONDS
-        if HAS_CACHETOOLS:
-            self._sessions: dict[str, dict[str, Any]] = TTLCache(
-                maxsize=max_sess, ttl=ttl
-            )
-        else:
-            self._sessions = {}  # type: ignore[assignment]
-            self._session_ttl = ttl
-            self._session_access: dict[str, float] = {}
-    
+        max_sess = max_sessions or PersistentSessionManager._DEFAULT_MAX_SESSIONS
+        ttl = session_ttl_seconds or PersistentSessionManager._DEFAULT_TTL_SECONDS
+
+        self._store: SessionStore = SessionStore(self._db_path)
+        self._inner = PersistentSessionManager(
+            store=self._store,
+            mcp_manager=mcp_manager,
+            config=config,
+            max_sessions=max_sess,
+            session_ttl_seconds=ttl,
+        )
+
+        # In-memory stash for 'data' kwarg that create_session accepts but
+        # the store schema does not persist. Kept separate from the cache
+        # so PersistentSessionManager.delete_session still works correctly.
+        self._data_stash: dict[str, dict[str, Any]] = {}
+
+        self._initialized = False
+
+    def set_mcp_manager(self, mcp_manager: Any) -> None:
+        """Set the MCP manager for tool execution.
+
+        Args:
+            mcp_manager: MCPClientManager instance.
+        """
+        self._inner.set_mcp_manager(mcp_manager)
+
+    def set_config(self, config: ToolExecutionConfig) -> None:
+        """Set the tool execution configuration.
+
+        Args:
+            config: ToolExecutionConfig instance.
+        """
+        self._inner.set_config(config)
+
     async def initialize(self) -> None:
-        """Initialize SQLite persistence if enabled."""
-        if not self._auto_persist or self._initialized:
-            self._initialized = True
+        """Initialize the store and load active sessions into memory cache."""
+        if self._initialized:
             return
-        
-        if not self._db_path:
-            self._db_path = Path("data/sessions.db")
-        
-        Path(self._db_path).parent.mkdir(parents=True, exist_ok=True)
-        
-        self._conn = await aiosqlite.connect(self._db_path)
-        await self._conn.execute("""
-            CREATE TABLE IF NOT EXISTS sessions (
-                id TEXT PRIMARY KEY,
-                created_at TEXT NOT NULL,
-                workspace TEXT,
-                status TEXT NOT NULL,
-                data TEXT,
-                updated_at TEXT NOT NULL
-            )
-        """)
-        await self._conn.execute("PRAGMA journal_mode=WAL")
-        await self._conn.commit()
-        
-        # Load existing sessions
-        cursor = await self._conn.execute("SELECT id, created_at, workspace, status, data FROM sessions")
-        rows = await cursor.fetchall()
-        for row in rows:
-            self._sessions[row[0]] = {
-                "id": row[0],
-                "created_at": row[1],
-                "workspace": row[2],
-                "status": row[3],
-                "data": json.loads(row[4]) if row[4] else {},
-            }
-        
+        await self._store.initialize()
+        await self._inner.initialize()
         self._initialized = True
-        logger.info("session_manager_persistence_initialized", sessions=len(self._sessions))
-    
+        logger.info("SessionManagerFacade initialized", sessions=len(self._inner.list_sessions()))
+
     async def close(self) -> None:
-        """Close database connection."""
-        if self._conn:
-            await self._conn.close()
-            self._conn = None
-    
+        """Close the facade and underlying manager."""
+        await self._inner.close()
+        await self._store.close()
+        self._initialized = False
+
     def _get_now(self) -> str:
         return datetime.now(timezone.utc).isoformat()
-    
-    async def _persist_session(self, session_id: str) -> None:
-        """Persist session to SQLite atomically."""
-        if not self._auto_persist or not self._conn:
-            return
-        
-        session = self._sessions.get(session_id)
-        if not session:
-            return
-        
-        try:
-            await self._conn.execute("""
-                INSERT INTO sessions (id, created_at, workspace, status, data, updated_at)
-                VALUES (?, ?, ?, ?, ?, ?)
-                ON CONFLICT(id) DO UPDATE SET
-                    workspace = excluded.workspace,
-                    status = excluded.status,
-                    data = excluded.data,
-                    updated_at = excluded.updated_at
-            """, (
-                session["id"],
-                session["created_at"],
-                session.get("workspace"),
-                session["status"],
-                json.dumps(session.get("data", {})),
-                self._get_now(),
-            ))
-            await self._conn.commit()
-        except Exception as e:
-            logger.error("session_persist_failed", session_id=session_id, error=str(e))
 
-    async def create_session(self, workspace: str | None = None, data: dict[str, Any] | None = None) -> str:
+    async def create_session(
+        self,
+        workspace: str | None = None,
+        data: dict[str, Any] | None = None,
+    ) -> str:
         """Create a new session.
 
         Args:
             workspace: Optional workspace path for the session.
-            data: Optional additional session data.
+            data: Optional additional session data (kept in memory only).
 
         Returns:
             The unique session ID as a string.
         """
-        async with self._lock:
-            session_id = str(uuid.uuid4())
-            now = self._get_now()
-            session = {
-                "id": session_id,
-                "created_at": now,
-                "workspace": workspace,
-                "status": "active",
-                "data": data or {},
-            }
-            self._sessions[session_id] = session
-            if HAS_CACHETOOLS:
-                pass  # TTLCache handles eviction internally
-            else:
-                self._session_access[session_id] = time.time()
+        if self._auto_persist:
+            session_id = self._inner.create_session(workspace)
+            await self._inner.save_session(session_id)
+        else:
+            session_id = self._inner.create_session(workspace)
 
-        await self._persist_session(session_id)
+        if data:
+            self._data_stash[session_id] = data
+
+        logger.debug("Created session: %s", session_id)
         return session_id
 
     async def get_session(self, session_id: str) -> dict[str, Any] | None:
-        """Get session by ID (thread-safe, with TTL eviction for fallback)."""
-        async with self._lock:
-            if HAS_CACHETOOLS:
-                return self._sessions.get(session_id)
-            # Fallback: evict stale sessions before lookup
-            now = time.time()
-            stale = [
-                sid for sid, last_access in self._session_access.items()
-                if now - last_access > self._session_ttl
-            ]
-            for sid in stale:
-                self._sessions.pop(sid, None)
-                self._session_access.pop(sid, None)
-            self._session_access[session_id] = now
-            return self._sessions.get(session_id)
+        """Get session by ID.
 
-    async def update_session(self, session_id: str, **kwargs) -> bool:
+        Args:
+            session_id: The session ID.
+
+        Returns:
+            Session dict (with 'status' and 'data' fields) or None.
+        """
+        session = self._inner.get_session(session_id)
+        if session is None:
+            return None
+
+        # Align field names: store uses 'state', legacy API used 'status'
+        result = dict(session)
+        result["status"] = result.pop("state", "active")
+
+        # Merge in-memory 'data' stash so callers receive the full dict
+        if session_id in self._data_stash:
+            result["data"] = self._data_stash[session_id]
+
+        if HAS_CACHETOOLS:
+            pass  # TTLCache handles TTL internally
+        else:
+            self._inner._session_access[session_id] = time.time()
+
+        return result
+
+    async def update_session(self, session_id: str, **kwargs: Any) -> bool:
         """Update session fields and persist.
 
         Args:
             session_id: Session ID to update.
-            **kwargs: Fields to update.
+            **kwargs: Fields to update (e.g. status="active", data={...}).
 
         Returns:
             True if updated, False if not found.
         """
-        async with self._lock:
-            if session_id not in self._sessions:
-                return False
+        session = self._inner.get_session(session_id)
+        if session is None:
+            return False
 
-            self._sessions[session_id].update(kwargs)
-            if HAS_CACHETOOLS:
-                # Access updates TTL on TTLCache
-                self._sessions[session_id] = self._sessions[session_id]
-            else:
-                self._session_access[session_id] = time.time()
+        # 'status' in kwargs maps to 'state' in the store schema
+        if "status" in kwargs:
+            kwargs["state"] = kwargs.pop("status")
 
-        await self._persist_session(session_id)
+        # 'data' in kwargs goes to the in-memory stash only
+        if "data" in kwargs:
+            self._data_stash[session_id] = kwargs.pop("data")
+
+        session.update(kwargs)
+
+        if self._auto_persist:
+            await self._inner.save_session(session_id)
+
+        if HAS_CACHETOOLS:
+            pass
+        else:
+            self._inner._session_access[session_id] = time.time()
+
         return True
-    
-    async def delete_session(self, session_id: str) -> None:
-        """Delete a session by ID."""
-        async with self._lock:
-            in_cache = session_id in self._sessions
-            if in_cache:
-                del self._sessions[session_id]
-                if not HAS_CACHETOOLS:
-                    self._session_access.pop(session_id, None)
 
-        if in_cache and self._auto_persist and self._conn:
-            try:
-                await self._conn.execute("DELETE FROM sessions WHERE id = ?", (session_id,))
-                await self._conn.commit()
-            except Exception as e:
-                logger.error("session_delete_failed", session_id=session_id, error=str(e))
+    async def delete_session(self, session_id: str, grace_period: float = 2.0) -> None:
+        """Delete a session and its tool registry.
+
+        Args:
+            session_id: The session ID to delete.
+            grace_period: Grace period in seconds before force cleanup (Phase 2C).
+        """
+        self._data_stash.pop(session_id, None)
+        if self._auto_persist:
+            await self._inner.delete_session(session_id, grace_period=grace_period)
+        else:
+            self._inner._cache.pop(session_id, None)
+            await self._inner._close_tool_registry(session_id)
+        logger.info("Deleted session: %s", session_id)
 
     async def end_session(self, session_id: str) -> None:
-        """End a session."""
-        async with self._lock:
-            if session_id in self._sessions:
-                self._sessions[session_id]["status"] = "ended"
+        """Mark a session as ended.
 
-        await self._persist_session(session_id)
+        Args:
+            session_id: The session ID.
+        """
+        session = self._inner.get_session(session_id)
+        if session is None:
+            return
+        session["state"] = "ended"
+        if self._auto_persist:
+            await self._inner.save_session(session_id)
+        logger.info("Ended session: %s", session_id)
 
     async def list_sessions(self) -> list[dict[str, Any]]:
-        """List all sessions (thread-safe snapshot)."""
-        async with self._lock:
-            return list(self._sessions.values())
+        """List all sessions from cache.
+
+        Returns:
+            List of session dicts with 'status' field (not 'state').
+        """
+        sessions = self._inner.list_sessions()
+        result = []
+        for session in sessions:
+            out = dict(session)
+            out["status"] = out.pop("state", "active")
+            if session["id"] in self._data_stash:
+                out["data"] = self._data_stash[session["id"]]
+            result.append(out)
+        return result
+
+    def get_tool_registry(self, session_id: str) -> ToolRegistry | None:
+        """Get the tool registry for a session.
+
+        Args:
+            session_id: Session identifier.
+
+        Returns:
+            ToolRegistry if session has one, None otherwise.
+        """
+        return self._inner.get_tool_registry(session_id)
 
 
-class InMemorySessionManager(SessionManager):
+# ----------------------------------------------------------------------
+# Backward-compatible aliases — keep existing code working without changes
+# ----------------------------------------------------------------------
+#: Alias for code that imports SessionManager directly.
+SessionManager = SessionManagerFacade
+
+
+class InMemorySessionManager(SessionManagerFacade):
     """In-memory session manager with extended features.
 
-    Alias for SessionManager with Phase 1A capabilities.
-    Backward compatible with existing code.
+    Alias for SessionManagerFacade with Phase 1A capabilities.
+    Backward compatible with existing code (synchronous API).
     """
 
-    def __init__(self):
+    def __init__(self) -> None:
         super().__init__(auto_persist=False)
+
+    def create_session(
+        self,
+        workspace: str | None = None,
+        data: dict[str, Any] | None = None,
+    ) -> str:
+        """Synchronous wrapper — see SessionManagerFacade.create_session."""
+        import asyncio
+        return asyncio.get_event_loop_policy().get_event_loop().run_until_complete(
+            super().create_session(workspace=workspace, data=data)
+        )
+
+    def get_session(self, session_id: str) -> dict[str, Any] | None:
+        """Synchronous wrapper — see SessionManagerFacade.get_session."""
+        import asyncio
+        return asyncio.get_event_loop_policy().get_event_loop().run_until_complete(
+            super().get_session(session_id)
+        )
+
+    def update_session(self, session_id: str, **kwargs: Any) -> bool:
+        """Synchronous wrapper — see SessionManagerFacade.update_session."""
+        import asyncio
+        return asyncio.get_event_loop_policy().get_event_loop().run_until_complete(
+            super().update_session(session_id, **kwargs)
+        )
+
+    def delete_session(self, session_id: str) -> None:
+        """Synchronous wrapper — see SessionManagerFacade.delete_session."""
+        import asyncio
+        asyncio.get_event_loop_policy().get_event_loop().run_until_complete(
+            super().delete_session(session_id)
+        )
+
+    def end_session(self, session_id: str) -> None:
+        """Synchronous wrapper — see SessionManagerFacade.end_session."""
+        import asyncio
+        asyncio.get_event_loop_policy().get_event_loop().run_until_complete(
+            super().end_session(session_id)
+        )
+
+    def list_sessions(self) -> list[dict[str, Any]]:
+        """Synchronous wrapper — see SessionManagerFacade.list_sessions."""
+        import asyncio
+        return asyncio.get_event_loop_policy().get_event_loop().run_until_complete(
+            super().list_sessions()
+        )

@@ -6,6 +6,56 @@ Provides:
 - Atomic firmware updates
 - Rollback on failure
 - Anti-rollback protection
+- Signed artifact manifest integration
+
+====================================================================
+BOOTLOADER CONTRACT — ROLLBACK GUARANTEE
+====================================================================
+
+SOFTWARE ROLLBACK GUARANTEE: The anti-rollback guarantee provided by
+this module is ONLY valid if the bootloader enforces the pending/
+confirmed semantics described below. The software cannot protect against
+a compromised bootloader that skips these checks.
+
+REQUIRED BOOTLOADER BEHAVIOR:
+1. On every boot, the bootloader MUST:
+   a. Read the active slot from boot control block
+   b. Verify the slot's pending state matches expected state
+   c. Check the signature against SignedArtifactManifest
+   d. Verify firmware version > anti-rollback counter
+   e. Execute the firmware from the active slot
+
+2. After successful boot, the application MUST call
+   mark_boot_successful() which transitions the slot from PENDING
+   to CONFIRMED state.
+
+3. If boot fails (watchdog timeout, crash detection, etc.):
+   a. Increment failed boot counter for the slot
+   b. If failed_boots >= MAX_BOOT_ATTEMPTS:
+      - Mark slot as CORRUPTED
+      - Set fallback slot as new active
+      - Reset failed boot counter for fallback
+      - Boot from fallback slot
+
+4. ANTI-ROLLBACK ENFORCEMENT:
+   The bootloader MUST reject any slot where:
+   - Firmware version <= anti_rollback_counter
+   - Signature verification fails
+   - Slot state != PENDING or CONFIRMED
+
+PENDING/CONFIRMED STATE MACHINE:
+- NEW: Slot is empty/fresh, never written
+- PENDING: Firmware written and validated, awaiting boot confirmation
+- CONFIRMED: Boot succeeded, firmware is trusted
+- ACTIVE: This slot is the primary boot target
+
+TRANSITIONS:
+- NEW → PENDING: prepare_update() + switch_slots()
+- PENDING → CONFIRMED: mark_boot_successful()
+- CONFIRMED → ACTIVE: (automatic, set by boot control)
+- Any → CORRUPTED: mark_boot_failed() after MAX_BOOT_ATTEMPTS
+
+====================================================================
 
 Usage:
     manager = ABPartitionManager(probe, config)
@@ -28,22 +78,40 @@ logger = logging.getLogger(__name__)
 
 
 class SlotState(Enum):
-    """Slot state."""
+    """Slot state for pending/confirmed state machine.
+    
+    State Transitions:
+    - NEW: Empty/fresh slot, never written
+    - PENDING: Firmware written, awaiting boot confirmation
+    - CONFIRMED: Boot succeeded, firmware is trusted
+    - ACTIVE: This slot is the primary boot target
+    """
     EMPTY = "empty"
-    VALID = "valid"
-    UPDATING = "updating"
-    CORRUPTED = "corrupted"
-    PENDING_BOOT = "pending_boot"
+    NEW = "new"                    # Slot is fresh/never written
+    PENDING = "pending"            # Firmware written, awaiting boot confirmation
+    CONFIRMED = "confirmed"       # Boot succeeded, firmware is trusted
+    VALID = "valid"                # Legacy alias for CONFIRMED
+    UPDATING = "updating"          # Currently being written
+    CORRUPTED = "corrupted"        # Boot failed or verification failed
+    PENDING_BOOT = "pending_boot" # Legacy alias for PENDING
+
+
+class SlotLifecycle(Enum):
+    """Slot lifecycle state for pending/confirmed semantics."""
+    NEW = "new"           # Slot is fresh, never written
+    PENDING = "pending"   # Firmware written, awaiting boot confirmation
+    CONFIRMED = "confirmed"  # Boot succeeded, firmware is trusted
 
 
 @dataclass
 class SlotInfo:
-    """Slot information."""
+    """Slot information with pending/confirmed lifecycle support."""
     slot_id: int
     base_address: int
     size: int
     state: SlotState = SlotState.EMPTY
     firmware_version: str = ""
+    firmware_version_int: int = 0  # Numeric version for anti-rollback
     firmware_hash: str = ""
     last_booted: datetime | None = None
     update_count: int = 0
@@ -52,6 +120,15 @@ class SlotInfo:
     is_active: bool = False
     boot_count: int = 0
     consecutive_failed_boots: int = 0
+    
+    # Pending/confirmed lifecycle
+    lifecycle: SlotLifecycle = SlotLifecycle.NEW
+    pending_since: datetime | None = None
+    confirmed_at: datetime | None = None
+    
+    # Manifest binding
+    manifest_signature: str = ""  # Signature from SignedArtifactManifest
+    manifest_key_id: str = ""      # Key ID that signed the manifest
 
 
 @dataclass
@@ -70,34 +147,64 @@ class ABConfig:
     # Anti-rollback
     min_version: int = 0
     max_version: int = 0xFFFFFFFF
+    
+    # Rollback fallback configuration
+    max_boot_attempts: int = 3  # N attempts before rollback fallback
+    rollback_timeout_ms: int = 5000  # Timeout to mark boot successful
 
 
 @dataclass
 class BootControlBlock:
-    """Boot control block stored in flash."""
+    """Boot control block stored in flash.
+    
+    Stores persistent boot state including:
+    - Active slot selection
+    - Retry counter for rollback fallback
+    - Firmware version
+    - Image hash
+    - Slot lifecycle states (pending/confirmed)
+    """
     magic: int
     active_slot: int  # 0 = A, 1 = B
-    retry_count: int
-    version: int
-    hash: bytes
-    timestamp: int
+    retry_count: int  # Remaining boot attempts before rollback
+    version: int  # Firmware version for anti-rollback
+    hash: bytes  # SHA-256 hash of firmware
+    
+    # Extended fields for pending/confirmed state machine
+    pending_slot: int = 0xFF  # 0xFF = none, 0 = A, 1 = B
+    confirmed_slot: int = 0xFF  # 0xFF = none, 0 = A, 1 = B
+    slot_a_lifecycle: int = 0  # 0=NEW, 1=PENDING, 2=CONFIRMED
+    slot_b_lifecycle: int = 0  # 0=NEW, 1=PENDING, 2=CONFIRMED
+    
+    # Anti-rollback counter stored in boot control (backup)
+    anti_rollback_counter: int = 0
+    
+    # Timestamps
+    timestamp: int = 0
+    last_boot_attempt: int = 0
     
     def to_bytes(self) -> bytes:
-        return struct.pack("<IIIBB32sI", 
+        return struct.pack(
+            "<IIIBB32sBBBBII",
             self.magic,
             self.active_slot,
             self.retry_count,
             self.version,
-            0,  # reserved
+            self.pending_slot,
             self.hash,
             self.timestamp,
+            self.confirmed_slot,
+            self.slot_a_lifecycle,
+            self.slot_b_lifecycle,
+            self.anti_rollback_counter,
+            self.last_boot_attempt,
         )
     
     @classmethod
     def from_bytes(cls, data: bytes) -> "BootControlBlock":
-        if len(data) < 48:
+        if len(data) < 56:
             raise ValueError("BootControlBlock too small")
-        unpacked = struct.unpack("<IIIBB32sI", data[:48])
+        unpacked = struct.unpack("<IIIBB32sBBBBII", data[:56])
         return cls(
             magic=unpacked[0],
             active_slot=unpacked[1],
@@ -105,6 +212,11 @@ class BootControlBlock:
             version=unpacked[3],
             hash=unpacked[5],
             timestamp=unpacked[6],
+            confirmed_slot=unpacked[7],
+            slot_a_lifecycle=unpacked[8],
+            slot_b_lifecycle=unpacked[9],
+            anti_rollback_counter=unpacked[10],
+            last_boot_attempt=unpacked[11],
         )
 
 
@@ -198,19 +310,29 @@ class ABPartitionManager:
             logger.error("write_boot_control_failed", error=str(e))
             return False
     
-    def get_active_slot(self) -> int:
+    async def get_active_slot(self) -> int:
         """Get currently active slot (0=A, 1=B)."""
-        return 0  # Will read from boot control
+        bcb = await self.read_boot_control()
+        return bcb.active_slot
     
-    def get_inactive_slot(self) -> int:
+    async def get_inactive_slot(self) -> int:
         """Get inactive slot for update."""
-        return 1  # Will read from boot control
+        bcb = await self.read_boot_control()
+        return 1 - bcb.active_slot
     
-    async def prepare_update(self, firmware: bytes) -> UpdateResult:
+    async def prepare_update(
+        self,
+        firmware: bytes,
+        manifest: Any | None = None,  # SignedArtifactManifest
+    ) -> UpdateResult:
         """Prepare firmware update in inactive slot.
+        
+        Writes firmware to inactive slot and sets it to PENDING state.
+        The slot will not be booted until switch_slots() is called.
         
         Args:
             firmware: Firmware binary data
+            manifest: SignedArtifactManifest for signature binding
             
         Returns:
             UpdateResult with status
@@ -231,9 +353,24 @@ class ABPartitionManager:
             # Compute hash
             firmware_hash = hashlib.sha256(firmware).digest()
             
-            # Update slot info
+            # Update slot info - transition to UPDATING
             slot_info.state = SlotState.UPDATING
             slot_info.firmware_hash = firmware_hash.hex()
+            
+            # Store manifest binding if provided
+            if manifest:
+                slot_info.manifest_signature = manifest.signature
+                slot_info.manifest_key_id = manifest.key_id
+                slot_info.firmware_version = manifest.semantic_version
+                # Extract numeric version for anti-rollback
+                try:
+                    parts = manifest.semantic_version.split(".")
+                    slot_info.firmware_version_int = (
+                        int(parts[0]) << 16 | int(parts[1]) << 8 | int(parts[2])
+                        if len(parts) >= 3 else int(parts[0]) if parts else 0
+                    )
+                except (ValueError, IndexError):
+                    slot_info.firmware_version_int = 0
             
             # Write firmware to inactive slot
             logger.info(
@@ -261,6 +398,7 @@ class ABPartitionManager:
             
             if not hash_match:
                 slot_info.state = SlotState.CORRUPTED
+                slot_info.lifecycle = SlotLifecycle.NEW
                 return UpdateResult(
                     success=False,
                     slot=inactive_slot,
@@ -270,8 +408,18 @@ class ABPartitionManager:
                     error="Verification failed",
                 )
             
-            slot_info.state = SlotState.VALID
+            # Transition to PENDING (ready to boot, awaiting confirmation)
+            slot_info.state = SlotState.PENDING
+            slot_info.lifecycle = SlotLifecycle.PENDING
+            slot_info.pending_since = datetime.now()
             slot_info.update_count += 1
+            
+            logger.info(
+                "slot_prepared_for_boot",
+                slot=inactive_slot,
+                version=slot_info.firmware_version,
+                lifecycle=slot_info.lifecycle.value,
+            )
             
             return UpdateResult(
                 success=True,
@@ -289,8 +437,25 @@ class ABPartitionManager:
                 error=str(e),
             )
     
-    async def mark_update_valid(self, version: int, firmware_hash: bytes) -> bool:
-        """Mark update as valid and ready to boot."""
+    async def mark_update_valid(
+        self,
+        version: int,
+        firmware_hash: bytes,
+        manifest: Any | None = None,
+    ) -> bool:
+        """Mark update as valid and ready to boot.
+        
+        Transitions the inactive slot to PENDING state and sets it as
+        the pending slot for boot.
+        
+        Args:
+            version: Firmware version (for anti-rollback)
+            firmware_hash: SHA-256 hash of firmware
+            manifest: SignedArtifactManifest for binding
+            
+        Returns:
+            True if successful
+        """
         try:
             bcb = await self.read_boot_control()
             inactive_slot = 1 - bcb.active_slot
@@ -299,14 +464,32 @@ class ABPartitionManager:
             bcb.version = version
             bcb.hash = firmware_hash
             bcb.timestamp = int(datetime.now().timestamp())
-            bcb.retry_count = 3  # Reset retry count
+            bcb.retry_count = self._config.max_boot_attempts
+            bcb.pending_slot = inactive_slot
+            
+            # Set slot lifecycle
+            bcb.slot_a_lifecycle = 1 if inactive_slot == 0 else 0
+            bcb.slot_b_lifecycle = 1 if inactive_slot == 1 else 0
             
             success = await self.write_boot_control(bcb)
             
             if success:
                 slot = self._slots[inactive_slot]
-                slot.state = SlotState.PENDING_BOOT
+                slot.state = SlotState.PENDING
+                slot.lifecycle = SlotLifecycle.PENDING
+                slot.pending_since = datetime.now()
                 slot.firmware_version = str(version)
+                slot.firmware_version_int = version
+                
+                if manifest:
+                    slot.manifest_signature = manifest.signature
+                    slot.manifest_key_id = manifest.key_id
+                
+                logger.info(
+                    "update_marked_valid",
+                    slot=inactive_slot,
+                    version=version,
+                )
                 
             return success
             
@@ -319,23 +502,42 @@ class ABPartitionManager:
         
         This updates the boot control to point to the other slot.
         The actual switch happens on next reboot.
+        
+        State transitions:
+        - Previous active slot stays in CONFIRMED state
+        - New active slot transitions from PENDING → (waiting for boot)
         """
         try:
             bcb = await self.read_boot_control()
             
+            # Mark current slot as no longer pending
+            old_active = bcb.active_slot
+            bcb.confirmed_slot = old_active  # Remember confirmed slot
+            
             # Switch active slot
             new_active = 1 - bcb.active_slot
             bcb.active_slot = new_active
-            bcb.retry_count = 3
+            bcb.retry_count = self._config.max_boot_attempts
+            bcb.last_boot_attempt = int(datetime.now().timestamp())
             
             success = await self.write_boot_control(bcb)
             
             if success:
-                self._slots[bcb.active_slot].is_active = False
-                self._slots[new_active].is_active = True
-                self._slots[new_active].state = SlotState.PENDING_BOOT
+                # Update old slot
+                self._slots[old_active].is_active = False
+                # Keep old slot in CONFIRMED state (already confirmed from previous boot)
                 
-                logger.info("slot_switch_prepared", new_active=new_active)
+                # Update new slot
+                self._slots[new_active].is_active = True
+                self._slots[new_active].state = SlotState.PENDING
+                self._slots[new_active].lifecycle = SlotLifecycle.PENDING
+                self._slots[new_active].consecutive_failed_boots = 0
+                
+                logger.info(
+                    "slot_switch_prepared",
+                    old_active=old_active,
+                    new_active=new_active,
+                )
             
             return success
             
@@ -343,26 +545,67 @@ class ABPartitionManager:
             logger.error("switch_slots_failed", error=str(e))
             return False
     
-    async def mark_boot_successful(self) -> bool:
+    async def mark_boot_successful(
+        self,
+        advance_anti_rollback: bool = True,
+    ) -> bool:
         """Mark current boot as successful.
         
         Call this after verifying firmware runs correctly.
+        Transitions the slot from PENDING to CONFIRMED state.
+        
+        Args:
+            advance_anti_rollback: If True, advances the anti-rollback counter
+                                   to record this successful boot.
+            
+        Returns:
+            True if successful
         """
         try:
             bcb = await self.read_boot_control()
+            current_slot = bcb.active_slot
             
             # Reset retry count on successful boot
-            bcb.retry_count = 3
+            bcb.retry_count = self._config.max_boot_attempts
+            bcb.confirmed_slot = current_slot
+            
+            # Update slot lifecycle
+            if current_slot == 0:
+                bcb.slot_a_lifecycle = 2  # CONFIRMED
+            else:
+                bcb.slot_b_lifecycle = 2  # CONFIRMED
             
             success = await self.write_boot_control(bcb)
             
             if success:
-                slot = self._slots[bcb.active_slot]
+                slot = self._slots[current_slot]
                 slot.last_booted = datetime.now()
                 slot.boot_count += 1
                 slot.consecutive_failed_boots = 0
-                slot.state = SlotState.VALID
+                slot.state = SlotState.CONFIRMED
+                slot.lifecycle = SlotLifecycle.CONFIRMED
+                slot.confirmed_at = datetime.now()
                 
+                # Advance anti-rollback counter
+                if advance_anti_rollback and slot.firmware_version_int > 0:
+                    try:
+                        counter = AntiRollbackCounter(self._probe)
+                        await counter.increment_counter()
+                        logger.info(
+                            "anti_rollback_counter_advanced",
+                            slot=current_slot,
+                            version=slot.firmware_version_int,
+                        )
+                    except Exception as e:
+                        logger.warning("failed_to_advance_anti_rollback", error=str(e))
+                
+                logger.info(
+                    "boot_successful",
+                    slot=current_slot,
+                    version=slot.firmware_version,
+                    boot_count=slot.boot_count,
+                )
+            
             return success
             
         except Exception as e:
@@ -373,6 +616,12 @@ class ABPartitionManager:
         """Mark current boot as failed.
         
         Decrements retry count. If retries exhausted, reverts to other slot.
+        
+        This implements the rollback fallback: after MAX_BOOT_ATTEMPTS,
+        the system automatically falls back to the previous slot.
+        
+        Returns:
+            True if boot control was written
         """
         try:
             bcb = await self.read_boot_control()
@@ -388,19 +637,43 @@ class ABPartitionManager:
                     "boot_retry_exhausted",
                     slot=current_slot,
                     consecutive_failures=slot.consecutive_failed_boots,
+                    max_attempts=self._config.max_boot_attempts,
                 )
                 
-                # Switch back to other slot
+                # Rollback fallback: switch to other slot
                 other_slot = 1 - current_slot
                 other = self._slots[other_slot]
                 
-                if other.state == SlotState.VALID:
+                # Check if fallback slot is bootable
+                can_boot = (
+                    other.lifecycle == SlotLifecycle.PENDING or
+                    other.lifecycle == SlotLifecycle.CONFIRMED
+                )
+                
+                if can_boot:
                     bcb.active_slot = other_slot
-                    bcb.retry_count = 3
+                    bcb.retry_count = self._config.max_boot_attempts
+                    bcb.last_boot_attempt = int(datetime.now().timestamp())
+                    
+                    # Mark failed slot as corrupted
                     slot.state = SlotState.CORRUPTED
-                    logger.info("reverting_to_slot", slot=other_slot)
+                    slot.lifecycle = SlotLifecycle.NEW
+                    slot.consecutive_failed_boots = 0
+                    
+                    # Reset other slot for new attempts
+                    other.consecutive_failed_boots = 0
+                    
+                    logger.info(
+                        "rollback_fallback_executed",
+                        from_slot=current_slot,
+                        to_slot=other_slot,
+                    )
                 else:
-                    logger.error("no_valid_fallback_slot")
+                    logger.error(
+                        "rollback_failed_no_bootable_slot",
+                        current_slot=current_slot,
+                        other_lifecycle=other.lifecycle.value,
+                    )
             
             return await self.write_boot_control(bcb)
             
@@ -409,82 +682,477 @@ class ABPartitionManager:
             return False
     
     async def rollback_to_previous(self) -> bool:
-        """Force rollback to previous slot."""
+        """Force rollback to previous (confirmed) slot.
+        
+        This is a manual rollback triggered by external decision.
+        Prefer mark_boot_failed() for automatic rollback on boot failure.
+        
+        Returns:
+            True if rollback succeeded
+        """
         try:
             bcb = await self.read_boot_control()
             current = bcb.active_slot
             previous = 1 - current
             
-            if self._slots[previous].state in [SlotState.VALID, SlotState.PENDING_BOOT]:
-                bcb.active_slot = previous
-                bcb.retry_count = 3
-                success = await self.write_boot_control(bcb)
-                
-                if success:
-                    self._slots[current].is_active = False
-                    self._slots[previous].is_active = True
-                    logger.info("rollback_complete", from_slot=current, to_slot=previous)
-                
-                return success
+            # Can only rollback to PENDING or CONFIRMED slots
+            prev_slot = self._slots[previous]
+            if prev_slot.lifecycle not in (SlotLifecycle.PENDING, SlotLifecycle.CONFIRMED):
+                logger.error(
+                    "rollback_rejected_slot_not_bootable",
+                    target_slot=previous,
+                    lifecycle=prev_slot.lifecycle.value,
+                )
+                return False
             
-            return False
+            # Perform rollback
+            bcb.active_slot = previous
+            bcb.retry_count = self._config.max_boot_attempts
+            bcb.last_boot_attempt = int(datetime.now().timestamp())
+            
+            success = await self.write_boot_control(bcb)
+            
+            if success:
+                # Mark current as corrupted
+                self._slots[current].is_active = False
+                self._slots[current].state = SlotState.CORRUPTED
+                
+                # Prepare previous as active
+                prev_slot.is_active = True
+                prev_slot.consecutive_failed_boots = 0
+                
+                logger.info(
+                    "rollback_complete",
+                    from_slot=current,
+                    to_slot=previous,
+                )
+            
+            return success
             
         except Exception as e:
             logger.error("rollback_failed", error=str(e))
             return False
     
     async def get_slot_status(self) -> dict[str, Any]:
-        """Get status of both slots."""
+        """Get status of both slots with lifecycle information."""
         bcb = await self.read_boot_control()
+        
+        def get_lifecycle_value(slot_id: int) -> str:
+            """Get lifecycle state for a slot."""
+            if slot_id == 0:
+                states = {0: "new", 1: "pending", 2: "confirmed"}
+                return states.get(bcb.slot_a_lifecycle, "unknown")
+            else:
+                states = {0: "new", 1: "pending", 2: "confirmed"}
+                return states.get(bcb.slot_b_lifecycle, "unknown")
         
         return {
             "active_slot": bcb.active_slot,
+            "pending_slot": bcb.pending_slot if bcb.pending_slot != 0xFF else None,
+            "confirmed_slot": bcb.confirmed_slot if bcb.confirmed_slot != 0xFF else None,
             "retry_count": bcb.retry_count,
+            "anti_rollback_counter": bcb.anti_rollback_counter,
             "slots": {
                 0: {
                     "state": self._slots[0].state.value,
+                    "lifecycle": get_lifecycle_value(0),
                     "address": f"0x{self._slots[0].base_address:08X}",
                     "is_active": bcb.active_slot == 0,
                     "version": self._slots[0].firmware_version,
+                    "version_int": self._slots[0].firmware_version_int,
                     "boot_count": self._slots[0].boot_count,
                     "consecutive_failures": self._slots[0].consecutive_failed_boots,
+                    "manifest_key_id": self._slots[0].manifest_key_id,
+                    "pending_since": self._slots[0].pending_since.isoformat() if self._slots[0].pending_since else None,
+                    "confirmed_at": self._slots[0].confirmed_at.isoformat() if self._slots[0].confirmed_at else None,
                 },
                 1: {
                     "state": self._slots[1].state.value,
+                    "lifecycle": get_lifecycle_value(1),
                     "address": f"0x{self._slots[1].base_address:08X}",
                     "is_active": bcb.active_slot == 1,
                     "version": self._slots[1].firmware_version,
+                    "version_int": self._slots[1].firmware_version_int,
                     "boot_count": self._slots[1].boot_count,
                     "consecutive_failures": self._slots[1].consecutive_failed_boots,
+                    "manifest_key_id": self._slots[1].manifest_key_id,
+                    "pending_since": self._slots[1].pending_since.isoformat() if self._slots[1].pending_since else None,
+                    "confirmed_at": self._slots[1].confirmed_at.isoformat() if self._slots[1].confirmed_at else None,
                 },
             },
         }
     
     async def validate_version(self, version: int) -> tuple[bool, str]:
         """Validate firmware version against anti-rollback.
-        
+
         Returns:
             (is_valid, error_message)
         """
         if version < self._config.min_version:
             return False, f"Version {version} below minimum {self._config.min_version}"
-        
+
         if version > self._config.max_version:
             return False, f"Version {version} above maximum {self._config.max_version}"
-        
+
         # Check monotonic counter if HSM available
         try:
             from src.infrastructure.hsm.atecc608 import get_hsm
             hsm = await get_hsm()
             counter_version = await hsm.get_counter(0)
-            
+
             if version <= counter_version:
                 return False, f"Version {version} <= anti-rollback counter {counter_version}"
-            
+
         except ImportError:
             pass  # HSM not available
+
+        return True, "OK"
+
+
+# =============================================================================
+# ANTI-ROLLBACK COUNTER INTERFACE
+# =============================================================================
+# Contract for anti-rollback counter storage:
+# - The counter MUST be stored in protected flash region or option bytes
+# - The counter MUST be monotonic (only increments)
+# - The counter MUST be read-only from application code
+# - On STM32: Use option bytes or write-protected flash page
+# =============================================================================
+
+
+class AntiRollbackCounter:
+    """Interface for monotonic anti-rollback counter.
+    
+    STORAGE CONTRACT:
+    - Primary: HSM (ATECC608) monotonic counter slot
+    - Backup: Write-protected flash page at boot_control_address
+    - The counter MUST survive power cycles and cannot be decremented
+    
+    IMPLEMENTATION NOTES:
+    - On STM32 with ATECC608: Use HSM slot 0 for production
+    - For embedded: Use option bytes or protected flash page
+    - For testing: In-memory counter with write-once semantics
+    """
+    
+    def __init__(
+        self,
+        probe: Any,
+        primary_address: int = 0x2003F010,  # Backup location in SRAM
+        counter_slot: int = 0,
+    ):
+        """
+        Args:
+            probe: Flash probe for memory operations
+            primary_address: Backup flash address for counter
+            counter_slot: HSM counter slot (default 0)
+        """
+        self._probe = probe
+        self._primary_address = primary_address
+        self._counter_slot = counter_slot
+        self._cached_counter: int | None = None
+    
+    async def get_counter(self) -> int:
+        """Get current anti-rollback counter value.
+        
+        Reads from HSM if available, falls back to flash backup.
+        
+        Returns:
+            Current counter value (monotonic)
+        """
+        if self._cached_counter is not None:
+            return self._cached_counter
+        
+        # Try HSM first
+        try:
+            from src.infrastructure.hsm.atecc608 import get_hsm
+            hsm = await get_hsm()
+            counter = await hsm.get_counter(self._counter_slot)
+            self._cached_counter = counter
+            return counter
+        except (ImportError, Exception):
+            pass
+        
+        # Fall back to flash backup
+        try:
+            data = await self._probe.read_memory(self._primary_address, 4)
+            counter = int.from_bytes(data[:4], "little")
+            self._cached_counter = counter
+            return counter
+        except Exception:
+            return 0
+    
+    async def increment_counter(self) -> int:
+        """Increment anti-rollback counter.
+        
+        Increments the counter to record successful boot of new firmware.
+        This is the ONLY way to advance the anti-rollback floor.
+        
+        Returns:
+            New counter value after increment
+        """
+        current = await self.get_counter()
+        new_value = current + 1
+        
+        # Update HSM if available
+        try:
+            from src.infrastructure.hsm.atecc608 import get_hsm
+            hsm = await get_hsm()
+            await hsm.set_counter(self._counter_slot, new_value)
+        except (ImportError, Exception):
+            pass
+        
+        # Update flash backup
+        try:
+            data = new_value.to_bytes(4, "little")
+            await self._probe.write_memory(self._primary_address, data)
+        except Exception:
+            logger.error("failed_to_persist_anti_rollback_counter")
+        
+        self._cached_counter = new_value
+        return new_value
+    
+    async def verify_version_allowed(self, version: int) -> tuple[bool, str]:
+        """Verify firmware version is allowed by anti-rollback.
+        
+        Args:
+            version: Firmware version to verify
+            
+        Returns:
+            (is_allowed, reason)
+        """
+        counter = await self.get_counter()
+        
+        if version <= counter:
+            return False, (
+                f"Version {version} rejected: anti-rollback counter is {counter}. "
+                f"Firmware must have version > {counter} to be bootable."
+            )
         
         return True, "OK"
+
+
+# =============================================================================
+# MANIFEST-INTEGRATED BOOT VALIDATOR
+# =============================================================================
+
+
+class ManifestBootValidator:
+    """Validates firmware boot eligibility using SignedArtifactManifest.
+    
+    Integrates with SignedArtifactManifest to ensure:
+    - Firmware signature is valid
+    - Firmware version passes anti-rollback check
+    - Slot lifecycle state allows boot
+    
+    This is the software-side enforcement of the bootloader contract.
+    """
+    
+    def __init__(
+        self,
+        anti_rollback: AntiRollbackCounter,
+        verifier: Any | None = None,  # ManifestVerifier
+    ):
+        """
+        Args:
+            anti_rollback: Anti-rollback counter interface
+            verifier: ManifestVerifier instance (optional)
+        """
+        self._anti_rollback = anti_rollback
+        self._verifier = verifier
+    
+    async def validate_for_boot(
+        self,
+        slot_info: SlotInfo,
+        manifest: Any | None = None,  # SignedArtifactManifest
+    ) -> tuple[bool, str]:
+        """Validate if firmware in slot can be booted.
+        
+        Checks:
+        1. Slot state allows boot (PENDING or CONFIRMED)
+        2. Manifest signature is valid (if provided)
+        3. Firmware version > anti-rollback counter
+        
+        Args:
+            slot_info: Slot information
+            manifest: SignedArtifactManifest (optional)
+            
+        Returns:
+            (can_boot, reason)
+        """
+        # Check slot lifecycle state
+        if slot_info.lifecycle == SlotLifecycle.NEW:
+            return False, "Slot has no firmware written"
+        
+        if slot_info.lifecycle == SlotLifecycle.PENDING:
+            # PENDING is allowed but logged
+            logger.info("booting_pending_slot", slot=slot_info.slot_id)
+        
+        # Check manifest signature if provided
+        if manifest and self._verifier:
+            result = self._verifier.verify(manifest)
+            if not result.is_valid():
+                return False, f"Manifest verification failed: {result.message}"
+        
+        # Check anti-rollback
+        if slot_info.firmware_version_int > 0:
+            allowed, reason = await self._anti_rollback.verify_version_allowed(
+                slot_info.firmware_version_int
+            )
+            if not allowed:
+                return False, f"Anti-rollback check failed: {reason}"
+        
+        return True, "OK"
+    
+    async def confirm_boot_and_advance_counter(
+        self,
+        slot_info: SlotInfo,
+    ) -> bool:
+        """Confirm successful boot and advance anti-rollback counter.
+        
+        This should be called after mark_boot_successful() to:
+        1. Transition slot from PENDING to CONFIRMED
+        2. Advance the anti-rollback counter
+        
+        Args:
+            slot_info: Slot that booted successfully
+            
+        Returns:
+            True if counter was advanced
+        """
+        if slot_info.lifecycle != SlotLifecycle.PENDING:
+            return False
+        
+        # Advance anti-rollback counter
+        await self._anti_rollback.increment_counter()
+        
+        logger.info(
+            "anti_rollback_advanced",
+            slot=slot_info.slot_id,
+            version=slot_info.firmware_version_int,
+        )
+        
+        return True
+
+
+# =============================================================================
+# ROLLBACK FALLBACK VERIFIER
+# =============================================================================
+
+
+class RollbackFallbackVerifier:
+    """Manages rollback fallback after N failed boot attempts.
+    
+    Tracks boot failures and triggers automatic rollback when
+    MAX_BOOT_ATTEMPTS is exceeded.
+    """
+    
+    def __init__(
+        self,
+        ab_manager: ABPartitionManager,
+        config: ABConfig | None = None,
+    ):
+        """
+        Args:
+            ab_manager: A/B partition manager
+            config: A/B configuration
+        """
+        self._ab = ab_manager
+        self._config = config or ABConfig()
+    
+    async def record_boot_attempt(self, slot_id: int) -> dict[str, Any]:
+        """Record a boot attempt and check for rollback trigger.
+        
+        Args:
+            slot_id: Slot that attempted to boot
+            
+        Returns:
+            Dict with:
+            - should_rollback: bool
+            - attempts_remaining: int
+            - current_slot: int
+            - fallback_slot: int
+        """
+        bcb = await self._ab.read_boot_control()
+        slot = self._ab._slots[slot_id]
+        
+        # Increment failed boot counter
+        slot.consecutive_failed_boots += 1
+        attempts_remaining = max(0, self._config.max_boot_attempts - slot.consecutive_failed_boots)
+        
+        should_rollback = slot.consecutive_failed_boots >= self._config.max_boot_attempts
+        
+        result = {
+            "should_rollback": should_rollback,
+            "attempts_remaining": attempts_remaining,
+            "consecutive_failures": slot.consecutive_failed_boots,
+            "current_slot": slot_id,
+            "fallback_slot": 1 - slot_id,
+        }
+        
+        if should_rollback:
+            logger.warning(
+                "rollback_triggered",
+                slot=slot_id,
+                failures=slot.consecutive_failed_boots,
+                max_attempts=self._config.max_boot_attempts,
+            )
+            
+            # Mark current slot as corrupted
+            slot.state = SlotState.CORRUPTED
+            slot.lifecycle = SlotLifecycle.NEW  # Reset lifecycle
+            
+            # Rollback to other slot
+            await self._ab.rollback_to_previous()
+            
+            # Reset failure counter for fallback slot
+            fallback = self._ab._slots[1 - slot_id]
+            fallback.consecutive_failed_boots = 0
+            
+            result["rolled_back_to"] = 1 - slot_id
+        
+        return result
+    
+    async def check_and_recover(self) -> dict[str, Any]:
+        """Check system state and recover if needed.
+        
+        Call this at boot time to ensure system is in valid state.
+        
+        Returns:
+            Recovery status dict
+        """
+        bcb = await self._ab.read_boot_control()
+        status = await self._ab.get_slot_status()
+        
+        recovery_needed = False
+        recovery_action = "none"
+        
+        # Check for corrupted active slot
+        active_slot = status["slots"][bcb.active_slot]
+        if active_slot["state"] == SlotState.CORRUPTED.value:
+            recovery_needed = True
+            recovery_action = "fallback_to_other_slot"
+            await self._ab.rollback_to_previous()
+        
+        # Check anti-rollback consistency
+        # If active slot version <= counter, we have a problem
+        active = self._ab._slots[bcb.active_slot]
+        if active.firmware_version_int > 0:
+            counter = await AntiRollbackCounter(self._ab._probe).get_counter()
+            if active.firmware_version_int <= counter:
+                recovery_needed = True
+                recovery_action = "corrupted_state_recovery_needed"
+                logger.error(
+                    "anti_rollback_inconsistency",
+                    active_version=active.firmware_version_int,
+                    counter=counter,
+                )
+        
+        return {
+            "recovery_needed": recovery_needed,
+            "recovery_action": recovery_action,
+            "active_slot": bcb.active_slot,
+            "status": status,
+        }
 
 
 # Global manager

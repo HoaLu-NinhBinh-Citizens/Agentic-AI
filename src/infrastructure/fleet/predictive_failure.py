@@ -10,12 +10,23 @@ Predicts hardware failures before they occur:
 from __future__ import annotations
 
 import logging
+import uuid
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta
 from enum import Enum
 from typing import Any
 
 logger = logging.getLogger(__name__)
+
+
+class FailurePredictionDefaults:
+    """Named defaults for predictive failure thresholds."""
+    FAILURE_THRESHOLD = 100.0  # metric value at which failure is assumed
+    DEFAULT_TTL_HOURS = 168.0   # 1 week default time-to-failure
+    MAX_TTL_HOURS = 720.0      # 30 days max
+    MIN_TTL_HOURS = 1.0        # minimum 1 hour
+    MIN_CONFIDENCE = 0.6       # threshold for get_critical_predictions()
+    CRITICAL_TTL_HOURS = 24.0  # threshold for critical predictions
 
 
 class PredictionConfidence(Enum):
@@ -181,21 +192,24 @@ class PredictiveAnalyzer:
     def _estimate_time_to_failure(self, metrics: list[PredictionMetric]) -> float:
         """Estimate time to failure in hours."""
         if not metrics:
-            return 168.0  # 1 week default
-        
+            return FailurePredictionDefaults.DEFAULT_TTL_HOURS
+
         # Find metric with highest trend
         max_trend = max(m.trend for m in metrics)
-        
+
         if max_trend <= 0:
-            return 720.0  # 30 days
+            return FailurePredictionDefaults.MAX_TTL_HOURS
 
         # Simple estimation based on trend
         # Assume failure when metric reaches threshold
-        threshold = 100.0
+        threshold = FailurePredictionDefaults.FAILURE_THRESHOLD
         current = max(m.current_value for m in metrics)
 
         hours = (threshold - current) / max_trend
-        return max(1, min(720, hours))
+        return max(
+            FailurePredictionDefaults.MIN_TTL_HOURS,
+            min(FailurePredictionDefaults.MAX_TTL_HOURS, hours),
+        )
     
     def _calculate_confidence(
         self,
@@ -287,8 +301,8 @@ class PredictiveFailureEngine:
     
     def get_critical_predictions(self) -> list[FailurePrediction]:
         """Get predictions requiring immediate attention."""
-        predictions = self.get_predictions(min_confidence=0.6)
-        return [p for p in predictions if p.time_to_failure_hours < 24]
+        predictions = self.get_predictions(min_confidence=FailurePredictionDefaults.MIN_CONFIDENCE)
+        return [p for p in predictions if p.time_to_failure_hours < FailurePredictionDefaults.CRITICAL_TTL_HOURS]
 
 
 # Global engine

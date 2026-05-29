@@ -7,10 +7,132 @@ services:
       - "8766:8766"
     environment:
       - OPENAI_API_KEY=${OPENAI_API_KEY}
+      - REDIS_URL=rediss://:${REDIS_PASSWORD}@redis-primary:6379
+      - REDIS_SENTINEL_HOSTS=redis-sentinel-0:26379,redis-sentinel-1:26379,redis-sentinel-2:26379
+      - REDIS_SENTINEL_MASTER=mymaster
+      - REDIS_TLS_ENABLED=true
+      - REDIS_TLS_CERT=/certs/redis.crt
+      - REDIS_TLS_KEY=/certs/redis.key
+      - REDIS_TLS_CA=/certs/ca.crt
     volumes:
       - ./data:/app/data
+      - ./certs:/certs:ro
+    depends_on:
+      redis-sentinel-0:
+        condition: service_healthy
+      redis-sentinel-1:
+        condition: service_healthy
+      redis-sentinel-2:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "python", "-c", "import redis; r = redis.from_url('rediss://:${REDIS_PASSWORD}@redis-sentinel-0:6379', ssl_cert_reqs='required'); r.ping()"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 30s
+    networks:
+      - aisupport
 
-  redis:
+  # Redis Sentinel 0
+  redis-sentinel-0:
     image: redis:7-alpine
+    command: |
+      redis-server --requirepass ${REDIS_PASSWORD} \
+                   --tls-port 6379 \
+                   --port 0 \
+                   --tls-cert-file /certs/redis.crt \
+                   --tls-key-file /certs/redis.key \
+                   --tls-ca-cert-file /certs/ca.crt \
+                   --save "" \
+                   --appendonly no
+    volumes:
+      - redis-data-0:/data
+      - ./certs:/certs:ro
     ports:
       - "6379:6379"
+      - "26379:26379"
+    healthcheck:
+      test: ["CMD", "redis-cli", "-p", "26379", "-a", "${REDIS_PASSWORD}", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    networks:
+      - aisupport
+
+  # Redis Sentinel 1
+  redis-sentinel-1:
+    image: redis:7-alpine
+    command: |
+      redis-server --requirepass ${REDIS_PASSWORD} \
+                   --tls-port 6379 \
+                   --port 0 \
+                   --tls-cert-file /certs/redis.crt \
+                   --tls-key-file /certs/redis.key \
+                   --tls-ca-cert-file /certs/ca.crt \
+                   --save "" \
+                   --appendonly no
+    volumes:
+      - redis-data-1:/data
+      - ./certs:/certs:ro
+    ports:
+      - "6380:6379"
+      - "26380:26379"
+    healthcheck:
+      test: ["CMD", "redis-cli", "-p", "26379", "-a", "${REDIS_PASSWORD}", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    networks:
+      - aisupport
+
+  # Redis Sentinel 2
+  redis-sentinel-2:
+    image: redis:7-alpine
+    command: |
+      redis-server --requirepass ${REDIS_PASSWORD} \
+                   --tls-port 6379 \
+                   --port 0 \
+                   --tls-cert-file /certs/redis.crt \
+                   --tls-key-file /certs/redis.key \
+                   --tls-ca-cert-file /certs/ca.crt \
+                   --save "" \
+                   --appendonly no
+    volumes:
+      - redis-data-2:/data
+      - ./certs:/certs:ro
+    ports:
+      - "6381:6379"
+      - "26381:26379"
+    healthcheck:
+      test: ["CMD", "redis-cli", "-p", "26379", "-a", "${REDIS_PASSWORD}", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    networks:
+      - aisupport
+
+  # Sentinel monitor process
+  redis-sentinel:
+    image: redis:7-alpine
+    command: |
+      redis-sentinel /usr/local/etc/redis/sentinel.conf
+    volumes:
+      - ./sentinel.conf:/usr/local/etc/redis/sentinel.conf:ro
+      - redis-data-0:/data
+    depends_on:
+      - redis-sentinel-0
+      - redis-sentinel-1
+      - redis-sentinel-2
+    networks:
+      - aisupport
+    profiles:
+      - sentinel
+
+volumes:
+  redis-data-0:
+  redis-data-1:
+  redis-data-2:
+
+networks:
+  aisupport:
+    driver: bridge
