@@ -5,17 +5,48 @@ Inspired by oh-my-pi's session management pattern:
 - Session history
 - Project-scoped sessions
 - Hindsight memory integration
+
+W-012 Fix: messages, tool_calls, and hindsight_facts are now bounded lists
+to prevent unbounded growth and OOM after long sessions.
 """
 
 from __future__ import annotations
 
 import json
 import uuid
+from collections import deque
 from dataclasses import dataclass, field
 from datetime import datetime
 from enum import Enum
 from pathlib import Path
 from typing import Any
+
+
+# ─── Bounded list ──────────────────────────────────────────────────────────────
+
+class BoundedList(list):
+    """A list that evicts the oldest items when max_size is exceeded.
+
+    Usage:
+        bl = BoundedList(max_size=100)
+        bl.append(item)  # oldest item dropped when full
+    """
+
+    def __init__(self, max_size: int = 1000, iterable=()):
+        super().__init__(iterable)
+        self._max_size = max_size
+
+    def append(self, item: Any) -> None:
+        super().append(item)
+        while len(self) > self._max_size:
+            self.pop(0)
+
+    def extend(self, items: Any) -> None:
+        for item in items:
+            self.append(item)
+
+
+# ─── Data models ───────────────────────────────────────────────────────────────
 
 
 class SessionStatus(Enum):
@@ -131,13 +162,14 @@ class Session:
     created_at: datetime = field(default_factory=datetime.now)
     updated_at: datetime = field(default_factory=datetime.now)
     status: SessionStatus = SessionStatus.ACTIVE
-    
-    messages: list[Message] = field(default_factory=list)
-    tool_calls: list[ToolCall] = field(default_factory=list)
+
+    # W-012 Fix: bounded to prevent OOM after long sessions
+    messages: list[Message] = field(default_factory=lambda: BoundedList(max_size=2000))
+    tool_calls: list[ToolCall] = field(default_factory=lambda: BoundedList(max_size=2000))
     context: SessionContext = field(default_factory=SessionContext)
-    
-    # Hindsight memory references
-    hindsight_facts: list[str] = field(default_factory=list)  # IDs of retained facts
+
+    # W-012 Fix: bounded to prevent unbounded growth
+    hindsight_facts: list[str] = field(default_factory=lambda: BoundedList(max_size=500))
     
     # Session metadata
     title: str | None = None

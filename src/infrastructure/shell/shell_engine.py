@@ -15,10 +15,18 @@ import os
 import re
 import signal
 import subprocess
+from collections import deque
 from dataclasses import dataclass, field
 from enum import Enum
 from pathlib import Path
 from typing import Any
+
+
+class BoundedHistory(deque):
+    """Command history with a maximum size to prevent unbounded growth."""
+
+    def __init__(self, max_size: int = 10000):
+        super().__init__(maxlen=max_size)
 
 
 class ShellError(Exception):
@@ -489,8 +497,9 @@ class ShellEngine:
         self.builtins = ShellBuiltins(self)
         self.jobs: dict[int, Job] = {}
         self._next_job_id = 1
-        self.history: list[str] = []
+        self.history: BoundedHistory = BoundedHistory()
         self._foreground_job: Job | None = None
+        self._auto_cleanup_jobs()
     
     def get_last_background_job(self) -> Job | None:
         """Get most recent background job."""
@@ -583,6 +592,7 @@ class ShellEngine:
             
             if background:
                 self.jobs[job.job_id] = job
+                self._auto_cleanup_jobs()
                 print(f"[{job.job_id}] {job.pid}")
                 return 0
             else:
@@ -660,13 +670,12 @@ class ShellEngine:
         
         return 0
     
-    def cleanup_jobs(self) -> None:
+    def _auto_cleanup_jobs(self) -> None:
         """Remove finished jobs from list."""
-        finished = []
-        for job_id, job in self.jobs.items():
-            if job.state in (JobState.DONE, JobState.TERMINATED):
-                finished.append(job_id)
-        
+        finished = [
+            job_id for job_id, job in self.jobs.items()
+            if job.state in (JobState.DONE, JobState.TERMINATED)
+        ]
         for job_id in finished:
             del self.jobs[job_id]
 

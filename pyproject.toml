@@ -35,6 +35,8 @@ dependencies = [
     "websockets>=15.0.0",
     "mcp>=1.0.0,<2.0.0",
     "pyyaml>=6.0",
+    "cachetools>=5.5.0",
+    "tree-sitter-languages>=1.10.0",
 ]
 
 [project.optional-dependencies]
@@ -54,8 +56,11 @@ dashboard = [
 ]
 
 [project.scripts]
-ai-support = "AI_support.__main__:main"
-ai-server = "AI_support.run_api_server:main"
+# NOTE: Entry points must reference modules that actually exist under src/.
+# The server is implemented as a FastAPI app in `interfaces.server.main:app`.
+# The CLI entry point is `agentic_ai.cli:main`.
+ai-support = "agentic_ai.cli:main"
+ai-server = "interfaces.server.main:app"
 agentic-ai = "agentic_ai.cli:main"
 
 [tool.setuptools.packages.find]

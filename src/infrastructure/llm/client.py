@@ -15,6 +15,8 @@ from dataclasses import dataclass, field
 from enum import Enum
 from typing import Any, AsyncIterator
 
+import httpx
+
 logger = logging.getLogger(__name__)
 
 
@@ -92,13 +94,37 @@ class LLMResponse:
 
 class LLMClient:
     """Unified LLM client.
-    
+
     Supports multiple providers with a consistent interface.
+    Uses a shared httpx.AsyncClient with connection pooling (W-012 fix).
     """
-    
-    def __init__(self, config: LLMConfig | None = None):
+
+    _DEFAULT_LIMITS = httpx.Limits(
+        max_keepalive_connections=20,
+        max_connections=100,
+        keepalive_expiry=30.0,
+    )
+
+    def __init__(self, config: LLMConfig | None = None, timeout: float | None = None):
         self.config = config or LLMConfig()
-        self._client = None
+        self._client: httpx.AsyncClient | None = None
+        self._timeout = timeout or self.config.timeout
+
+    async def _get_client(self) -> httpx.AsyncClient:
+        """Get or create the shared httpx client with connection pooling."""
+        if self._client is None or self._client.is_closed:
+            self._client = httpx.AsyncClient(
+                timeout=httpx.Timeout(self._timeout),
+                limits=self._DEFAULT_LIMITS,
+                http2=True,  # Enable HTTP/2 for multiplexing
+            )
+        return self._client
+
+    async def close(self) -> None:
+        """Close the shared HTTP client."""
+        if self._client is not None:
+            await self._client.aclose()
+            self._client = None
     
     async def generate(
         self,
@@ -140,8 +166,7 @@ class LLMClient:
         stream: bool,
     ) -> LLMResponse:
         """Generate using Ollama."""
-        import httpx
-        
+        # W-012: use shared connection-pooled client
         payload = {
             "model": model,
             "messages": [self._format_message(m) for m in messages],
@@ -157,31 +182,33 @@ class LLMClient:
             payload["tools"] = tools
         
         try:
-            async with httpx.AsyncClient(timeout=self.config.timeout) as client:
-                response = await client.post(
-                    f"{self.config.base_url}/api/chat",
-                    json=payload,
-                )
-                response.raise_for_status()
-                data = response.json()
-                
-                content = data.get("message", {}).get("content", "")
-                tool_calls = []
-                
-                # Parse tool calls
-                if "tool_calls" in data.get("message", {}):
-                    for tc in data["message"]["tool_calls"]:
-                        tool_calls.append(ToolCall(
+            client = await self._get_client()
+            response = await client.post(
+                f"{self.config.base_url}/api/chat",
+                json=payload,
+            )
+            response.raise_for_status()
+            data = response.json()
+
+            content = data.get("message", {}).get("content", "")
+            tool_calls: list[ToolCall] = []
+
+            # Parse tool calls
+            if "tool_calls" in data.get("message", {}):
+                for tc in data["message"]["tool_calls"]:
+                    tool_calls.append(
+                        ToolCall(
                             id=tc.get("id", ""),
                             name=tc.get("function", {}).get("name", ""),
                             arguments=json.loads(tc.get("function", {}).get("arguments", "{}")),
-                        ))
-                
-                return LLMResponse(
-                    content=content,
-                    tool_calls=tool_calls,
-                    model=model,
-                )
+                        )
+                    )
+
+            return LLMResponse(
+                content=content,
+                tool_calls=tool_calls,
+                model=model,
+            )
                 
         except httpx.HTTPError as e:
             logger.error(f"Ollama HTTP error: {e}")
@@ -198,8 +225,7 @@ class LLMClient:
         temperature: float | None,
     ) -> LLMResponse:
         """Generate using OpenAI-compatible API."""
-        import httpx
-        
+        # W-012: use shared connection-pooled client
         payload = {
             "model": model,
             "messages": [self._format_message(m) for m in messages],
@@ -216,33 +242,35 @@ class LLMClient:
             headers["Authorization"] = f"Bearer {self.config.api_key}"
         
         try:
-            async with httpx.AsyncClient(timeout=self.config.timeout) as client:
-                response = await client.post(
-                    f"{self.config.base_url}/v1/chat/completions",
-                    json=payload,
-                    headers=headers,
-                )
-                response.raise_for_status()
-                data = response.json()
-                
-                choice = data["choices"][0]
-                content = choice.get("message", {}).get("content", "") or ""
-                
-                tool_calls = []
-                for tc in choice.get("message", {}).get("tool_calls", []):
-                    tool_calls.append(ToolCall(
+            client = await self._get_client()
+            response = await client.post(
+                f"{self.config.base_url}/v1/chat/completions",
+                json=payload,
+                headers=headers,
+            )
+            response.raise_for_status()
+            data = response.json()
+
+            choice = data["choices"][0]
+            content = choice.get("message", {}).get("content", "") or ""
+
+            tool_calls: list[ToolCall] = []
+            for tc in choice.get("message", {}).get("tool_calls", []):
+                tool_calls.append(
+                    ToolCall(
                         id=tc["id"],
                         name=tc["function"]["name"],
                         arguments=json.loads(tc["function"]["arguments"]),
-                    ))
-                
-                return LLMResponse(
-                    content=content,
-                    tool_calls=tool_calls,
-                    finish_reason=choice.get("finish_reason", "stop"),
-                    usage=data.get("usage"),
-                    model=data.get("model", model),
+                    )
                 )
+
+            return LLMResponse(
+                content=content,
+                tool_calls=tool_calls,
+                finish_reason=choice.get("finish_reason", "stop"),
+                usage=data.get("usage"),
+                model=data.get("model", model),
+            )
                 
         except Exception as e:
             logger.error(f"OpenAI error: {e}")
@@ -256,8 +284,7 @@ class LLMClient:
         temperature: float | None,
     ) -> LLMResponse:
         """Generate using Anthropic API."""
-        import httpx
-        
+        # W-012: use shared connection-pooled client
         # Convert messages format
         anthropic_messages = []
         for m in messages:
@@ -283,19 +310,19 @@ class LLMClient:
             headers["anthropic-version"] = "2023-06-01"
         
         try:
-            async with httpx.AsyncClient(timeout=self.config.timeout) as client:
-                response = await client.post(
-                    "https://api.anthropic.com/v1/messages",
-                    json=payload,
-                    headers=headers,
-                )
-                response.raise_for_status()
-                data = response.json()
-                
-                content = ""
-                for block in data.get("content", []):
-                    if block.get("type") == "text":
-                        content += block.get("text", "")
+            client = await self._get_client()
+            response = await client.post(
+                "https://api.anthropic.com/v1/messages",
+                json=payload,
+                headers=headers,
+            )
+            response.raise_for_status()
+            data = response.json()
+
+            content = ""
+            for block in data.get("content", []):
+                if block.get("type") == "text":
+                    content += block.get("text", "")
                 
                 return LLMResponse(
                     content=content,
@@ -341,10 +368,8 @@ class LLMClient:
         Yields:
             Individual tokens
         """
-        import httpx
-        
         model = self.config.get_model_for_role(role)
-        
+
         if self.config.provider == Provider.OLLAMA:
             url = f"{self.config.base_url}/api/chat"
             payload = {
@@ -354,8 +379,10 @@ class LLMClient:
             }
             if tools:
                 payload["tools"] = tools
-            
-            async with httpx.AsyncClient(timeout=self.config.timeout) as client:
+
+            # Streaming requires its own client (context manager for chunked reads)
+            limits = self._DEFAULT_LIMITS
+            async with httpx.AsyncClient(timeout=httpx.Timeout(self._timeout), limits=limits) as client:
                 async with client.stream("POST", url, json=payload) as response:
                     async for line in response.aiter_lines():
                         if line.startswith("data:"):
@@ -369,7 +396,7 @@ class LLMClient:
                                     yield token
                             except json.JSONDecodeError:
                                 continue
-        
+
         elif self.config.provider == Provider.OPENAI:
             url = f"{self.config.base_url}/v1/chat/completions"
             payload = {
@@ -383,8 +410,9 @@ class LLMClient:
             headers = {"Content-Type": "application/json"}
             if self.config.api_key:
                 headers["Authorization"] = f"Bearer {self.config.api_key}"
-            
-            async with httpx.AsyncClient(timeout=self.config.timeout) as client:
+
+            limits = self._DEFAULT_LIMITS
+            async with httpx.AsyncClient(timeout=httpx.Timeout(self._timeout), limits=limits) as client:
                 async with client.stream("POST", url, json=payload, headers=headers) as response:
                     async for line in response.aiter_lines():
                         if line.startswith("data:"):
@@ -404,27 +432,25 @@ class LLMClient:
     
     async def health_check(self) -> bool:
         """Check if provider is available."""
-        import httpx
-        
         if self.config.provider == Provider.OLLAMA:
             try:
-                async with httpx.AsyncClient(timeout=5.0) as client:
-                    response = await client.get(f"{self.config.base_url}/api/tags")
-                    return response.status_code == 200
+                client = await self._get_client()
+                response = await client.get(f"{self.config.base_url}/api/tags")
+                return response.status_code == 200
             except:
                 return False
-        
+
         elif self.config.provider == Provider.OPENAI:
             try:
-                async with httpx.AsyncClient(timeout=5.0) as client:
-                    headers = {}
-                    if self.config.api_key:
-                        headers["Authorization"] = f"Bearer {self.config.api_key}"
-                    response = await client.get(
-                        f"{self.config.base_url}/v1/models",
-                        headers=headers,
-                    )
-                    return response.status_code == 200
+                client = await self._get_client()
+                headers = {}
+                if self.config.api_key:
+                    headers["Authorization"] = f"Bearer {self.config.api_key}"
+                response = await client.get(
+                    f"{self.config.base_url}/v1/models",
+                    headers=headers,
+                )
+                return response.status_code == 200
             except:
                 return False
         

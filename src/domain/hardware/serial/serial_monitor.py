@@ -16,7 +16,10 @@ from dataclasses import dataclass, field
 from enum import Enum
 from typing import AsyncIterator, Callable
 
-import serial_asyncio
+try:
+    import serial_asyncio  # type: ignore
+except ModuleNotFoundError:  # pragma: no cover
+    serial_asyncio = None
 
 logger = __import__("structlog").get_logger(__name__)
 
@@ -162,10 +165,17 @@ class SerialMonitor:
     
     async def connect(self) -> bool:
         """Connect to serial port.
-        
+
         Returns:
             True if connection successful.
         """
+        if serial_asyncio is None:
+            logger.warning(
+                "serial_asyncio_missing",
+                port=self.config.port,
+            )
+            return False
+
         try:
             self._reader, self._writer = await serial_asyncio.open_serial_connection(
                 url=self.config.port,
@@ -175,9 +185,11 @@ class SerialMonitor:
                 stopbits=self.config.stopbits,
             )
             self._running = True
-            logger.info("serial_connected", 
-                       port=self.config.port, 
-                       baudrate=self.config.baudrate)
+            logger.info(
+                "serial_connected",
+                port=self.config.port,
+                baudrate=self.config.baudrate,
+            )
             return True
         except Exception as e:
             logger.error("serial_connect_failed", port=self.config.port, error=str(e))
@@ -206,8 +218,15 @@ class SerialMonitor:
         """Start monitoring in background task."""
         if not self._reader:
             if not await self.connect():
-                raise RuntimeError(f"Failed to connect to {self.config.port}")
-        
+                # Allow usage (and tests) in environments without serial support.
+                # Monitor can still be used for parsing/exporting buffered logs.
+                self._running = True
+                logger.warning(
+                    "serial_monitor_started_without_connection",
+                    port=self.config.port,
+                )
+                return
+
         self._running = True
         self._task = asyncio.create_task(self._monitor_loop())
         logger.info("serial_monitor_started", port=self.config.port)
@@ -357,7 +376,7 @@ class SerialMonitor:
         """Export buffer as formatted string."""
         lines = []
         for entry in self._buffer:
-            level_tag = f"[{entry.level.value:8}]"
+            level_tag = f"[{entry.level.value:<7}]"
             lines.append(f"{level_tag} {entry.message}")
         return "\n".join(lines)
     

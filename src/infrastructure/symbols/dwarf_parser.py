@@ -90,6 +90,7 @@ class FunctionInfo:
 @dataclass
 class VariableInfo:
     """Variable information from DWARF."""
+
     name: str
     type_name: str
     location: str  # DWARF location expression
@@ -102,7 +103,7 @@ class VariableInfo:
     depth: int = 0  # Stack depth
     parameter: bool = False
     local: bool = True
-   _optimized_out: bool = False
+    _optimized_out: bool = False
 
 
 @dataclass

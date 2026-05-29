@@ -1,10 +1,21 @@
-"""Semantic plan retrieval with quality filtering - Phase 5B."""
+"""Semantic plan retrieval with quality filtering - Phase 5B.
+
+W-012 Fix: InMemoryPlanHistoryStore now uses bounded LRU cache to prevent
+OOM after many plans are created over time.
+"""
 
 from __future__ import annotations
 
+from collections import OrderedDict
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from typing import Optional
+
+try:
+    from cachetools import LRUCache
+    HAS_CACHETOOLS = True
+except ImportError:
+    HAS_CACHETOOLS = False
 
 from .types import PlanGraph, RetrievedPlan
 
@@ -53,14 +64,32 @@ class PlanHistoryStore:
 
 
 class InMemoryPlanHistoryStore(PlanHistoryStore):
-    """In-memory implementation of plan history store."""
-    
-    def __init__(self):
-        self._plans: dict[str, StoredPlan] = {}
+    """In-memory implementation of plan history store.
+
+    W-012 Fix: Uses bounded LRU cache (default 1000 plans) to prevent OOM.
+    """
+
+    _DEFAULT_MAX_PLANS = 1000
+
+    def __init__(self, max_plans: int | None = None):
+        max_size = max_plans or self._DEFAULT_MAX_PLANS
+        if HAS_CACHETOOLS:
+            self._plans: dict[str, StoredPlan] = LRUCache(maxsize=max_size)
+        else:
+            self._plans: dict[str, StoredPlan] = {}
+            self._access_order: OrderedDict[str, float] = OrderedDict()
     
     async def save(self, plan: StoredPlan) -> None:
-        """Save a plan to history."""
-        self._plans[plan.plan_id] = plan
+        """Save a plan to history (with LRU eviction for fallback)."""
+        if HAS_CACHETOOLS:
+            self._plans[plan.plan_id] = plan
+        else:
+            self._plans[plan.plan_id] = plan
+            self._access_order[plan.plan_id] = datetime.now(timezone.utc).timestamp()
+            if len(self._plans) > self._DEFAULT_MAX_PLANS:
+                oldest = next(iter(self._access_order))
+                self._plans.pop(oldest, None)
+                self._access_order.pop(oldest, None)
     
     async def get(self, plan_id: str) -> Optional[StoredPlan]:
         """Get a plan by ID."""

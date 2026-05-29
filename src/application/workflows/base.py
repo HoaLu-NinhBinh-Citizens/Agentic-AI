@@ -131,6 +131,7 @@ class BaseWorkflow(ABC):
         self._reasoning_loop = None
         self._knowledge_base = None
         self._hardware_validator = None
+        self._edit_system = None
 
     # ─── Public API ───────────────────────────────────────────────────
 
@@ -283,6 +284,10 @@ class BaseWorkflow(ABC):
     def inject_hardware_validator(self, validator) -> None:
         """Inject HardwareValidator instance."""
         self._hardware_validator = validator
+
+    def inject_edit_system(self, edit_system) -> None:
+        """Inject EditSystem instance for atomic writes with rollback."""
+        self._edit_system = edit_system
 
     # ─── Abstract Methods ─────────────────────────────────────────────
 

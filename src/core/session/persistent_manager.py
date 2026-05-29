@@ -20,6 +20,12 @@ import uuid
 from datetime import datetime, timezone
 from typing import TYPE_CHECKING, Any
 
+try:
+    from cachetools import TTLCache
+    HAS_CACHETOOLS = True
+except ImportError:
+    HAS_CACHETOOLS = False
+
 from infrastructure.persistence.sqlite.session_store import SessionStore
 
 if TYPE_CHECKING:
@@ -39,19 +45,27 @@ class PersistentSessionManager:
 
     Phase 2B: Manages tool registries per session with proper cleanup.
 
+    W-012 Fix: TTLCache replaces unbounded _cache dict to prevent OOM after 8h.
+    Tool registries are cleaned up on session deletion (already correct).
+
     Attributes:
         _store: SQLite session store.
-        _cache: In-memory session cache.
+        _cache: In-memory session cache (bounded, TTL-evicted).
         _tool_registries: Per-session tool registries.
         _mcp_manager: MCP manager for tool execution.
         _config: Tool execution configuration.
     """
 
+    _DEFAULT_MAX_SESSIONS = 1000
+    _DEFAULT_TTL_SECONDS = 3600.0
+
     def __init__(
         self,
         store: SessionStore,
         mcp_manager: Any = None,
-        config: ToolExecutionConfig | None = None,
+        config: Any = None,
+        max_sessions: int | None = None,
+        session_ttl_seconds: float | None = None,
     ) -> None:
         """Initialize the persistent session manager.
 
@@ -59,12 +73,26 @@ class PersistentSessionManager:
             store: SQLite session store.
             mcp_manager: Optional MCP manager for tool execution.
             config: Optional tool execution configuration.
+            max_sessions: Max in-memory sessions (default 1000).
+            session_ttl_seconds: TTL per session in seconds (default 3600s).
         """
         self._store = store
-        self._cache: dict[str, dict[str, Any]] = {}
-        self._tool_registries: dict[str, ToolRegistry] = {}
         self._mcp_manager = mcp_manager
         self._config = config
+
+        max_sess = max_sessions or self._DEFAULT_MAX_SESSIONS
+        ttl = session_ttl_seconds or self._DEFAULT_TTL_SECONDS
+        if HAS_CACHETOOLS:
+            self._cache: dict[str, dict[str, Any]] = TTLCache(
+                maxsize=max_sess, ttl=ttl
+            )
+            self._session_access: dict[str, float] = {}  # not needed with TTLCache
+        else:
+            self._cache = {}  # type: ignore[assignment]
+            self._session_ttl = ttl
+            self._session_access: dict[str, float] = {}
+
+        self._tool_registries: dict[str, Any] = {}
 
     def set_mcp_manager(self, mcp_manager: Any) -> None:
         """Set the MCP manager for tool execution.
@@ -83,13 +111,26 @@ class PersistentSessionManager:
         self._config = config
 
     async def initialize(self) -> None:
-        """Load active sessions from DB into memory cache."""
+        """Load active sessions from DB into memory cache.
+
+        W-012 Fix: Only loads up to max_sessions most-recent sessions
+        to prevent OOM when DB has thousands of stale sessions.
+        """
+        import time as _time
+
         await self._store.initialize()
         active_sessions = await self._store.list_active()
-        for session in active_sessions:
+        # Sort by created_at desc and cap at max_sessions to prevent OOM on startup
+        active_sessions.sort(key=lambda s: s.get("created_at", ""), reverse=True)
+        max_sess = getattr(self, "_DEFAULT_MAX_SESSIONS", 1000)
+        for session in active_sessions[:max_sess]:
             self._cache[session["id"]] = session
+            if not HAS_CACHETOOLS:
+                self._session_access[session["id"]] = _time.time()
         logger.info(
-            "Loaded %d active sessions from database", len(self._cache)
+            "Loaded %d active sessions from database (capped at %d)",
+            len(self._cache),
+            max_sess,
         )
 
     async def close(self) -> None:
@@ -116,6 +157,9 @@ class PersistentSessionManager:
             "state": "active",
         }
         self._cache[session_id] = session
+        if not HAS_CACHETOOLS:
+            import time as _time
+            self._session_access[session_id] = _time.time()
         self._create_tool_registry(session_id)
         return session_id
 
@@ -200,6 +244,9 @@ class PersistentSessionManager:
         """
         if session_id not in self._cache:
             raise KeyError(f"Session {session_id} not found")
+        if not HAS_CACHETOOLS:
+            import time as _time
+            self._session_access[session_id] = _time.time()
         await self._store.save(self._cache[session_id])
 
     async def create_and_save_session(self, workspace: str | None = None) -> str:
@@ -225,7 +272,11 @@ class PersistentSessionManager:
         Returns:
             Session dict or None if not found.
         """
-        return self._cache.get(session_id)
+        session = self._cache.get(session_id)
+        if session is not None and not HAS_CACHETOOLS:
+            import time as _time
+            self._session_access[session_id] = _time.time()
+        return session
 
     async def delete_session(self, session_id: str, grace_period: float = 2.0) -> None:
         """Delete a session from cache and database.

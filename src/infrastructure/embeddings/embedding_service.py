@@ -305,16 +305,148 @@ class EmbeddingService:
     async def embed_batch(self, texts: list[str]) -> list[list[float]]:
         """Generate embeddings for multiple texts.
 
+        W-012 Fix: Uses Ollama batch API (single POST with list of prompts) when
+        possible, falls back to asyncio.gather with concurrency limit. Only batches
+        uncached texts to minimize HTTP overhead.
+
         Args:
             texts: List of texts to embed.
 
         Returns:
-            List of embedding vectors.
+            List of embedding vectors aligned with input order.
         """
-        results = []
-        for text in texts:
-            embedding = await self.embed(text)
-            results.append(embedding)
+        if not texts:
+            return []
+
+        # Phase 1: check cache for all texts
+        results: list[list[float] | None] = [None] * len(texts)
+        uncached_indices: list[int] = []
+        uncached_texts: list[str] = []
+
+        for i, text in enumerate(texts):
+            if not text or not text.strip():
+                results[i] = []
+            else:
+                cache_key = self._make_cache_key(text)
+                cached = await self._cache.get(cache_key)
+                if cached is not None:
+                    results[i] = cached
+                else:
+                    results[i] = None
+                    uncached_indices.append(i)
+                    uncached_texts.append(text)
+
+        if not uncached_texts:
+            return [r or [] for r in results]
+
+        # Phase 2: batch embed uncached texts
+        batch_embeddings = await self._embed_batch_http(uncached_texts)
+
+        # Phase 3: populate results and cache
+        for idx, embedding in zip(uncached_indices, batch_embeddings):
+            results[idx] = embedding
+            if embedding:
+                cache_key = self._make_cache_key(uncached_texts[uncached_indices.index(idx)])
+                await self._cache.put(cache_key, embedding)
+
+        return [r or [] for r in results]
+
+    async def _embed_batch_http(
+        self,
+        texts: list[str],
+        concurrency: int = 8,
+    ) -> list[list[float]]:
+        """Batch embed via Ollama batch API or asyncio.gather fallback.
+
+        Tries Ollama's single-request batch endpoint first. Falls back to
+        concurrent individual requests (asyncio.gather) with semaphore if batch fails.
+
+        Args:
+            texts: Texts to embed.
+            concurrency: Max concurrent requests in fallback mode.
+
+        Returns:
+            Embeddings aligned with input order.
+        """
+        if not texts:
+            return []
+
+        # Try native Ollama batch endpoint first
+        batch_result = await self._try_batch_embed(texts)
+        if batch_result is not None:
+            return batch_result
+
+        # Fallback: concurrent individual requests via asyncio.gather
+        return await self._embed_batch_gather(texts, concurrency=concurrency)
+
+    async def _try_batch_embed(
+        self,
+        texts: list[str],
+    ) -> list[list[float]] | None:
+        """Try Ollama batch embedding endpoint (single POST, list of prompts).
+
+        Returns None if the endpoint returns an error (fallback will be used).
+        """
+        try:
+            session = await self._get_session()
+            payload = {"model": self._model, "prompt": texts}
+
+            async with session.post(self._url, json=payload) as response:
+                if response.status != 200:
+                    logger.debug("Ollama batch embed failed, falling back to gather", status=response.status)
+                    return None
+
+                data = await response.json()
+                embeddings: list[list[float]] = data.get("embeddings", [])
+
+                if not isinstance(embeddings, list) or len(embeddings) != len(texts):
+                    logger.warning("Ollama batch response mismatch", expected=len(texts), got=len(embeddings) if isinstance(embeddings, list) else -1)
+                    return None
+
+                for emb in embeddings:
+                    if not isinstance(emb, list) or len(emb) == 0:
+                        return None
+
+                logger.debug("batch_embed_success", count=len(embeddings))
+                return embeddings
+
+        except Exception as e:
+            logger.debug("batch_embed_error_fallback", error=str(e))
+            return None
+
+    async def _embed_batch_gather(
+        self,
+        texts: list[str],
+        concurrency: int = 8,
+    ) -> list[list[float]]:
+        """Concurrent embedding via asyncio.gather with semaphore.
+
+        Runs up to `concurrency` embed() calls in parallel. Respects retry
+        logic and cache.
+
+        Args:
+            texts: Texts to embed.
+            concurrency: Max concurrent HTTP requests.
+
+        Returns:
+            Embeddings aligned with input order.
+        """
+        sem = asyncio.Semaphore(concurrency)
+
+        async def embed_one(text: str) -> list[float]:
+            async with sem:
+                return await self.embed(text)
+
+        gathered = await asyncio.gather(*[embed_one(t) for t in texts], return_exceptions=True)
+
+        results: list[list[float]] = []
+        for i, result in enumerate(gathered):
+            if isinstance(result, Exception):
+                logger.warning("embed_batch_gather_error", index=i, error=str(result))
+                results.append([])
+            else:
+                results.append(result)
+
         return results
 
     async def close(self) -> None:

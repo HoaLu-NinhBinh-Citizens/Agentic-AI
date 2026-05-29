@@ -12,7 +12,6 @@ Architecture:
 
 from __future__ import annotations
 
-import asyncio
 import logging
 from dataclasses import dataclass, field
 from datetime import datetime
@@ -256,7 +255,6 @@ class KnowledgeBase:
         self._embeddings = KnowledgeEmbeddings()
         self._chunker = HardwareChunker()
         self._embed_service = embed_service
-        self._lock = asyncio.Lock()
 
     def set_embed_service(self, embed_service) -> None:
         """Set the embedding service (e.g. EmbeddingService from infrastructure)."""
@@ -449,59 +447,58 @@ class KnowledgeBase:
         """
         Query the knowledge base with semantic search.
 
+        W-012 Fix: Removed global _lock to allow concurrent queries.
+        ChromaDB is thread-safe; the in-memory fallback uses a dict which
+        is safe for concurrent reads (writes are only on add/delete).
+
         Args:
             query: KBQuery with text, filters, and top_k
 
         Returns:
             List of KBSearchResult sorted by relevance
         """
-        await self._lock.acquire()
-        try:
-            # Build filter
-            filter_meta: dict[str, Any] = {}
-            if query.chip_family:
-                filter_meta["chip_family"] = query.chip_family
-            if query.peripheral:
-                filter_meta["peripheral"] = query.peripheral
-            if query.entry_types:
-                filter_meta["type"] = {"$in": [t.value for t in query.entry_types]}
+        # Build filter
+        filter_meta: dict[str, Any] = {}
+        if query.chip_family:
+            filter_meta["chip_family"] = query.chip_family
+        if query.peripheral:
+            filter_meta["peripheral"] = query.peripheral
+        if query.entry_types:
+            filter_meta["type"] = {"$in": [t.value for t in query.entry_types]}
 
-            # Generate query embedding
-            query_embedding = await self._embed(query.text)
+        # Generate query embedding
+        query_embedding = await self._embed(query.text)
 
-            # Search vector store
-            raw_results = await self._store.search(
-                query_embedding=query_embedding,
-                top_k=query.top_k,
-                filter_metadata=filter_meta if filter_meta else None,
-            )
+        # Search vector store
+        raw_results = await self._store.search(
+            query_embedding=query_embedding,
+            top_k=query.top_k,
+            filter_metadata=filter_meta if filter_meta else None,
+        )
 
-            results: list[KBSearchResult] = []
-            for entry_id, score, metadata in raw_results:
-                entry = await self._store.get_entry(entry_id)
-                if entry is None:
-                    continue
+        results: list[KBSearchResult] = []
+        for entry_id, score, metadata in raw_results:
+            entry = await self._store.get_entry(entry_id)
+            if entry is None:
+                continue
 
-                # Build matched_on list
-                matched_on: list[str] = []
-                if query.chip_family and metadata.get("chip_family") == query.chip_family:
-                    matched_on.append("chip_family")
-                if query.peripheral and metadata.get("peripheral") == query.peripheral:
-                    matched_on.append("peripheral")
-                if score > 0.7:
-                    matched_on.append("semantic_similarity")
+            # Build matched_on list
+            matched_on: list[str] = []
+            if query.chip_family and metadata.get("chip_family") == query.chip_family:
+                matched_on.append("chip_family")
+            if query.peripheral and metadata.get("peripheral") == query.peripheral:
+                matched_on.append("peripheral")
+            if score > 0.7:
+                matched_on.append("semantic_similarity")
 
-                results.append(KBSearchResult(
-                    entry=entry,
-                    score=score,
-                    matched_on=matched_on if matched_on else ["semantic_similarity"],
-                    citations=entry.citations,
-                ))
+            results.append(KBSearchResult(
+                entry=entry,
+                score=score,
+                matched_on=matched_on if matched_on else ["semantic_similarity"],
+                citations=entry.citations,
+            ))
 
-            return results
-
-        finally:
-            self._lock.release()
+        return results
 
     async def query_by_text(
         self,

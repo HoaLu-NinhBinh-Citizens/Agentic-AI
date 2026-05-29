@@ -53,7 +53,7 @@ class SecurityConfig:
     
     # CORS
     cors_origins: list[str] = field(default_factory=lambda: ["*"])
-    cors_methods: list[str] = field(default_factory=lambda: ["GET", "POST"]))
+    cors_methods: list[str] = field(default_factory=lambda: ["GET", "POST"])
     cors_headers: list[str] = field(default_factory=lambda: ["*"])
     
     # Rate limiting

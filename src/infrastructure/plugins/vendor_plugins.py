@@ -542,7 +542,7 @@ class SiFivePlugin(ChipVendorPlugin):
                 Core(name="U54", core_type=CoreArchitecture.RISC_V, core_id=4, frequency_hz=1_500_000_000),
             ],
             "ram_base": 0x80000000,
-            "ram_size=16_777_216",
+            "ram_size": 16_777_216,
             "max_frequency_hz": 1_500_000_000,
             "isa": "RV64GC",
             "has_pmp": True,

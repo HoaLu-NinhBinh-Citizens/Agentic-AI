@@ -188,14 +188,21 @@ class ExecutorAgent:
                 await asyncio.sleep(0.01)
                 continue
 
-            # Execute ready steps
-            for step in ready_steps[:self._max_parallel]:
-                result = await self.execute_step(step, context)
+            # Execute ready steps in parallel using asyncio.gather (W-012 fix)
+            steps_to_run = ready_steps[:self._max_parallel]
+            if steps_to_run:
+                results = await asyncio.gather(
+                    *[self.execute_step(step, context) for step in steps_to_run],
+                    return_exceptions=True,
+                )
 
-                # Check for critical error — stop plan
-                if result.status == PlanStatus.FAILED and self._is_critical_error(result.error or ""):
-                    logger.warning("executor_critical_error", step_id=step.step_id)
-                    # Don't fail entire plan for non-critical steps
+                for step, result in zip(steps_to_run, results):
+                    if isinstance(result, Exception):
+                        logger.error("executor_step_exception", step_id=step.step_id, error=str(result))
+                        continue
+                    # Check for critical error
+                    if result.status == PlanStatus.FAILED and self._is_critical_error(result.error or ""):
+                        logger.warning("executor_critical_error", step_id=step.step_id)
 
         # Determine final plan status
         if any(s.status == PlanStatus.FAILED for s in plan.steps):

@@ -115,6 +115,7 @@ class DebuggingWorkflow(BaseWorkflow):
             "log_analysis": log_analysis,
             "fixes": fixes,
             "diagnostic_plan": diagnosis.get("plan"),
+            "fix_edit_ids": fixes[-1].get("_edit_ids", []) if fixes else [],
         }
 
     async def _categorize_issue(
@@ -369,7 +370,7 @@ class DebuggingWorkflow(BaseWorkflow):
         chip_family: str,
         peripherals: list[str],
     ) -> list[dict[str, Any]]:
-        """Generate actionable fix recommendations."""
+        """Generate actionable fix recommendations and optionally apply via EditSystem."""
         fixes: list[dict[str, Any]] = []
 
         for cause in diagnosis.get("all_root_causes", []):
@@ -381,6 +382,7 @@ class DebuggingWorkflow(BaseWorkflow):
                 "likelihood": cause["likelihood"],
                 "actions": [],
                 "code_snippets": [],
+                "_edit_ids": [],
             }
 
             cause_lower = cause["cause"].lower()
@@ -425,5 +427,22 @@ class DebuggingWorkflow(BaseWorkflow):
 
             if fix["actions"]:
                 fixes.append(fix)
+
+        # Apply fixes via EditSystem when injected
+        if self._edit_system:
+            target_file = self.context.get("target_file")
+            target_snippet = self.context.get("fix_snippet")
+            if target_file and target_snippet:
+                try:
+                    edit_id = await self._edit_system.write(
+                        target_file,
+                        target_snippet,
+                        create_snapshot=True,
+                    )
+                    # Attach edit_id to highest-likelihood fix
+                    if fixes:
+                        fixes[0]["_edit_ids"].append(edit_id)
+                except Exception as e:
+                    logger.warning("EditSystem apply_fix failed", error=str(e))
 
         return fixes

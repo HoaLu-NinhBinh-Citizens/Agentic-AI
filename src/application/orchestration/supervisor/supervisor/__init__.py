@@ -162,7 +162,7 @@ class Supervisor:
         # Record escalations
         self._escalations.extend(escalations)
 
-        # Circuit breaker: count failures per plan
+        # Circuit breaker: count failures per plan; reset on success
         failure_count = self._circuit_breakers.get(plan.plan_id, 0)
         if plan.status == PlanStatus.FAILED:
             self._circuit_breakers[plan.plan_id] = failure_count + 1
@@ -173,6 +173,10 @@ class Supervisor:
                     message=f"Circuit breaker open: plan failed {failure_count + 1} times",
                     severity="critical",
                 ))
+        elif plan.status == PlanStatus.COMPLETED:
+            # W-012 Fix: reset counter on success so circuit can recover
+            if plan.plan_id in self._circuit_breakers:
+                del self._circuit_breakers[plan.plan_id]
 
         should_continue = plan.status not in (PlanStatus.FAILED, PlanStatus.CANCELLED)
         if escalations:

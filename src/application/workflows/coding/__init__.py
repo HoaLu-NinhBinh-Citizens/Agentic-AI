@@ -2,11 +2,13 @@
 
 from __future__ import annotations
 
+from pathlib import Path
 from typing import Any
 
 import structlog
 
 from src.application.workflows.base import BaseWorkflow
+from src.infrastructure.filesystem.edit_system import EditSystem
 
 logger = structlog.get_logger(__name__)
 
@@ -98,6 +100,7 @@ class CodingWorkflow(BaseWorkflow):
             "validation": validation,
             "warnings": output.get("warnings", []),
             "hardware_plan": hw_result,
+            "edit_id": output.get("edit_id"),
         }
 
     async def _parse_request(self, request: str) -> dict[str, Any]:
@@ -302,12 +305,13 @@ class CodingWorkflow(BaseWorkflow):
         output_format: str,
         parsed: dict[str, Any],
     ) -> dict[str, Any]:
-        """Format code for output."""
+        """Format code for output and optionally write atomically via EditSystem."""
         lines = generated.get("lines", [])
         peripheral = parsed.get("peripheral", "")
         config = parsed.get("configuration", {})
         warnings: list[str] = []
         warnings.extend(validation.get("warnings", []))
+        edit_id: str | None = None
 
         if output_format == "c_file":
             header = f"""/* Auto-generated {peripheral} initialization
@@ -340,8 +344,24 @@ void {peripheral.lower()}_init(void) {{
 
 /* Additional functions can be added here */
 """
+
+        # Atomically write generated code via EditSystem
+        if self._edit_system and output_format == "c_file":
+            file_path = self.context.get("target_file")
+            if file_path:
+                try:
+                    edit_id = await self._edit_system.write(
+                        file_path,
+                        code,
+                        create_snapshot=True,
+                    )
+                    warnings.append(f"Code written atomically to {file_path} (edit_id={edit_id})")
+                except Exception as e:
+                    warnings.append(f"EditSystem write failed: {e} — code returned in output only")
+
         return {
             "code": code,
             "warnings": warnings,
             "format": output_format,
+            "edit_id": edit_id,
         }
