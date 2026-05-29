@@ -21,6 +21,17 @@ from src.infrastructure.agent.agent_loop import (
     TurnResult,
     AgentLoop,
 )
+from src.infrastructure.llm.client import LLMResponse, ToolCall
+
+
+def make_mock_response(content: str, tool_calls: list[ToolCall] | None = None) -> LLMResponse:
+    """Create a proper LLMResponse mock using the real dataclass."""
+    return LLMResponse(
+        content=content,
+        finish_reason="stop",
+        tool_calls=tool_calls or [],
+        usage={"prompt_tokens": 1, "completion_tokens": 1, "total_tokens": 2},
+    )
 
 
 class TestAgentConfig:
@@ -83,10 +94,7 @@ class TestAgenticAgent:
     def mock_llm_client(self):
         """Create mock LLM client."""
         client = MagicMock()
-        client.generate = AsyncMock(return_value=MagicMock(
-            content="Test response",
-            finish_reason="stop",
-        ))
+        client.generate = AsyncMock(return_value=make_mock_response("Test response"))
         return client
 
     @pytest.fixture
@@ -166,8 +174,8 @@ class TestAgenticAgent:
         await agent.prompt("Turn 2")
         await agent.prompt("Turn 3")
         
-        # Should stop at max_turns
-        assert agent.turn_count <= config.max_turns
+        # turn_count equals max_turns when loop stops (increment before loop condition)
+        assert agent.turn_count == config.max_turns
 
     def test_reset(self, mock_session, config, mock_llm_client, mock_tool_registry):
         """Test resetting agent."""
@@ -216,10 +224,7 @@ class TestAgentIntegration:
         )
         
         mock_llm = MagicMock()
-        mock_llm.generate = AsyncMock(return_value=MagicMock(
-            content="I can help with that.",
-            finish_reason="stop",
-        ))
+        mock_llm.generate = AsyncMock(return_value=make_mock_response("I can help with that."))
         
         mock_registry = MagicMock()
         mock_registry.list_tools = MagicMock(return_value=[])
@@ -267,10 +272,7 @@ class TestAgentEdgeCases:
         config = AgentConfig()
         
         mock_llm = MagicMock()
-        mock_llm.generate = AsyncMock(return_value=MagicMock(
-            content="OK",
-            finish_reason="stop",
-        ))
+        mock_llm.generate = AsyncMock(return_value=make_mock_response("OK"))
         
         mock_registry = MagicMock()
         mock_registry.list_tools = MagicMock(return_value=[])

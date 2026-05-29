@@ -110,18 +110,32 @@ class AgenticAgent:
                 content=context,
             ))
     
+    def reset(self) -> None:
+        """Reset agent state for a new conversation."""
+        self.turn_count = 0
+        # Keep system prompt, drop conversation messages
+        system_msgs = [m for m in self._messages if m.role == "system"]
+        self._messages = system_msgs
+
     async def prompt(self, user_input: str) -> TurnResult:
         """Process a user prompt.
-        
+
         Args:
             user_input: The user's message
-            
+
         Returns:
             TurnResult with messages, tool calls, and final response
         """
-        self.turn_count += 1
         self._current_tool_calls = []
-        
+
+        # Guard: do not execute if turn limit already reached
+        if self.turn_count >= self.config.max_turns:
+            return TurnResult(
+                messages=self._messages[-1:],
+                tool_calls=[],
+                final_response="Turn limit reached.",
+            )
+
         # Add user message
         self._messages.append(Message(
             role="user",
@@ -132,7 +146,7 @@ class AgenticAgent:
         self.session.add_message("user", user_input)
         
         if self.config.verbose:
-            print(f"\n[Turn {self.turn_count}]")
+            print(f"\n[Turn] processing user input")
         
         # Run the loop
         try:
@@ -159,6 +173,7 @@ class AgenticAgent:
     async def _run_loop(self) -> None:
         """Run the think-act-observe loop."""
         while self.turn_count <= self.config.max_turns:
+            self.turn_count += 1
             # Generate response
             response = await self._generate()
             
