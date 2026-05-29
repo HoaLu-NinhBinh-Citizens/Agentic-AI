@@ -188,17 +188,14 @@ class PredictiveAnalyzer:
         
         if max_trend <= 0:
             return 720.0  # 30 days
-        
+
         # Simple estimation based on trend
         # Assume failure when metric reaches threshold
         threshold = 100.0
         current = max(m.current_value for m in metrics)
-        
-        if max_trend > 0:
-            hours = (threshold - current) / max_trend if max_trend > 0 else 168
-            return max(1, min(720, hours))
-        
-        return 168.0
+
+        hours = (threshold - current) / max_trend
+        return max(1, min(720, hours))
     
     def _calculate_confidence(
         self,

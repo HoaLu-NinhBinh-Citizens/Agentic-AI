@@ -8,7 +8,7 @@ from typing import Any, AsyncIterator
 
 import httpx
 
-from .provider import LLMProvider, StreamEvent
+from .provider import LLMProvider, LLMProviderConfig, StreamEvent
 from .tool_accumulator import ToolCallAccumulator
 
 logger = logging.getLogger(__name__)

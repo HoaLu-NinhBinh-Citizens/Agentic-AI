@@ -90,6 +90,11 @@ class EmbeddingCache:
             self._cache.clear()
 
     @property
+    def maxsize(self) -> int:
+        """Get maximum cache size."""
+        return self._maxsize
+
+    @property
     def size(self) -> int:
         """Get current cache size."""
         return len(self._cache)
@@ -110,6 +115,8 @@ class EmbeddingService:
     TIMEOUT_SECONDS = 3.0
     MAX_RETRIES = 2
     RETRY_DELAY = 0.1
+    MAX_RETRY_DELAY = 2.0
+    JITTER_FACTOR = 0.1
 
     def __init__(
         self,
@@ -236,8 +243,8 @@ class EmbeddingService:
                         else:
                             self._last_error_code = EmbeddingErrorCode.HTTP_ERROR
                         if attempt < self.MAX_RETRIES - 1:
-                            delay = min(1.0, 0.1 * (2 ** attempt))
-                            await asyncio.sleep(delay + random.uniform(0, 0.05))
+                            delay = min(self.MAX_RETRY_DELAY, self.RETRY_DELAY * (2 ** attempt))
+                            await asyncio.sleep(delay + random.uniform(0, delay * self.JITTER_FACTOR))
                             continue
                         return []
 
@@ -248,8 +255,8 @@ class EmbeddingService:
                         logger.error("Empty embedding returned from Ollama")
                         self._last_error_code = EmbeddingErrorCode.EMPTY_RESULT
                         if attempt < self.MAX_RETRIES - 1:
-                            delay = min(1.0, 0.1 * (2 ** attempt))
-                            await asyncio.sleep(delay + random.uniform(0, 0.05))
+                            delay = min(self.MAX_RETRY_DELAY, self.RETRY_DELAY * (2 ** attempt))
+                            await asyncio.sleep(delay + random.uniform(0, delay * self.JITTER_FACTOR))
                             continue
                         return []
 
@@ -258,7 +265,8 @@ class EmbeddingService:
                         len(embedding),
                     )
 
-                    await self._cache.put(cache_key, embedding)
+                    if text not in ("init", "health check"):
+                        await self._cache.put(cache_key, embedding)
                     if self._dimension is None:
                         self._dimension = len(embedding)
                     return embedding
@@ -271,8 +279,8 @@ class EmbeddingService:
                 )
                 self._last_error_code = EmbeddingErrorCode.TIMEOUT
                 if attempt < self.MAX_RETRIES - 1:
-                    delay = min(1.0, 0.1 * (2 ** attempt))
-                    await asyncio.sleep(delay + random.uniform(0, 0.05))
+                    delay = min(self.MAX_RETRY_DELAY, self.RETRY_DELAY * (2 ** attempt))
+                    await asyncio.sleep(delay + random.uniform(0, delay * self.JITTER_FACTOR))
                     continue
             except aiohttp.ClientError as e:
                 logger.error(
@@ -283,8 +291,8 @@ class EmbeddingService:
                 )
                 self._last_error_code = EmbeddingErrorCode.NETWORK_ERROR
                 if attempt < self.MAX_RETRIES - 1:
-                    delay = min(1.0, 0.1 * (2 ** attempt))
-                    await asyncio.sleep(delay + random.uniform(0, 0.05))
+                    delay = min(self.MAX_RETRY_DELAY, self.RETRY_DELAY * (2 ** attempt))
+                    await asyncio.sleep(delay + random.uniform(0, delay * self.JITTER_FACTOR))
                     continue
             except Exception as e:
                 logger.error(
@@ -295,8 +303,8 @@ class EmbeddingService:
                 )
                 self._last_error_code = EmbeddingErrorCode.NETWORK_ERROR
                 if attempt < self.MAX_RETRIES - 1:
-                    delay = min(1.0, 0.1 * (2 ** attempt))
-                    await asyncio.sleep(delay + random.uniform(0, 0.05))
+                    delay = min(self.MAX_RETRY_DELAY, self.RETRY_DELAY * (2 ** attempt))
+                    await asyncio.sleep(delay + random.uniform(0, delay * self.JITTER_FACTOR))
                     continue
 
         logger.error("Embedding failed after %d attempts for text: %s", self.MAX_RETRIES, text[:100])
@@ -343,10 +351,11 @@ class EmbeddingService:
         batch_embeddings = await self._embed_batch_http(uncached_texts)
 
         # Phase 3: populate results and cache
-        for idx, embedding in zip(uncached_indices, batch_embeddings):
+        for i, embedding in enumerate(batch_embeddings):
+            idx = uncached_indices[i]
             results[idx] = embedding
             if embedding:
-                cache_key = self._make_cache_key(uncached_texts[uncached_indices.index(idx)])
+                cache_key = self._make_cache_key(uncached_texts[i])
                 await self._cache.put(cache_key, embedding)
 
         return [r or [] for r in results]
@@ -476,7 +485,7 @@ class EmbeddingService:
         """
         return {
             "cache_size": self._cache.size,
-            "cache_maxsize": self._cache._maxsize,
+            "cache_maxsize": self._cache.maxsize,
             "dimension": self._dimension,
             "model": self._model,
             "url": self._url,

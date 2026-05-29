@@ -76,6 +76,7 @@ class OpenAILLM:
         last_error: Optional[Exception] = None
         for attempt in range(1, self.max_retries + 1):
             started = time.perf_counter()
+            adjusted_max_tokens = max(512, self.max_tokens // attempt)
             try:
                 headers = {
                     "Authorization": f"Bearer {self.api_key}",
@@ -85,7 +86,7 @@ class OpenAILLM:
                     "model": self.model,
                     "messages": [{"role": "user", "content": prompt}],
                     "temperature": self.temperature,
-                    "max_tokens": self.max_tokens,
+                    "max_tokens": adjusted_max_tokens,
                 }
                 response = requests.post(
                     f"{self.base_url.rstrip('/')}/chat/completions",
@@ -118,7 +119,6 @@ class OpenAILLM:
                     prompt_chars,
                 )
                 last_error = exc
-                self.max_tokens = max(512, self.max_tokens // 2)
 
             except requests.exceptions.ConnectionError as exc:
                 logger.error("OpenAI LLM connection error: Cannot reach %s", self.base_url)

@@ -165,17 +165,22 @@ class ChromaDBMemoryStore(BaseMemoryStore):
 
         if self._collection:
             try:
-                from src.infrastructure.retrieval.embedding import get_embedding
-
-                query_embedding = get_embedding(query)
+                from src.infrastructure.embeddings.embedding_service import EmbeddingService
+                svc = EmbeddingService()
+                query_embedding = asyncio.run(svc.embed(query))
                 if query_embedding:
                     query_results = self._collection.query(
                         query_embeddings=[query_embedding],
                         n_results=limit
                     )
 
-                    for i, doc in enumerate(query_results.get("documents", [[]])[0]):
-                        metadata = query_results.get("metadatas", [[]])[0][i]
+                    docs = query_results.get("documents", [[]])[0]
+                    metadatas = query_results.get("metadatas", [[]])
+                    for i, doc in enumerate(docs):
+                        if i < len(metadatas[0]):
+                            metadata = metadatas[0][i]
+                        else:
+                            metadata = {}
                         results.append(MemoryRecord(
                             id=metadata.get("id", str(uuid4())),
                             type=metadata.get("type", "unknown"),
@@ -335,7 +340,7 @@ class AdvancedMemorySystem:
         context: Dict[str, Any],
         outcome: str,
         success: bool,
-        lessons: List[str] = None,
+        lessons: List[str] | None = None,
     ) -> str:
         """Store an episodic memory from a task execution"""
         record = EpisodicMemoryRecord(
@@ -349,7 +354,7 @@ class AdvancedMemorySystem:
             tags=["task", "execution", "success" if success else "failure"],
         )
 
-        task_hash = hashlib.md5(task.encode()).hexdigest()[:8]
+        task_hash = hashlib.sha256(task.encode()).hexdigest()[:16]
         if task_hash not in self.episodic_store:
             self.episodic_store[task_hash] = []
         self.episodic_store[task_hash].append(record)
@@ -361,7 +366,7 @@ class AdvancedMemorySystem:
         self,
         concept: str,
         facts: List[str],
-        sources: List[str] = None,
+        sources: List[str] | None = None,
         confidence: float = 1.0,
     ) -> str:
         """Store semantic knowledge"""
@@ -384,7 +389,7 @@ class AdvancedMemorySystem:
         self,
         skill_name: str,
         steps: List[str],
-        prerequisites: List[str] = None,
+        prerequisites: List[str] | None = None,
         success_rate: float = 0.0,
     ) -> str:
         """Store procedural knowledge (skills/workflows)"""

@@ -532,7 +532,7 @@ class LongHorizonMemory:
                 # Update plan state
                 if self._plan_state:
                     # Remove phases after this checkpoint
-                    phases_to_remove = self._plan_state.completed_phases[plan["phase_idx"]:]
+                    phases_to_remove = self._plan_state.completed_phases[checkpoint["phase_idx"]:]
                     self._plan_state.completed_phases = [
                         p for p in self._plan_state.completed_phases
                         if p not in phases_to_remove

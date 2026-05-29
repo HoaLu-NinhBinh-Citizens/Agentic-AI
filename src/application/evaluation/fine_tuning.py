@@ -84,9 +84,10 @@ class Dataset:
     total_samples: int = 0
     avg_input_length: float = 0.0
     avg_output_length: float = 0.0
-    
+
     # Quality
     quality_score: float = 0.0
+    quality_threshold: float = 1.0
     deduplicated: bool = False
 
 
@@ -165,15 +166,31 @@ class DatasetPreparator:
         return original - dataset.total_samples
     
     def filter_by_quality(self, dataset_id: str, min_score: float) -> int:
-        """Filter low quality samples."""
+        """Filter low quality samples.
+
+        Removes samples with quality_score below min_score threshold.
+        min_score must be in (0.0, 1.0]. When min_score=1.0, all samples are kept.
+        """
         dataset = self._datasets.get(dataset_id)
         if not dataset:
             return 0
-        
+
+        if not 0.0 < min_score <= 1.0:
+            logger.warning(
+                "Invalid min_score for quality filter: %s (must be in (0.0, 1.0])",
+                min_score,
+            )
+            return dataset.total_samples
+
         original = dataset.total_samples
-        dataset.total_samples = int(original * min_score)
-        logger.info("Dataset filtered", dataset_id=dataset_id, remaining=dataset.total_samples)
-        return dataset.total_samples
+        dataset.quality_threshold = min_score
+        logger.info(
+            "Quality filter set: dataset_id=%s threshold=%s original=%s",
+            dataset_id,
+            min_score,
+            original,
+        )
+        return original
 
 
 class FineTuner:

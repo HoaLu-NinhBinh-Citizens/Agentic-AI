@@ -10,6 +10,7 @@ This module provides:
 
 from __future__ import annotations
 
+import asyncio
 import json
 import os
 from abc import ABC, abstractmethod
@@ -121,6 +122,8 @@ class OpenAIProvider(BaseLLMProvider):
     
     def _get_headers(self) -> dict[str, str]:
         """Get request headers."""
+        if not self.api_key:
+            raise ValueError("API key is not set. Cannot create authorization headers.")
         return {
             "Authorization": f"Bearer {self.api_key}",
             "Content-Type": "application/json",
@@ -467,7 +470,9 @@ class LLMManager:
         """Get embeddings (OpenAI only)."""
         if self.config.provider != ModelProvider.OPENAI:
             raise NotImplementedError("Embeddings only supported for OpenAI")
-        
+        if not self.config.api_key:
+            raise ValueError("API key is not set. Cannot generate embeddings.")
+
         url = "https://api.openai.com/v1/embeddings"
         headers = {
             "Authorization": f"Bearer {self.config.api_key}",
@@ -477,7 +482,7 @@ class LLMManager:
             "model": "text-embedding-ada-002",
             "input": text,
         }
-        
+
         async with aiohttp.ClientSession() as session:
             async with session.post(url, json=payload, headers=headers) as resp:
                 data = await resp.json()
@@ -512,7 +517,6 @@ def create_llm_manager(
     return LLMManager(config)
 
 
-import asyncio  # Import for sleep in mock
 
 if __name__ == "__main__":
     async def demo():

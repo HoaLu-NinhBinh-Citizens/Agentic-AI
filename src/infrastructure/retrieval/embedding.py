@@ -92,7 +92,7 @@ class OllamaEmbeddingClient:
         return vector
 
     def _cache_key(self, text: str) -> str:
-        return hashlib.sha1(f"{self.model}\n{text}".encode("utf-8")).hexdigest()
+        return hashlib.sha256(f"{self.model}\n{text}".encode("utf-8")).hexdigest()
 
     def is_temporarily_unavailable(self) -> bool:
         return time.time() < self._disabled_until

@@ -157,17 +157,14 @@ class DeduplicationEngine:
     ) -> tuple[bool, str]:
         """Check for duplicates and add if not duplicate.
 
-        Args:
-            content: Content text.
-            embedding: Embedding vector.
-
-        Returns:
-            Tuple of (is_duplicate, reason).
+        Pass an empty list for embedding to skip semantic dedup (bloom-only check).
+        This is an intentional optimization: bloom filter catches exact duplicates cheaply
+        before spending compute on embedding generation.
         """
         if await self.check_exact_duplicate(content):
             return True, "bloom"
 
-        if await self.check_semantic_duplicate(embedding, content):
+        if embedding and await self.check_semantic_duplicate(embedding, content):
             return True, "cosine"
 
         await self.add_exact(content)
@@ -198,6 +195,7 @@ class DeduplicationEngine:
         """
         magnitude = math.sqrt(sum(x * x for x in vector))
         if magnitude == 0:
+            logger.warning("Attempted to normalize a zero vector — returning zero vector as-is")
             return vector
         return [x / magnitude for x in vector]
 

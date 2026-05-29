@@ -15,7 +15,7 @@ import json
 import math
 import uuid
 from dataclasses import dataclass, field
-from datetime import datetime
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Callable
 
@@ -77,19 +77,25 @@ class EmbeddingModel:
             raise EmbeddingError(f"ONNX Runtime not available: {e}")
     
     def _download_and_convert_model(self, output_path: Path):
-        """Download and convert HuggingFace model to ONNX."""
+        """Download and convert HuggingFace model to ONNX (sync wrapper)."""
+        try:
+            import torch
+        except ImportError:
+            raise EmbeddingError("PyTorch not available for model download")
+
         from transformers import AutoTokenizer, AutoModel
-        import torch
-        
+
         print(f"Downloading model {self.model_name}...")
         tokenizer = AutoTokenizer.from_pretrained(self.model_name)
         model = AutoModel.from_pretrained(self.model_name)
         model.eval()
-        
+
         # Export to ONNX
+        dummy_input_ids = torch.zeros(1, 128, dtype=torch.long)
+        dummy_attention_mask = torch.ones(1, 128, dtype=torch.long)
         torch.onnx.export(
             model,
-            (torch.randn(1, 128),),
+            (dummy_input_ids, dummy_attention_mask),
             str(output_path),
             input_names=["input_ids", "attention_mask"],
             output_names=["embeddings"],
@@ -110,8 +116,10 @@ class EmbeddingModel:
             tokenizer = AutoTokenizer.from_pretrained(self.model_name)
             model = AutoModel.from_pretrained(self.model_name)
             
-            if self.device == "cuda":
+            if self.device == "cuda" and torch.cuda.is_available():
                 model = model.cuda()
+            elif self.device == "mps":
+                model = model.to("mps")
             
             model.eval()
             return model, tokenizer
@@ -122,9 +130,9 @@ class EmbeddingModel:
         """Mean pool token embeddings to get sentence embedding."""
         token_embeddings = model_output[0]
         input_mask_expanded = np.expand_dims(attention_mask, -1) * np.ones_like(token_embeddings)
-        return np.sum(token_embeddings * input_mask_expanded, 1) / np.clip(
-            np.sum(input_mask_expanded), a_min=1e-9, a_max=None
-        )
+        mask_sum = np.sum(input_mask_expanded, axis=1, keepdims=True)
+        mask_sum = np.where(mask_sum == 0, 1.0, mask_sum)
+        return np.sum(token_embeddings * input_mask_expanded, axis=1) / mask_sum
     
     def _normalize_embeddings(self, embeddings: np.ndarray) -> np.ndarray:
         """L2 normalize embeddings."""
@@ -184,8 +192,11 @@ class EmbeddingModel:
                     input_ids=torch.tensor(encoded["input_ids"]),
                     attention_mask=torch.tensor(encoded["attention_mask"]),
                 )
+                hidden = outputs.last_hidden_state
+                if hidden.device.type != "cpu":
+                    hidden = hidden.cpu()
                 embeddings = self._mean_pooling(
-                    outputs.last_hidden_state.cpu().numpy(),
+                    hidden.numpy(),
                     encoded["attention_mask"],
                 )
         
@@ -203,7 +214,7 @@ class VectorEntry:
     content: str
     embedding: np.ndarray
     metadata: dict[str, Any] = field(default_factory=dict)
-    created_at: datetime = field(default_factory=datetime.now)
+    created_at: datetime = field(default_factory=lambda: datetime.now(timezone.utc))
 
 
 class VectorStore:
@@ -222,8 +233,17 @@ class VectorStore:
     
     def add(self, entry: VectorEntry) -> None:
         """Add an entry to the store."""
-        if entry.embedding.shape != (self.dimension,):
-            raise ValueError(f"Embedding dimension mismatch: expected {self.dimension}")
+        emb = entry.embedding
+        if emb.ndim == 2:
+            if emb.shape[1] != self.dimension:
+                raise ValueError(f"Embedding dimension mismatch: expected {self.dimension}, got {emb.shape[1]}")
+            emb = emb.flatten()
+        elif emb.ndim == 1:
+            if emb.shape[0] != self.dimension:
+                raise ValueError(f"Embedding dimension mismatch: expected {self.dimension}, got {emb.shape[0]}")
+        else:
+            raise ValueError(f"Invalid embedding ndim: {emb.ndim}")
+        entry.embedding = emb
         self.entries[entry.id] = entry
         self._dirty = True
     

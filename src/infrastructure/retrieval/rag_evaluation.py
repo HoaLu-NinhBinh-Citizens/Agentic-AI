@@ -291,6 +291,20 @@ class RetrievalEvaluator:
         hit_at_5 = sum(1 for r in results if r.hit_at_k.get(5, False))
         n = len(results)
 
+        if n == 0:
+            return {
+                "total_cases": 0,
+                "hit_rate_at_1": 0.0,
+                "hit_rate_at_3": 0.0,
+                "hit_rate_at_5": 0.0,
+                "avg_precision_at_5": 0.0,
+                "avg_recall_at_5": 0.0,
+                "avg_f1_at_5": 0.0,
+                "avg_mrr": 0.0,
+                "avg_ndcg_at_5": 0.0,
+                "category_breakdown": {},
+            }
+
         avg_prec_5 = sum(r.precision_at_k.get(5, 0) for r in results) / n
         avg_recall_5 = sum(r.recall_at_k.get(5, 0) for r in results) / n
         avg_f1_5 = sum(r.f1_at_k.get(5, 0) for r in results) / n
@@ -307,12 +321,13 @@ class RetrievalEvaluator:
         category_summary = {}
         for cat, cat_results in categories.items():
             cn = len(cat_results)
-            category_summary[cat] = {
-                "count": cn,
-                "hit_rate_at_5": round(sum(1 for r in cat_results if r.hit_at_k.get(5, False)) / cn, 4),
-                "avg_precision_at_5": round(sum(r.precision_at_k.get(5, 0) for r in cat_results) / cn, 4),
-                "avg_mrr": round(sum(r.mrr for r in cat_results) / cn, 4),
-            }
+            if cn > 0:
+                category_summary[cat] = {
+                    "count": cn,
+                    "hit_rate_at_5": round(sum(1 for r in cat_results if r.hit_at_k.get(5, False)) / cn, 4),
+                    "avg_precision_at_5": round(sum(r.precision_at_k.get(5, 0) for r in cat_results) / cn, 4),
+                    "avg_mrr": round(sum(r.mrr for r in cat_results) / cn, 4),
+                }
 
         return {
             "total_cases": n,

@@ -15,6 +15,7 @@ import asyncio
 import json
 import logging
 import os
+import re
 import time
 import uuid
 from dataclasses import dataclass, field
@@ -180,8 +181,8 @@ class SemanticMemory:
 
     TABLE_NAME = "memory"
     TRIVIAL_PATTERNS = [
-        r"^(ok|got it|sure|yes|no|thanks|i see|yep|nope|uh huh)$",
-        r"^.{0,9}$",
+        re.compile(r"^(ok|got it|sure|yes|no|thanks|i see|yep|nope|uh huh)$"),
+        re.compile(r"^.{0,9}$"),
     ]
 
     def __init__(
@@ -193,6 +194,7 @@ class SemanticMemory:
         embedding_service: EmbeddingService | None = None,
         max_vectors: int = 0,
         warn_at_percent: int = 80,
+        embedding_dimension: int = 1024,
     ) -> None:
         """Initialize semantic memory.
 
@@ -204,6 +206,7 @@ class SemanticMemory:
             embedding_service: Optional pre-configured embedding service.
             max_vectors: Maximum number of vectors (0 = unlimited).
             warn_at_percent: Warn when storage reaches this percentage of max_vectors.
+            embedding_dimension: Expected embedding vector dimension (default 1024 for bge-m3).
         """
         self._db_path = db_path
         self._db = None
@@ -219,6 +222,7 @@ class SemanticMemory:
         self._max_vectors = max_vectors
         self._warn_at_percent = warn_at_percent
         self._expected_embedding_dim: int | None = None
+        self._embedding_dimension = embedding_dimension
         self._last_operation: MemoryOperation | None = None
 
     def _set_operation(
@@ -432,12 +436,13 @@ class SemanticMemory:
 
         import lancedb
 
+        dimension = self._expected_embedding_dim or self._embedding_dimension
         schema = lancedb.schema(
             [
                 lancedb.field("id", lancedb.string()),
                 lancedb.field("type", lancedb.string()),
                 lancedb.field("content", lancedb.string()),
-                lancedb.field("embedding", lancedb.vector(1024)),
+                lancedb.field("embedding", lancedb.vector(dimension)),
                 lancedb.field("session_id", lancedb.string()),
                 lancedb.field("metadata", lancedb.json()),
                 lancedb.field("created_at", lancedb.int64()),
@@ -454,8 +459,7 @@ class SemanticMemory:
         if len(content) < 10:
             return True
         for pattern in self.TRIVIAL_PATTERNS:
-            import re
-            if re.match(pattern, content):
+            if pattern.match(content):
                 return True
         return False
 
