@@ -794,17 +794,17 @@ class FlashSlotStateMachine:
         expected_hash: str | None = None,
         fence_token: Any = None,
     ) -> tuple[bool, str]:
-        """Verify firmware in slot.
-        
-        Args:
-            slot_id: Slot to verify
-            expected_hash: Expected SHA256 hash (uses stored hash if None)
-            fence_token: Flash fence token
-            
-        Returns:
-            (success, error_message)
-        """
+        """Verify firmware in slot."""
         async with self._lock:
+            if self.lock_manager and fence_token:
+                valid, reason = await self.lock_manager.validate_fence_token(
+                    target_name="flash",
+                    token=fence_token,
+                    operation_name="verify",
+                )
+                if not valid:
+                    return False, f"Fence token invalid: {reason}"
+
             slot = self.slot_table.get_slot(slot_id)
             
             if not self.probe:

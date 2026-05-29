@@ -16,7 +16,7 @@ import asyncio
 import hashlib
 import json
 import logging
-import time
+
 from dataclasses import dataclass, field
 from typing import Any, Optional, List, Dict
 from enum import Enum
@@ -29,8 +29,8 @@ def _compute_input_hash(input_data: Any) -> str:
     if input_data is None:
         return "null"
     try:
-        serialized = json.dumps(input_data, sort_keys=True, default=str)
-        return hashlib.sha256(serialized.encode()).hexdigest()[:16]
+        serialized = json.dumps(input_data, sort_keys=True, separators=(",", ":"), ensure_ascii=False, default=str)
+        return hashlib.sha256(serialized.encode("utf-8")).hexdigest()
     except (TypeError, ValueError):
         return hashlib.sha256(str(input_data).encode()).hexdigest()[:16]
 
@@ -158,7 +158,7 @@ class Command:
     side_effect_marker: Optional[str] = None
     
     # Metadata
-    created_at: float = field(default_factory=time.time)
+    created_at: float = 0.0
     
     def __post_init__(self):
         """Compute hashes after initialization."""
@@ -177,12 +177,12 @@ class Command:
         if not self.activity_options_hash and self.activity_options:
             self.activity_options_hash = hashlib.sha256(
                 self.activity_options.to_hash_key().encode()
-            ).hexdigest()[:16]
+            ).hexdigest()
         
         if not self.child_options_hash and self.child_options:
             self.child_options_hash = hashlib.sha256(
                 self.child_options.to_hash_key().encode()
-            ).hexdigest()[:16]
+            ).hexdigest()
         
         if not self.signal_payload_hash and self.signal_payload:
             self.signal_payload_hash = _compute_input_hash(self.signal_payload)

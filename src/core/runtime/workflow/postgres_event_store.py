@@ -81,6 +81,7 @@ class PostgresEventStore:
         if not self._pool:
             raise RuntimeError("Event store not initialized")
 
+        # created_at_ms is observability only; do not use for correctness
         now_ms = int(time.time() * 1000)
 
         async with self._pool.acquire() as conn:
@@ -184,6 +185,7 @@ class PostgresIdempotencyStore:
         if not store._pool:
             raise RuntimeError("Event store not initialized")
 
+        # created_at_ms is observability only; do not use for correctness
         now_ms = int(time.time() * 1000)
         req_hash = self._hash_request(request)
 
@@ -226,6 +228,7 @@ class PostgresIdempotencyStore:
         if not store._pool:
             raise RuntimeError("Event store not initialized")
 
+        # created_at_ms is observability only; do not use for correctness
         now_ms = int(time.time() * 1000)
 
         async with store._pool.acquire() as conn:
@@ -242,6 +245,7 @@ class PostgresIdempotencyStore:
         if not store._pool:
             raise RuntimeError("Event store not initialized")
 
+        # created_at_ms is observability only; do not use for correctness
         now_ms = int(time.time() * 1000)
 
         async with store._pool.acquire() as conn:

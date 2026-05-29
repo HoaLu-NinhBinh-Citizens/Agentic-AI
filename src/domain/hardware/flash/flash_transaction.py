@@ -48,6 +48,11 @@ class FlashTransaction:
     transaction_id: str = field(default_factory=lambda: str(uuid.uuid4()))
     target_name: str = ""
     target_id: str = ""
+
+    # Lock fencing (P0)
+    lock_epoch: int = 0
+    lock_owner_id: str = ""
+    lock_acquired: bool = False
     
     # Firmware tracking
     old_firmware_hash: str = ""
@@ -89,6 +94,9 @@ class FlashTransaction:
             "transaction_id": self.transaction_id,
             "target_name": self.target_name,
             "target_id": self.target_id,
+            "lock_epoch": self.lock_epoch,
+            "lock_owner_id": self.lock_owner_id,
+            "lock_acquired": self.lock_acquired,
             "old_firmware_hash": self.old_firmware_hash,
             "new_firmware_hash": self.new_firmware_hash,
             "new_firmware_version": self.new_firmware_version,
@@ -157,6 +165,9 @@ class FlashTransactionManager:
                 transaction_id TEXT PRIMARY KEY,
                 target_name TEXT NOT NULL,
                 target_id TEXT,
+                lock_epoch INTEGER DEFAULT 0,
+                lock_owner_id TEXT,
+                lock_acquired INTEGER DEFAULT 0,
                 old_firmware_hash TEXT,
                 new_firmware_hash TEXT NOT NULL,
                 new_firmware_version TEXT,
@@ -450,15 +461,19 @@ class FlashTransactionManager:
         
         await self._db.execute("""
             INSERT OR REPLACE INTO flash_transactions
-            (transaction_id, target_name, target_id, old_firmware_hash, new_firmware_hash,
+            (transaction_id, target_name, target_id, lock_epoch, lock_owner_id, lock_acquired,
+             old_firmware_hash, new_firmware_hash,
              new_firmware_version, new_firmware_size, status, created_at, started_at,
              completed_at, rollback_snapshot_id, resume_state, error_code, error_message,
              error_details, bytes_written, sectors_erased, duration_ms, target_slot, previous_slot)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         """, (
             transaction.transaction_id,
             transaction.target_name,
             transaction.target_id,
+            transaction.lock_epoch,
+            transaction.lock_owner_id,
+            1 if transaction.lock_acquired else 0,
             transaction.old_firmware_hash,
             transaction.new_firmware_hash,
             transaction.new_firmware_version,
@@ -501,6 +516,9 @@ class FlashTransactionManager:
             transaction_id=data["transaction_id"],
             target_name=data["target_name"],
             target_id=data.get("target_id", ""),
+            lock_epoch=int(data.get("lock_epoch", 0) or 0),
+            lock_owner_id=data.get("lock_owner_id", "") or "",
+            lock_acquired=bool(int(data.get("lock_acquired", 0) or 0)),
             old_firmware_hash=data.get("old_firmware_hash", ""),
             new_firmware_hash=data["new_firmware_hash"],
             new_firmware_version=data.get("new_firmware_version", ""),

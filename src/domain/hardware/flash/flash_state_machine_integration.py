@@ -10,7 +10,7 @@ Phase 2 (P0-B): Complete flash state machine integrating:
 This module provides the complete end-to-end flash pipeline that ensures:
 1. Atomic state transitions
 2. Power-loss safe recovery
-3. Fence token enforcement
+3. Fence token enforcement (monotonic epoch; fail-closed)
 4. Manifest verification before flash
 5. Complete audit trail
 
@@ -440,6 +440,11 @@ class FlashStateMachineIntegration:
                     new_firmware_size=len(firmware_data),
                     target_slot=operation.target_slot,
                 )
+                if fence is not None and hasattr(fence, "epoch"):
+                    tx.lock_epoch = int(getattr(fence, "epoch", 0) or 0)
+                    tx.lock_owner_id = operation_id
+                    tx.lock_acquired = True
+                    await self.transaction_manager._save_transaction(tx)
                 
                 # Begin journal
                 if self.journal:

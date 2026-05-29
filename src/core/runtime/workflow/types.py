@@ -589,17 +589,25 @@ class QueryResult:
 
 @dataclass
 class LockFenceToken:
-    """Token for distributed lock fencing."""
-    token: str = field(default_factory=lambda: str(uuid.uuid4()))
+    """Token for distributed lock fencing.
+
+    Production safety requirements:
+    - token MUST be monotonic for a given lock_id (fencing epoch)
+    - under coordination uncertainty (Redis unavailable), dangerous ops must fail-closed
+    """
+
+    # Monotonic fencing epoch for this lock_id (from Redis INCR)
+    epoch: int = 0
+
     lock_id: str = ""
-    
+
     # Owner
     owner_id: str = ""
-    
+
     # Validity
     issued_at: float = field(default_factory=time.time)
     expires_at: float = 0
-    
+
     # State
     is_revoked: bool = False
 

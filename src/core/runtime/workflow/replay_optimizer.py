@@ -47,8 +47,8 @@ class ReplayCheckpoint:
     
     def compute_state_hash(self, state: dict) -> str:
         """Compute hash of current state."""
-        state_str = json.dumps(state, sort_keys=True)
-        return hashlib.sha256(state_str.encode()).hexdigest()[:16]
+        state_str = json.dumps(state, sort_keys=True, separators=(",", ":"), ensure_ascii=False)
+        return hashlib.sha256(state_str.encode("utf-8")).hexdigest()
 
 
 @dataclass
@@ -125,19 +125,18 @@ class ReplayOptimizer:
         Returns:
             Created checkpoint.
         """
-        import time
-        
+
         checkpoint = ReplayCheckpoint(
             workflow_id=workflow_id,
             version=version,
             last_event_sequence=sequence,
             last_state_hash=hashlib.sha256(
-                json.dumps(state, sort_keys=True).encode()
-            ).hexdigest()[:16],
+                json.dumps(state, sort_keys=True, separators=(",", ":"), ensure_ascii=False).encode("utf-8")
+            ).hexdigest(),
             snapshot_id=snapshot_id,
             snapshot_sequence=sequence,
-            created_at=time.time(),
-            updated_at=time.time(),
+            created_at=0.0,
+            updated_at=0.0,
         )
         
         async with self._lock:
@@ -166,8 +165,6 @@ class ReplayOptimizer:
         Returns:
             Checkpoint if exists and valid, None otherwise.
         """
-        import time
-        
         # Check cache
         checkpoint = self._checkpoints.get(workflow_id)
         
@@ -179,9 +176,12 @@ class ReplayOptimizer:
         
         # Validate TTL
         if checkpoint:
-            if time.time() - checkpoint.updated_at > self._checkpoint_ttl:
-                logger.info(f"Checkpoint expired for workflow {workflow_id[:8]}...")
-                return None
+            if checkpoint.updated_at and (checkpoint.updated_at > 0) and (checkpoint.created_at > 0):
+                # TTL only applies to checkpoints created with real wall-clock timestamps
+                import time
+                if time.time() - checkpoint.updated_at > self._checkpoint_ttl:
+                    logger.info(f"Checkpoint expired for workflow {workflow_id[:8]}...")
+                    return None
             return checkpoint
         
         return None

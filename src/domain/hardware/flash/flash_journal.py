@@ -233,7 +233,7 @@ class FlashJournal:
         """Log sector erase started."""
         async with self._lock:
             entry = JournalEntry(
-                entry_id=f"{self.transaction_id}_erase_{sector_id}_{datetime.now().timestamp()}",
+                entry_id=f"{self.transaction_id}_erase_{sector_id}_{len(self._entries)}",
                 transaction_id=self.transaction_id,
                 sector_id=sector_id,
                 sector_address=sector_address,
@@ -274,7 +274,7 @@ class FlashJournal:
             checksum_before = hashlib.sha256(bytes_to_write).hexdigest()
             
             entry = JournalEntry(
-                entry_id=f"{self.transaction_id}_write_{sector_id}_{datetime.now().timestamp()}",
+                entry_id=f"{self.transaction_id}_write_{sector_id}_{len(self._entries)}",
                 transaction_id=self.transaction_id,
                 sector_id=sector_id,
                 sector_address=sector_address,
@@ -312,7 +312,7 @@ class FlashJournal:
         """Log sector verification started."""
         async with self._lock:
             entry = JournalEntry(
-                entry_id=f"{self.transaction_id}_verify_{sector_id}_{datetime.now().timestamp()}",
+                entry_id=f"{self.transaction_id}_verify_{sector_id}_{len(self._entries)}",
                 transaction_id=self.transaction_id,
                 sector_id=sector_id,
                 sector_address=0,  # Will be set by caller

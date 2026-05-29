@@ -16,9 +16,9 @@ RECOVERY SEMANTICS
    - May have brief inconsistency during partition
 
 3. TOKEN MONOTONICITY GUARANTEES:
-   - Tokens are UUIDs, not monotonic counters
-   - Use versioning/metadata for monotonicity
-   - Fencing ensures operations see latest state
+   - Fence tokens are monotonic epochs (per lock key)
+   - Under Redis uncertainty, acquire fails closed (no unsafe fallback)
+   - Services must reject operations with stale epoch
 
 4. SPLIT-BRAIN PREVENTION:
    - Fencing token passed to external services
@@ -31,7 +31,7 @@ from __future__ import annotations
 import asyncio
 import logging
 import time
-import uuid
+
 from typing import Optional
 from dataclasses import dataclass, field
 
@@ -63,7 +63,7 @@ class LockManager:
     - Lease renewal via heartbeat
     - Automatic expiry
     - Redis backend support
-    - In-memory fallback
+    - Fail-closed on Redis unavailability (no in-memory fallback for dangerous ops)
     """
 
     def __init__(
@@ -107,52 +107,56 @@ class LockManager:
         timeout: float = 5.0,
     ) -> Optional[LockFenceToken]:
         """Acquire a distributed lock.
-        
-        Args:
-            key: Lock key.
-            owner_id: Owner identifier (worker ID).
-            timeout: Acquisition timeout.
-            
-        Returns:
-            LockFenceToken if acquired, None otherwise.
+
+        P0 safety:
+        - Uses Redis-backed monotonic fencing epoch (INCR per key)
+        - If Redis is unavailable, returns None (fail-closed) to prevent dangerous ops
         """
-        token = str(uuid.uuid4())
         full_key = f"lock:{key}"
-        
+        epoch_key = f"lock_epoch:{key}"
+
         # Start health check if not running
         if self._health_check_task is None or self._health_check_task.done():
             self._health_check_task = asyncio.create_task(self._health_check_loop())
-        
-        # Try Redis first
+
         try:
             redis = await self._get_redis()
-            if redis:
-                acquired = await redis.set(
-                    full_key,
-                    token,
-                    nx=True,
-                    ex=int(self._lock_timeout)
+            if not redis:
+                return None
+
+            # Monotonic fencing epoch for this lock key
+            epoch = int(await redis.incr(epoch_key))
+
+            # Token still stored for compare-and-delete ownership
+            token = f"{owner_id}:{epoch}"
+
+            acquired = await redis.set(
+                full_key,
+                token,
+                nx=True,
+                ex=int(self._lock_timeout),
+            )
+
+            if acquired:
+                async with self._redis_available_lock:
+                    self._redis_available = True
+
+                fence_token = LockFenceToken(
+                    epoch=epoch,
+                    lock_id=key,
+                    owner_id=owner_id,
+                    expires_at=time.time() + self._lock_timeout,
                 )
-                
-                if acquired:
-                    async with self._redis_available_lock:
-                        self._redis_available = True
-                    
-                    fence_token = LockFenceToken(
-                        token=token,
-                        lock_id=key,
-                        owner_id=owner_id,
-                        expires_at=time.time() + self._lock_timeout,
-                    )
-                    self._tokens[full_key] = token
-                    
-                    logger.debug(f"Lock acquired: {key} (token={token[:8]}...)")
-                    return fence_token
+                self._tokens[full_key] = token
+
+                logger.debug(f"Lock acquired: {key} (epoch={epoch})")
+                return fence_token
+
+            return None
+
         except Exception as e:
             logger.warning(f"Redis lock acquire failed: {e}")
-        
-        # Fallback to in-memory
-        return await self._acquire_fallback(key, owner_id, token)
+            return None
 
     async def _acquire_fallback(
         self,
@@ -160,28 +164,11 @@ class LockManager:
         owner_id: str,
         token: str,
     ) -> Optional[LockFenceToken]:
-        """Fallback to in-memory lock."""
-        self._fallback_count += 1
-        if self._fallback_count == 1:
-            logger.warning(
-                f"Redis unavailable, falling back to in-memory lock. "
-                f"Multi-instance safety NOT guaranteed."
-            )
-        
-        full_key = f"lock:{key}"
-        
-        if key not in self._fallback_locks:
-            self._fallback_locks[key] = token
-            self._tokens[full_key] = token
-            self._pending_transfer_locks[key] = token
-            
-            return LockFenceToken(
-                token=token,
-                lock_id=key,
-                owner_id=owner_id,
-                expires_at=time.time() + self._lock_timeout,
-            )
-        
+        """Fallback to in-memory lock.
+
+        Deprecated for production: P0 requires fail-closed under Redis uncertainty.
+        Kept for single-node tests only.
+        """
         return None
 
     async def release(
@@ -190,15 +177,8 @@ class LockManager:
         token: LockFenceToken,
     ) -> bool:
         """Release a lock.
-        
+
         Only releases if token matches (fencing).
-        
-        Args:
-            key: Lock key.
-            token: Token from acquire.
-            
-        Returns:
-            True if released successfully.
         """
         full_key = f"lock:{key}"
         
@@ -216,20 +196,17 @@ class LockManager:
             redis = await self._get_redis()
             if not redis:
                 return False
-            
-            # Lua script for atomic compare-and-delete
-            lua_script = """
-            if redis.call("get", KEYS[1]) == ARGV[1] then
-                return redis.call("del", KEYS[1])
-            else
-                return 0
-            end
-            """
-            result = await redis.eval(lua_script, 1, full_key, token.token)
-            
-            self._tokens.pop(full_key, None)
-            return result > 0
-            
+
+            # Compare-and-delete ownership token
+            stored = await redis.get(full_key)
+            expected = self._tokens.get(full_key)
+            if stored and expected and stored == expected:
+                await redis.delete(full_key)
+                self._tokens.pop(full_key, None)
+                return True
+
+            return False
+
         except Exception as e:
             logger.warning(f"Redis lock release failed: {e}")
             return False
@@ -240,42 +217,25 @@ class LockManager:
         token: LockFenceToken,
         additional_seconds: float,
     ) -> bool:
-        """Extend lock lease.
-        
-        Args:
-            key: Lock key.
-            token: Token from acquire.
-            additional_seconds: Additional lease time.
-            
-        Returns:
-            True if extended successfully.
-        """
+        """Extend lock lease."""
         full_key = f"lock:{key}"
-        
-        # Check in-memory
-        if key in self._fallback_locks:
-            if self._fallback_locks.get(key) == token.token:
-                # Extend from current expiry, not replace
-                token.expires_at = max(token.expires_at, time.time()) + additional_seconds
-                return True
-            return False
-        
+
         # Try Redis
         try:
             redis = await self._get_redis()
             if not redis:
                 return False
-            
-            # Verify ownership and extend
+
             stored = await redis.get(full_key)
-            if stored == token.token:
+            expected = self._tokens.get(full_key)
+            if stored and expected and stored == expected:
                 new_expiry = int(additional_seconds)
                 await redis.expire(full_key, new_expiry)
                 token.expires_at = max(token.expires_at, time.time()) + additional_seconds
                 return True
-            
+
             return False
-            
+
         except Exception as e:
             logger.warning(f"Lock extend failed: {e}")
             return False
@@ -285,27 +245,18 @@ class LockManager:
         key: str,
         token: str,
     ) -> bool:
-        """Check if token is still valid.
-        
-        Args:
-            key: Lock key.
-            token: Token to check.
-            
-        Returns:
-            True if token is valid owner.
-        """
+        """Check if token is still valid."""
         full_key = f"lock:{key}"
-        
-        if key in self._fallback_locks:
-            return self._fallback_locks.get(key) == token
-        
+
         try:
             redis = await self._get_redis()
             if not redis:
                 return False
-            
+
             stored = await redis.get(full_key)
-            return stored == token
+            expected = self._tokens.get(full_key)
+            return bool(stored and expected and stored == expected)
+
         except Exception:
             return False
 
@@ -313,9 +264,9 @@ class LockManager:
         """Get Redis connection."""
         if self._redis is None and self._redis_url:
             try:
-                import redis.asyncio as redis
+                from redis import asyncio as redis  # type: ignore
                 self._redis = redis.from_url(self._redis_url)
-            except ImportError:
+            except Exception:
                 return None
         
         return self._redis
@@ -356,27 +307,11 @@ class LockManager:
         return False
 
     async def _transfer_pending_locks(self) -> None:
-        """Transfer in-memory locks to Redis."""
-        if not self._pending_transfer_locks:
-            return
-        
-        logger.info(f"Transferring {len(self._pending_transfer_locks)} locks to Redis")
-        
-        for key, token in list(self._pending_transfer_locks.items()):
-            try:
-                full_key = f"lock:{key}"
-                redis = await self._get_redis()
-                
-                acquired = await redis.set(
-                    full_key, token, nx=True, ex=int(self._lock_timeout)
-                )
-                
-                if acquired:
-                    self._tokens[full_key] = token
-                    del self._pending_transfer_locks[key]
-                    
-            except Exception as e:
-                logger.error(f"Failed to transfer lock {key}: {e}")
+        """No-op.
+
+        P0 fail-closed: we do not keep in-memory locks for transfer.
+        """
+        return
 
     @property
     def fallback_count(self) -> int:
@@ -427,41 +362,36 @@ class LockManager:
     
     async def get_lock_info(self, key: str) -> dict:
         """Get information about a lock.
-        
+
         Returns lock metadata for debugging/monitoring.
         """
         full_key = f"lock:{key}"
-        
-        info = {
+
+        info: dict[str, object] = {
             "key": key,
             "locked": False,
             "owner": None,
             "expires_at": None,
-            "is_pending": False,
+            "backend": "redis" if self._redis_url else "none",
         }
-        
-        # Check in-memory
-        if key in self._fallback_locks:
-            info["locked"] = True
-            info["owner"] = self._fallback_locks.get(f"{key}_owner")
-            if key in self._recovery_states:
-                info["expires_at"] = self._recovery_states[key].expires_at
-                info["is_pending"] = self._recovery_states[key].is_pending
-            return info
-        
-        # Check Redis
+
         try:
             redis = await self._get_redis()
-            if redis:
+            if not redis:
+                return info
+
+            stored = await redis.get(full_key)
+            if stored:
+                info["locked"] = True
+                info["owner"] = str(stored)
+
                 ttl = await redis.ttl(full_key)
                 if ttl > 0:
-                    info["locked"] = True
                     info["expires_at"] = time.time() + ttl
-                    stored_owner = await redis.get(f"{full_key}:owner")
-                    info["owner"] = stored_owner
+
         except Exception as e:
             logger.debug(f"Failed to get lock info: {e}")
-        
+
         return info
     
     async def force_expire(self, key: str) -> bool:
