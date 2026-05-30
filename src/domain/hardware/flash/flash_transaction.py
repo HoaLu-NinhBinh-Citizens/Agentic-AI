@@ -10,7 +10,6 @@ Phase 6.2: Implements transaction model for firmware flash operations with:
 from __future__ import annotations
 
 import asyncio
-import json
 import logging
 import uuid
 from dataclasses import dataclass, field
@@ -19,7 +18,8 @@ from enum import Enum
 from typing import TYPE_CHECKING, Any
 
 if TYPE_CHECKING:
-    from .event import DomainEvent
+    from ..event import DomainEvent
+    from ...ports.flash_persistence import FlashTransactionStore
 
 logger = logging.getLogger(__name__)
 
@@ -146,63 +146,24 @@ class FlashTransactionManager:
     - Update status during flash
     - Commit after verification
     - Automatic rollback on failure (using Phase 6.1 snapshots)
+    
+    This class is a domain component and does NOT depend on infrastructure.
+    It receives a FlashTransactionStore via constructor injection.
     """
     
-    db_path: str
+    store: FlashTransactionStore
     snapshot_manager: Any = None  # Phase 6.1 SnapshotManager
     event_bus: Any = None       # Phase 6.1 EventBus
     
-    _db: Any = field(default=None, init=False)
     _lock: asyncio.Lock = field(default_factory=asyncio.Lock)
     
     async def initialize(self) -> None:
-        """Initialize database and create tables."""
-        import aiosqlite
-        
-        self._db = await aiosqlite.connect(self.db_path)
-        await self._db.execute("""
-            CREATE TABLE IF NOT EXISTS flash_transactions (
-                transaction_id TEXT PRIMARY KEY,
-                target_name TEXT NOT NULL,
-                target_id TEXT,
-                lock_epoch INTEGER DEFAULT 0,
-                lock_owner_id TEXT,
-                lock_acquired INTEGER DEFAULT 0,
-                old_firmware_hash TEXT,
-                new_firmware_hash TEXT NOT NULL,
-                new_firmware_version TEXT,
-                new_firmware_size INTEGER,
-                status TEXT NOT NULL,
-                created_at TEXT NOT NULL,
-                started_at TEXT,
-                completed_at TEXT,
-                rollback_snapshot_id TEXT,
-                resume_state TEXT,
-                error_code TEXT,
-                error_message TEXT,
-                error_details TEXT,
-                bytes_written INTEGER DEFAULT 0,
-                sectors_erased INTEGER DEFAULT 0,
-                duration_ms REAL DEFAULT 0,
-                target_slot TEXT,
-                previous_slot TEXT
-            )
-        """)
-        await self._db.execute("""
-            CREATE INDEX IF NOT EXISTS idx_transactions_target 
-            ON flash_transactions(target_name)
-        """)
-        await self._db.execute("""
-            CREATE INDEX IF NOT EXISTS idx_transactions_status 
-            ON flash_transactions(status)
-        """)
-        await self._db.commit()
+        """Initialize the store."""
+        await self.store.initialize()
     
     async def close(self) -> None:
-        """Close database connection."""
-        if self._db:
-            await self._db.close()
-            self._db = None
+        """Close the store."""
+        await self.store.close()
     
     async def create_transaction(
         self,
@@ -257,19 +218,19 @@ class FlashTransactionManager:
                         error=str(e),
                     )
             
-            await self._save_transaction(transaction)
+            await self.store.save_transaction(transaction)
             return transaction
     
     async def start_transaction(self, transaction_id: str) -> FlashTransaction | None:
         """Mark transaction as started (flashing)."""
         async with self._lock:
-            transaction = await self._load_transaction(transaction_id)
+            transaction = await self.store.load_transaction(transaction_id)
             if not transaction:
                 return None
             
             transaction.status = TransactionStatus.FLASHING
             transaction.started_at = datetime.now()
-            await self._save_transaction(transaction)
+            await self.store.save_transaction(transaction)
             
             await self._publish_event("flash.transaction.started", transaction)
             return transaction
@@ -283,36 +244,36 @@ class FlashTransactionManager:
     ) -> None:
         """Update transaction progress."""
         async with self._lock:
-            transaction = await self._load_transaction(transaction_id)
+            transaction = await self.store.load_transaction(transaction_id)
             if transaction:
                 transaction.bytes_written = bytes_written
                 transaction.sectors_erased = sectors_erased
                 if resume_state:
                     transaction.resume_state = resume_state
-                await self._save_transaction(transaction)
+                await self.store.save_transaction(transaction)
     
     async def verify_transaction(self, transaction_id: str) -> bool:
         """Mark transaction as verifying."""
         async with self._lock:
-            transaction = await self._load_transaction(transaction_id)
+            transaction = await self.store.load_transaction(transaction_id)
             if not transaction:
                 return False
             
             transaction.status = TransactionStatus.VERIFYING
-            await self._save_transaction(transaction)
+            await self.store.save_transaction(transaction)
             return True
     
     async def commit_transaction(self, transaction_id: str) -> FlashTransaction | None:
         """Commit transaction after successful verification."""
         async with self._lock:
-            transaction = await self._load_transaction(transaction_id)
+            transaction = await self.store.load_transaction(transaction_id)
             if not transaction:
                 return None
             
             transaction.status = TransactionStatus.COMMITTED
             transaction.completed_at = datetime.now()
             transaction.duration_ms = transaction.duration_seconds() * 1000
-            await self._save_transaction(transaction)
+            await self.store.save_transaction(transaction)
             
             await self._publish_event("flash.transaction.committed", transaction)
             logger.info(
@@ -331,7 +292,7 @@ class FlashTransactionManager:
     ) -> FlashTransaction | None:
         """Mark transaction as failed."""
         async with self._lock:
-            transaction = await self._load_transaction(transaction_id)
+            transaction = await self.store.load_transaction(transaction_id)
             if not transaction:
                 return None
             
@@ -341,7 +302,7 @@ class FlashTransactionManager:
             transaction.error_message = error_message
             transaction.error_details = error_details or {}
             transaction.duration_ms = transaction.duration_seconds() * 1000
-            await self._save_transaction(transaction)
+            await self.store.save_transaction(transaction)
             
             await self._publish_event("flash.transaction.failed", transaction)
             return transaction
@@ -353,7 +314,7 @@ class FlashTransactionManager:
     ) -> bool:
         """Rollback transaction using pre-flash snapshot (Phase 6.1)."""
         async with self._lock:
-            transaction = await self._load_transaction(transaction_id)
+            transaction = await self.store.load_transaction(transaction_id)
             if not transaction or not transaction.can_rollback():
                 return False
             
@@ -375,7 +336,7 @@ class FlashTransactionManager:
                 transaction.status = TransactionStatus.ROLLED_BACK
                 transaction.completed_at = datetime.now()
                 transaction.error_message = f"Rolled back: {reason}"
-                await self._save_transaction(transaction)
+                await self.store.save_transaction(transaction)
                 
                 await self._publish_event("flash.transaction.rolled_back", transaction)
                 logger.info(
@@ -398,26 +359,11 @@ class FlashTransactionManager:
         target_name: str,
     ) -> FlashTransaction | None:
         """Get pending transaction for target (for resume detection)."""
-        if not self._db:
-            return None
-        
-        cursor = await self._db.execute(
-            """
-            SELECT transaction_id FROM flash_transactions
-            WHERE target_name = ? AND status IN ('flashing', 'verifying', 'pending')
-            ORDER BY created_at DESC LIMIT 1
-            """,
-            (target_name,),
-        )
-        row = await cursor.fetchone()
-        
-        if row:
-            return await self._load_transaction(row[0])
-        return None
+        return await self.store.get_pending_transaction(target_name)
     
     async def get_transaction(self, transaction_id: str) -> FlashTransaction | None:
         """Get transaction by ID."""
-        return await self._load_transaction(transaction_id)
+        return await self.store.load_transaction(transaction_id)
     
     async def list_transactions(
         self,
@@ -426,117 +372,10 @@ class FlashTransactionManager:
         limit: int = 100,
     ) -> list[FlashTransaction]:
         """List transactions with optional filters."""
-        if not self._db:
-            return []
-        
-        query = "SELECT transaction_id FROM flash_transactions WHERE 1=1"
-        params: list[Any] = []
-        
-        if target_name:
-            query += " AND target_name = ?"
-            params.append(target_name)
-        
-        if status:
-            query += " AND status = ?"
-            params.append(status.value)
-        
-        query += " ORDER BY created_at DESC LIMIT ?"
-        params.append(limit)
-        
-        cursor = await self._db.execute(query, params)
-        rows = await cursor.fetchall()
-        
-        transactions = []
-        for row in rows:
-            tx = await self._load_transaction(row[0])
-            if tx:
-                transactions.append(tx)
-        
-        return transactions
-    
-    async def _save_transaction(self, transaction: FlashTransaction) -> None:
-        """Save transaction to database."""
-        if not self._db:
-            return
-        
-        await self._db.execute("""
-            INSERT OR REPLACE INTO flash_transactions
-            (transaction_id, target_name, target_id, lock_epoch, lock_owner_id, lock_acquired,
-             old_firmware_hash, new_firmware_hash,
-             new_firmware_version, new_firmware_size, status, created_at, started_at,
-             completed_at, rollback_snapshot_id, resume_state, error_code, error_message,
-             error_details, bytes_written, sectors_erased, duration_ms, target_slot, previous_slot)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-        """, (
-            transaction.transaction_id,
-            transaction.target_name,
-            transaction.target_id,
-            transaction.lock_epoch,
-            transaction.lock_owner_id,
-            1 if transaction.lock_acquired else 0,
-            transaction.old_firmware_hash,
-            transaction.new_firmware_hash,
-            transaction.new_firmware_version,
-            transaction.new_firmware_size,
-            transaction.status.value,
-            transaction.created_at.isoformat(),
-            transaction.started_at.isoformat() if transaction.started_at else None,
-            transaction.completed_at.isoformat() if transaction.completed_at else None,
-            transaction.rollback_snapshot_id,
-            json.dumps(transaction.resume_state) if transaction.resume_state else None,
-            transaction.error_code,
-            transaction.error_message,
-            json.dumps(transaction.error_details),
-            transaction.bytes_written,
-            transaction.sectors_erased,
-            transaction.duration_ms,
-            transaction.target_slot,
-            transaction.previous_slot,
-        ))
-        await self._db.commit()
-    
-    async def _load_transaction(self, transaction_id: str) -> FlashTransaction | None:
-        """Load transaction from database."""
-        if not self._db:
-            return None
-        
-        cursor = await self._db.execute(
-            "SELECT * FROM flash_transactions WHERE transaction_id = ?",
-            (transaction_id,),
-        )
-        row = await cursor.fetchone()
-        
-        if not row:
-            return None
-        
-        columns = [desc[0] for desc in cursor.description]
-        data = dict(zip(columns, row))
-        
-        return FlashTransaction(
-            transaction_id=data["transaction_id"],
-            target_name=data["target_name"],
-            target_id=data.get("target_id", ""),
-            lock_epoch=int(data.get("lock_epoch", 0) or 0),
-            lock_owner_id=data.get("lock_owner_id", "") or "",
-            lock_acquired=bool(int(data.get("lock_acquired", 0) or 0)),
-            old_firmware_hash=data.get("old_firmware_hash", ""),
-            new_firmware_hash=data["new_firmware_hash"],
-            new_firmware_version=data.get("new_firmware_version", ""),
-            new_firmware_size=data.get("new_firmware_size", 0),
-            status=TransactionStatus(data["status"]),
-            created_at=datetime.fromisoformat(data["created_at"]),
-            started_at=datetime.fromisoformat(data["started_at"]) if data["started_at"] else None,
-            completed_at=datetime.fromisoformat(data["completed_at"]) if data["completed_at"] else None,
-            rollback_snapshot_id=data.get("rollback_snapshot_id"),
-            resume_state=json.loads(data["resume_state"]) if data.get("resume_state") else None,
-            error_code=data.get("error_code"),
-            error_message=data.get("error_message"),
-            error_details=json.loads(data["error_details"]) if data.get("error_details") else {},
-            bytes_written=data.get("bytes_written", 0),
-            sectors_erased=data.get("sectors_erased", 0),
-            duration_ms=data.get("duration_ms", 0),
-            target_slot=data.get("target_slot"),
-            previous_slot=data.get("previous_slot"),
+        return await self.store.list_transactions(
+            target_name=target_name,
+            status=status,
+            limit=limit,
         )
     
     async def _publish_event(self, event_type: str, transaction: FlashTransaction) -> None:

@@ -1,5 +1,6 @@
 """Chromadb vector store module."""
 
+from src.infrastructure.vector_db.chromadb.knowledge_store import ChromaDBKnowledgeStore
 from typing import Any
 
 

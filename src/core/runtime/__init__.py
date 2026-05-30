@@ -15,7 +15,7 @@ if TYPE_CHECKING:
     pass
 
 # Phase 1B Runtime Manager
-from core.runtime.runtime_manager import RuntimeManager, StreamInfo
+from src.core.runtime.runtime_manager import RuntimeManager, StreamInfo
 
 __all__ = [
     "RuntimeManager",

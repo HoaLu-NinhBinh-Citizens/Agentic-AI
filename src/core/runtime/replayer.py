@@ -1,6 +1,25 @@
 """
 Event Replayer - Replay Events from Journal
 
+Purpose:
+    This module provides event journal replay capabilities for deterministic
+    replay of recorded runtime events. It is the authoritative source of truth
+    for event replay in AI_SUPPORT.
+
+    Three replay concerns exist in the codebase, each with a distinct purpose:
+
+    1. EventJournal replay (this module): Replays events from an event journal
+       with deterministic ordering, checksums, and verification.
+       Used by: tests/chaos/test_replay_conformance.py, tests/test_runtime.py,
+       tests/integration/production_test.py, tests/test_p3_observability.py
+
+    2. Workflow replay (core/runtime/workflow/replay_verifier.py): Command sequence
+       verification for deterministic workflow execution. Tracks activities, signals,
+       timers, and child workflows for replay verification.
+
+    3. Workspace session replay (infrastructure/): Session-level replay for debugging
+       workspace state. Captures file I/O, network requests, etc.
+
 W-001 Fixes Applied:
 - Checksum validation for replay determinism
 - Deterministic ordering constraints
@@ -14,6 +33,15 @@ Provides event replay capabilities:
 - Progress tracking and statistics
 - Partial replay support
 """
+
+__all__ = [
+    "EventReplayer",
+    "ReplayFilter",
+    "ReplayResult",
+    "ReplayDiff",
+    "ReplayTracer",
+    "compute_replay_diff",
+]
 
 import asyncio
 import hashlib

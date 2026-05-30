@@ -58,7 +58,11 @@ TRANSITIONS:
 ====================================================================
 
 Usage:
-    manager = ABPartitionManager(probe, config)
+    from src.domain.ports.hardware_security import HardwareSecurityModule
+    from src.infrastructure.hsm.abstraction import HSMAdapter
+    
+    hsm = HSMAdapter()  # or MockHSMAdapter for testing
+    manager = ABPartitionManager(probe, config, hsm=hsm)
     await manager.prepare_update(firmware_data)
     await manager.switch_to_new_slot()
     await manager.mark_boot_successful()
@@ -72,7 +76,10 @@ import struct
 from dataclasses import dataclass, field
 from datetime import datetime
 from enum import Enum
-from typing import Any
+from typing import TYPE_CHECKING, Any
+
+if TYPE_CHECKING:
+    from src.domain.ports.hardware_security import HardwareSecurityModule
 
 logger = logging.getLogger(__name__)
 
@@ -241,15 +248,31 @@ class ABPartitionManager:
     - Rollback on failed boot
     - Anti-rollback protection
     - Firmware verification
+    
+    Usage:
+        from src.domain.ports.hardware_security import HardwareSecurityModule
+        from src.infrastructure.hsm.abstraction import HSMAdapter
+        
+        hsm: HardwareSecurityModule = HSMAdapter()  # or MockHSMAdapter
+        manager = ABPartitionManager(probe, config, hsm=hsm)
     """
     
     def __init__(
         self,
         probe: Any,
         config: ABConfig | None = None,
+        hsm: HardwareSecurityModule | None = None,
     ):
+        """
+        Args:
+            probe: Flash probe for memory operations
+            config: A/B partition configuration
+            hsm: Hardware security module for anti-rollback operations
+                 If not provided, anti-rollback will be limited
+        """
         self._probe = probe
         self._config = config or ABConfig()
+        self._hsm = hsm
         self._slots = self._init_slots()
     
     def _init_slots(self) -> dict[int, SlotInfo]:
@@ -589,7 +612,7 @@ class ABPartitionManager:
                 # Advance anti-rollback counter
                 if advance_anti_rollback and slot.firmware_version_int > 0:
                     try:
-                        counter = AntiRollbackCounter(self._probe)
+                        counter = AntiRollbackCounter(self._probe, hsm=self._hsm)
                         await counter.increment_counter()
                         logger.info(
                             "anti_rollback_counter_advanced",
@@ -795,16 +818,13 @@ class ABPartitionManager:
             return False, f"Version {version} above maximum {self._config.max_version}"
 
         # Check monotonic counter if HSM available
-        try:
-            from src.infrastructure.hsm.atecc608 import get_hsm
-            hsm = await get_hsm()
-            counter_version = await hsm.get_counter(0)
-
-            if version <= counter_version:
-                return False, f"Version {version} <= anti-rollback counter {counter_version}"
-
-        except ImportError:
-            pass  # HSM not available
+        if self._hsm is not None:
+            try:
+                counter_version = await self._hsm.get_counter(0)
+                if version <= counter_version:
+                    return False, f"Version {version} <= anti-rollback counter {counter_version}"
+            except Exception:
+                pass  # HSM counter read failed, skip anti-rollback check
 
         return True, "OK"
 
@@ -832,6 +852,13 @@ class AntiRollbackCounter:
     - On STM32 with ATECC608: Use HSM slot 0 for production
     - For embedded: Use option bytes or protected flash page
     - For testing: In-memory counter with write-once semantics
+    
+    Usage:
+        from src.domain.ports.hardware_security import HardwareSecurityModule
+        from src.infrastructure.hsm.abstraction import MockHSMAdapter
+        
+        hsm: HardwareSecurityModule = MockHSMAdapter()
+        counter = AntiRollbackCounter(probe, hsm=hsm)
     """
     
     def __init__(
@@ -839,16 +866,19 @@ class AntiRollbackCounter:
         probe: Any,
         primary_address: int = 0x2003F010,  # Backup location in SRAM
         counter_slot: int = 0,
+        hsm: HardwareSecurityModule | None = None,
     ):
         """
         Args:
             probe: Flash probe for memory operations
             primary_address: Backup flash address for counter
             counter_slot: HSM counter slot (default 0)
+            hsm: Hardware security module for counter operations
         """
         self._probe = probe
         self._primary_address = primary_address
         self._counter_slot = counter_slot
+        self._hsm = hsm
         self._cached_counter: int | None = None
     
     async def get_counter(self) -> int:
@@ -862,15 +892,14 @@ class AntiRollbackCounter:
         if self._cached_counter is not None:
             return self._cached_counter
         
-        # Try HSM first
-        try:
-            from src.infrastructure.hsm.atecc608 import get_hsm
-            hsm = await get_hsm()
-            counter = await hsm.get_counter(self._counter_slot)
-            self._cached_counter = counter
-            return counter
-        except (ImportError, Exception):
-            pass
+        # Try HSM first if available
+        if self._hsm is not None:
+            try:
+                counter = await self._hsm.get_counter(self._counter_slot)
+                self._cached_counter = counter
+                return counter
+            except Exception:
+                pass  # HSM read failed, fall through to flash backup
         
         # Fall back to flash backup
         try:
@@ -894,12 +923,11 @@ class AntiRollbackCounter:
         new_value = current + 1
         
         # Update HSM if available
-        try:
-            from src.infrastructure.hsm.atecc608 import get_hsm
-            hsm = await get_hsm()
-            await hsm.set_counter(self._counter_slot, new_value)
-        except (ImportError, Exception):
-            pass
+        if self._hsm is not None:
+            try:
+                await self._hsm.set_counter(self._counter_slot, new_value)
+            except Exception:
+                pass  # HSM update failed, continue with flash backup only
         
         # Update flash backup
         try:
@@ -1137,7 +1165,7 @@ class RollbackFallbackVerifier:
         # If active slot version <= counter, we have a problem
         active = self._ab._slots[bcb.active_slot]
         if active.firmware_version_int > 0:
-            counter = await AntiRollbackCounter(self._ab._probe).get_counter()
+            counter = await AntiRollbackCounter(self._ab._probe, hsm=self._ab._hsm).get_counter()
             if active.firmware_version_int <= counter:
                 recovery_needed = True
                 recovery_action = "corrupted_state_recovery_needed"
@@ -1159,11 +1187,24 @@ class RollbackFallbackVerifier:
 _manager: ABPartitionManager | None = None
 
 
-def get_ab_manager(probe: Any, config: ABConfig | None = None) -> ABPartitionManager:
-    """Get A/B partition manager."""
+def get_ab_manager(
+    probe: Any,
+    config: ABConfig | None = None,
+    hsm: HardwareSecurityModule | None = None,
+) -> ABPartitionManager:
+    """Get A/B partition manager.
+    
+    Args:
+        probe: Flash probe for memory operations
+        config: A/B partition configuration
+        hsm: Hardware security module (optional)
+        
+    Returns:
+        ABPartitionManager instance
+    """
     global _manager
     if _manager is None:
-        _manager = ABPartitionManager(probe, config)
+        _manager = ABPartitionManager(probe, config, hsm=hsm)
     return _manager
 
 

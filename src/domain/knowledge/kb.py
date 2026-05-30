@@ -1,29 +1,37 @@
 """Knowledge Base - semantic retrieval system for embedded engineering.
 
 Integrates:
-- ChromaDB for vector storage and similarity search
+- KnowledgeStore port for vector storage (ChromaDB, in-memory, etc.)
 - EmbeddingService for semantic embeddings (Ollama bge-m3)
 - Citation tracking for hardware evidence
 - Hardware-aware chunking for code/RM documents
 
 Architecture:
     Ingest → Chunk → Embed → Index → Retrieve → Citation → LLM Context
+
+Dependency Inversion:
+    Domain (KnowledgeBase) → Port (KnowledgeStore) ← Infrastructure (ChromaDBKnowledgeStore)
 """
 
 from __future__ import annotations
 
 import logging
+import uuid
 from dataclasses import dataclass, field
 from datetime import datetime
 from enum import Enum
 from pathlib import Path
-from typing import Any, Optional
+from typing import TYPE_CHECKING, Any, Optional
 
 import structlog
 
 from src.domain.knowledge.chunking import HardwareChunker
 from src.domain.knowledge.citation import Citation, SourceType
 from src.domain.knowledge.embeddings import KnowledgeEmbeddings
+from src.domain.ports.knowledge_store import KnowledgeStore
+
+if TYPE_CHECKING:
+    from src.domain.ports.in_memory_knowledge_store import InMemoryKnowledgeStore
 
 logger = structlog.get_logger(__name__)
 
@@ -100,143 +108,24 @@ class KBSearchResult:
         return ctx
 
 
-class ChromaDBStore:
-    """
-    ChromaDB-backed vector store.
-
-    Wraps the ChromaDB Python client for persistence and similarity search.
-    Falls back to in-memory if ChromaDB is unavailable.
-    """
-
-    def __init__(self, persist_directory: str | None = None):
-        self._persist_directory = persist_directory
-        self._collection_name = "ai_support_kb"
-        self._client = None
-        self._collection = None
-        self._memory_store: dict[str, KBEntry] = {}
-        self._embedding_map: dict[str, list[float]] = {}
-        self._initialized = False
-
-    async def initialize(self) -> None:
-        """Initialize ChromaDB connection."""
-        if self._initialized:
-            return
-
-        try:
-            import chromadb
-            from chromadb.config import Settings
-
-            client_settings = Settings(
-                anonymized_telemetry=False,
-                allow_reset=True,
-            )
-            self._client = chromadb.PersistentClient(
-                path=self._persist_directory or "./.kb_chroma",
-                settings=client_settings,
-            )
-            self._collection = self._client.get_or_create_collection(
-                name=self._collection_name,
-                metadata={"hnsw:space": "cosine"},
-            )
-            self._initialized = True
-            logger.info("ChromaDB initialized at %s", self._persist_directory or "./.kb_chroma")
-        except ImportError:
-            logger.warning("ChromaDB not available, using in-memory store")
-            self._initialized = True
-        except Exception as e:
-            logger.warning("ChromaDB init failed, using in-memory store: %s", e)
-            self._initialized = True
-
-    async def add_entry(self, entry: KBEntry) -> None:
-        """Add entry to the vector store."""
-        await self.initialize()
-
-        if self._collection is not None:
-            doc = f"{entry.title}\n{entry.content}"
-            metadata = {
-                "id": entry.id,
-                "type": entry.type.value,
-                "source": entry.source,
-                "chip_family": entry.chip_family or "",
-                "peripheral": entry.peripheral or "",
-                "register": entry.register or "",
-                "tags": ",".join(entry.tags),
-            }
-            self._collection.add(
-                ids=[entry.id],
-                documents=[doc],
-                embeddings=[entry.embedding] if entry.embedding else None,
-                metadatas=[metadata],
-            )
-        else:
-            self._memory_store[entry.id] = entry
-
-    async def search(
-        self,
-        query_embedding: list[float],
-        top_k: int = 5,
-        filter_metadata: dict[str, Any] | None = None,
-    ) -> list[tuple[str, float, dict[str, Any]]]:
-        """
-        Search vector store.
-
-        Returns:
-            List of (id, score, metadata) tuples.
-        """
-        await self.initialize()
-
-        if self._collection is not None:
-            try:
-                results = self._collection.query(
-                    query_embeddings=[query_embedding],
-                    n_results=top_k,
-                    where=filter_metadata,
-                    include=["metadatas", "distances"],
-                )
-                ids = results.get("ids", [[]])[0]
-                distances = results.get("distances", [[]])[0]
-                metadatas = results.get("metadatas", [[]])[0]
-                return list(zip(ids, [1 - d for d in distances], metadatas))
-            except Exception as e:
-                logger.error("ChromaDB query error: %s", e)
-
-        return []
-
-    async def get_entry(self, entry_id: str) -> KBEntry | None:
-        """Get entry by ID."""
-        await self.initialize()
-        return self._memory_store.get(entry_id)
-
-    async def delete_entry(self, entry_id: str) -> None:
-        """Delete entry by ID."""
-        await self.initialize()
-        if self._collection is not None:
-            try:
-                self._collection.delete(ids=[entry_id])
-            except Exception as e:
-                logger.warning("ChromaDB delete error: %s", e)
-        self._memory_store.pop(entry_id, None)
-
-    async def count(self) -> int:
-        """Get total entry count."""
-        await self.initialize()
-        if self._collection is not None:
-            try:
-                return self._collection.count()
-            except Exception:
-                pass
-        return len(self._memory_store)
-
-
 class KnowledgeBase:
     """
     Full knowledge base with semantic retrieval.
 
-    Integrates ChromaDB vector store with Ollama embeddings for
+    Integrates KnowledgeStore (vector DB) with Ollama embeddings for
     hardware-aware semantic search.
 
     Usage:
-        kb = KnowledgeBase()
+        # With ChromaDB (infrastructure):
+        from src.infrastructure.vector_db.chromadb import ChromaDBKnowledgeStore
+        store = ChromaDBKnowledgeStore(persist_directory="./kb_data")
+        kb = KnowledgeBase(store=store)
+
+        # Or with in-memory fallback:
+        from src.domain.ports.in_memory_knowledge_store import InMemoryKnowledgeStore
+        store = InMemoryKnowledgeStore()
+        kb = KnowledgeBase(store=store)
+
         await kb.add_rm_excerpt(
             chip_family="STM32F407",
             peripheral="CAN1",
@@ -248,10 +137,22 @@ class KnowledgeBase:
 
     def __init__(
         self,
-        persist_directory: str | None = None,
+        store: KnowledgeStore | None = None,
         embed_service=None,
     ):
-        self._store = ChromaDBStore(persist_directory=persist_directory)
+        """
+        Initialize KnowledgeBase.
+
+        Args:
+            store: KnowledgeStore implementation (vector DB backend).
+                   If None, uses InMemoryKnowledgeStore.
+            embed_service: Optional embedding service for semantic embeddings.
+        """
+        if store is None:
+            from src.domain.ports.in_memory_knowledge_store import InMemoryKnowledgeStore
+            store = InMemoryKnowledgeStore()
+
+        self._store = store
         self._embeddings = KnowledgeEmbeddings()
         self._chunker = HardwareChunker()
         self._embed_service = embed_service
@@ -291,7 +192,6 @@ class KnowledgeBase:
         metadata: dict[str, Any] | None = None,
     ) -> KBEntry:
         """Add a single entry to the knowledge base."""
-        import uuid
         entry_id = str(uuid.uuid4())[:12]
 
         # Chunk if content is too long
@@ -448,8 +348,7 @@ class KnowledgeBase:
         Query the knowledge base with semantic search.
 
         W-012 Fix: Removed global _lock to allow concurrent queries.
-        ChromaDB is thread-safe; the in-memory fallback uses a dict which
-        is safe for concurrent reads (writes are only on add/delete).
+        Vector store implementations are thread-safe.
 
         Args:
             query: KBQuery with text, filters, and top_k
@@ -617,7 +516,5 @@ class KnowledgeBase:
 
     async def clear(self) -> None:
         """Clear all entries."""
-        self._store = ChromaDBStore(
-            persist_directory=getattr(self._store, "_persist_directory", None)
-        )
+        await self._store.clear()
         logger.info("knowledge_base_cleared")

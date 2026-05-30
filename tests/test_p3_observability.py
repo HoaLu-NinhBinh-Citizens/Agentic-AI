@@ -34,7 +34,7 @@ from src.runtime.replayer import (
     ReplayFilter,
     ReplayResult,
 )
-from src.observability.structured_logging import (
+from src.infrastructure.observability.structured_logging import (
     StructuredLogger,
     LogLevel,
     LogFormat,

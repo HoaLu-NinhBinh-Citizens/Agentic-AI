@@ -10,6 +10,9 @@ from src.domain.hardware.flash.flash_transaction import (
     PartialFlashDetector,
     PartialFlashInfo,
 )
+from src.infrastructure.persistence.sqlite.flash_transaction_store import (
+    SQLiteFlashTransactionStore,
+)
 
 
 class TestFlashTransaction:
@@ -166,7 +169,8 @@ class TestFlashTransactionManager:
     async def manager(self, tmp_path):
         """Create manager with temporary database."""
         db_path = str(tmp_path / "test_transactions.db")
-        manager = FlashTransactionManager(db_path=db_path)
+        store = SQLiteFlashTransactionStore(db_path=db_path)
+        manager = FlashTransactionManager(store=store)
         await manager.initialize()
         yield manager
         await manager.close()

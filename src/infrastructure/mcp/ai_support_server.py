@@ -44,6 +44,7 @@ from src.application.workflows.debugging import DebuggingWorkflow
 from src.application.workflows.coding import CodingWorkflow
 from src.core.agent.reasoning_loop import ReasoningLoop, ReasoningContext
 from src.domain.knowledge.kb import KnowledgeBase, KBQuery
+from src.infrastructure.vector_db.chromadb import ChromaDBKnowledgeStore
 
 logger = structlog.get_logger(__name__)
 
@@ -122,8 +123,9 @@ class AISupportMCPServer:
             hardware_validator=self._validator,
         )
 
-        # Initialize knowledge base
-        self._kb = KnowledgeBase()
+        # Initialize knowledge base with ChromaDB store
+        kb_store = ChromaDBKnowledgeStore(persist_directory="./.kb_chroma")
+        self._kb = KnowledgeBase(store=kb_store)
 
         self._initialized = True
         logger.info("ai_support_server_ready", tools=len(self._tool_handlers))
