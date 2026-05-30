@@ -11,8 +11,27 @@ from .client import (
     configure_llm,
     get_llm_client,
 )
+from .local_provider import (
+    LocalLLMProvider,
+    LLMConfig as LocalLLMConfig,
+    LocalModelInfo,
+)
+from .prompts import (
+    ML_FIX_SYSTEM,
+    SECURITY_FIX_SYSTEM,
+    CODE_QUALITY_SYSTEM,
+    CODE_EXPLANATION_SYSTEM,
+    GENERAL_FIX_SYSTEM,
+    build_finding_explanation_prompt,
+    build_fix_generation_prompt,
+    build_code_review_prompt,
+    build_security_review_prompt,
+    build_ml_review_prompt,
+    FixPromptConfig,
+)
 
 __all__ = [
+    # From client
     "LLMClient",
     "LLMConfig",
     "LLMResponse",
@@ -22,4 +41,20 @@ __all__ = [
     "ToolCall",
     "configure_llm",
     "get_llm_client",
+    # From local_provider
+    "LocalLLMProvider",
+    "LocalLLMConfig",
+    "LocalModelInfo",
+    # From prompts
+    "ML_FIX_SYSTEM",
+    "SECURITY_FIX_SYSTEM",
+    "CODE_QUALITY_SYSTEM",
+    "CODE_EXPLANATION_SYSTEM",
+    "GENERAL_FIX_SYSTEM",
+    "build_finding_explanation_prompt",
+    "build_fix_generation_prompt",
+    "build_code_review_prompt",
+    "build_security_review_prompt",
+    "build_ml_review_prompt",
+    "FixPromptConfig",
 ]

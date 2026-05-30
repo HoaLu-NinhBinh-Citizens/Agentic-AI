@@ -35,6 +35,15 @@ from .ml_detectors import (
     MLDetectorAST,
     DataFlowAnalyzer,
 )
+from .type_resolver import (
+    TypeResolver,
+    TypeInfo,
+    ImportInfo,
+)
+from .import_tracker import (
+    ImportTracker,
+    SymbolExport,
+)
 
 __all__ = [
     "ProjectIndexer",
@@ -62,4 +71,9 @@ __all__ = [
     "MLDetectorFinding",
     "MLDetectorAST",
     "DataFlowAnalyzer",
+    "TypeResolver",
+    "TypeInfo",
+    "ImportInfo",
+    "ImportTracker",
+    "SymbolExport",
 ]

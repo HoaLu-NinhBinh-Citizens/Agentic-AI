@@ -25,6 +25,9 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Optional
 
+from src.infrastructure.analysis.type_resolver import TypeResolver, TypeInfo
+from src.infrastructure.analysis.import_tracker import ImportTracker
+
 if TYPE_CHECKING:
     from src.infrastructure.indexing.tree_sitter import SafeTreeSitterIndexer
 
@@ -70,6 +73,16 @@ class SymbolInfo:
     callees: list[RefLocation] = field(default_factory=list)
     file_count: int = 0
     total_references: int = 0
+
+
+@dataclass
+class SymbolLocation:
+    """Resolved symbol location with type information."""
+    name: str
+    file_path: Path
+    line: int
+    kind: str  # "function", "class", "variable", "module"
+    resolved_from: Optional[str] = None  # Original import path if aliased
 
 
 @dataclass
@@ -220,6 +233,8 @@ class ReferenceGraph:
     ) -> None:
         self._indexer = indexer
         self._max_file_size = max_file_size_bytes
+        self._type_resolver = TypeResolver()
+        self._import_tracker: Optional[ImportTracker] = None
 
         # symbol_name → list of RefLocation (all references)
         self._refs: dict[str, list[RefLocation]] = {}
@@ -684,6 +699,65 @@ class ReferenceGraph:
         contains the full line which would incorrectly include surrounding code.
         """
         return ref.name
+
+    # ─── Type resolution integration ────────────────────────────────────────────
+
+    def set_import_tracker(self, tracker: ImportTracker) -> None:
+        """Set import tracker for cross-file resolution."""
+        self._import_tracker = tracker
+
+    def resolve_symbol(
+        self,
+        name: str,
+        file_path: str,
+        content: str,
+        line: int
+    ) -> Optional[SymbolLocation]:
+        """Resolve a symbol with type information.
+        
+        Uses type resolution to handle imports and aliases, then falls back
+        to normal reference lookup.
+        """
+        # First try type resolution for imports
+        type_info = self._type_resolver.resolve_name(name, content, line)
+        if type_info and type_info.module:
+            # This name came from an import
+            if self._import_tracker:
+                symbol_export = self._import_tracker.resolve_import(
+                    Path(file_path), name, type_info.module
+                )
+                if symbol_export:
+                    return SymbolLocation(
+                        name=name,
+                        file_path=symbol_export.file_path,
+                        line=symbol_export.line,
+                        kind=symbol_export.kind,
+                        resolved_from=type_info.full_name
+                    )
+        
+        # Fall back to normal reference lookup
+        return self._find_symbol_in_project(name)
+
+    def _find_symbol_in_project(self, name: str) -> Optional[SymbolLocation]:
+        """Find a symbol definition in the project."""
+        defn = self._defs.get(name)
+        if defn:
+            return SymbolLocation(
+                name=name,
+                file_path=Path(defn.file_path),
+                line=defn.line,
+                kind=defn.symbol_type,
+                resolved_from=None
+            )
+        return None
+
+    def resolve_qualified_symbol(
+        self,
+        qualified_name: str,
+        content: str
+    ) -> Optional[TypeInfo]:
+        """Resolve a qualified name (e.g., 'numpy.ndarray')."""
+        return self._type_resolver.resolve_qualified_name(qualified_name, content)
 
     # ─── Maintenance ────────────────────────────────────────────────────────────
 
