@@ -1,0 +1,173 @@
+# Security Detection Rules Configuration
+# These rules detect common security vulnerabilities
+
+security_rules:
+  SEC001:
+    name: "hardcoded-password"
+    enabled: true
+    severity: critical
+    confidence_threshold: 0.80
+    description: "Hardcoded password or secret detected"
+    patterns:
+      - "password\\s*=\\s*['\"][^'\"]{1,}"
+      - "secret\\s*=\\s*['\"][^'\"]{1,}"
+      - "api_key\\s*=\\s*['\"][^'\"]{1,}"
+      - "api_key\\s*=\\s*['\"'][a-zA-Z0-9]{20,}"
+    fix_template: |
+      import os
+      password = os.getenv('PASSWORD')  # Use environment variable
+    explanation: "Hardcoded secrets should be loaded from environment variables or secure vaults"
+    cwe_id: "CWE-259"
+    tags: ["security", "credentials", "critical"]
+
+  SEC002:
+    name: "sql-injection"
+    enabled: true
+    severity: critical
+    confidence_threshold: 0.75
+    description: "Potential SQL injection vulnerability"
+    patterns:
+      - "execute\\s*\\(\\s*['\"].*%"
+      - "cursor\\.execute.*\\+"
+      - "SELECT.*\\+.*request"
+    fix_template: |
+      # Use parameterized queries
+      cursor.execute("SELECT * FROM users WHERE id = %s", (user_id,))
+    explanation: "String concatenation in SQL queries can lead to injection attacks"
+    cwe_id: "CWE-89"
+    tags: ["security", "sql", "injection", "critical"]
+
+  SEC003:
+    name: "command-injection"
+    enabled: true
+    severity: critical
+    confidence_threshold: 0.75
+    description: "Potential command injection vulnerability"
+    patterns:
+      - "os\\.system\\s*\\("
+      - "subprocess\\.call\\s*\\([^,]*\\+"
+      - "eval\\s*\\("
+    fix_template: |
+      # Use subprocess with list arguments
+      subprocess.run(['ls', '-la'], check=True)
+    explanation: "Shell commands should use safe subprocess calls with explicit arguments"
+    cwe_id: "CWE-78"
+    tags: ["security", "command-injection", "critical"]
+
+  SEC004:
+    name: "path-traversal"
+    enabled: true
+    severity: high
+    confidence_threshold: 0.70
+    description: "Potential path traversal vulnerability"
+    patterns:
+      - "open\\s*\\([^)]*\\+.*request"
+      - "Path\\s*\\([^)]*\\+.*request"
+    fix_template: |
+      # Validate and sanitize path inputs
+      safe_path = os.path.normpath(request_path)
+      if not safe_path.startswith(ALLOWED_DIR):
+          raise ValueError("Invalid path")
+    explanation: "User input should not be used directly in file paths without validation"
+    cwe_id: "CWE-22"
+    tags: ["security", "path-traversal", "file-access", "high"]
+
+  SEC005:
+    name: "eval-usage"
+    enabled: true
+    severity: high
+    confidence_threshold: 0.80
+    description: "Use of eval() is dangerous and should be avoided"
+    patterns:
+      - "eval\\s*\\("
+      - "exec\\s*\\("
+    fix_template: |
+      # Use ast.literal_eval for safe evaluation
+      import ast
+      result = ast.literal_eval(user_input)
+    explanation: "eval() can execute arbitrary code and should be replaced with safer alternatives"
+    cwe_id: "CWE-95"
+    tags: ["security", "code-execution", "high"]
+
+  SEC006:
+    name: "insecure-random"
+    enabled: true
+    severity: medium
+    confidence_threshold: 0.70
+    description: "Use of random module for security-sensitive operations"
+    patterns:
+      - "random\\.random\\s*\\("
+      - "random\\.randint\\s*\\("
+    fix_template: |
+      # Use secrets module for security-sensitive randomness
+      import secrets
+      token = secrets.token_hex(32)
+    explanation: "Use secrets module for cryptographic randomness"
+    cwe_id: "CWE-338"
+    tags: ["security", "cryptography", "medium"]
+
+  SEC007:
+    name: "yaml-unsafe-load"
+    enabled: true
+    severity: high
+    confidence_threshold: 0.80
+    description: "Use of unsafe yaml.load"
+    patterns:
+      - "yaml\\.load\\s*\\([^)]*\\)"
+    fix_template: |
+      # Use safe_load instead
+      data = yaml.safe_load(user_input)
+    explanation: "yaml.load can execute arbitrary Python objects; use safe_load"
+    cwe_id: "CWE-502"
+    tags: ["security", "serialization", "yaml", "high"]
+
+  SEC008:
+    name: "pickle-unsafe"
+    enabled: true
+    severity: critical
+    confidence_threshold: 0.85
+    description: "Use of pickle for untrusted data"
+    patterns:
+      - "pickle\\.load\\s*\\("
+      - "pickle\\.loads\\s*\\("
+    fix_template: |
+      # Use json or a safe serialization format
+      import json
+      data = json.loads(user_data)
+    explanation: "pickle can execute arbitrary code; use json for untrusted data"
+    cwe_id: "CWE-502"
+    tags: ["security", "serialization", "pickle", "critical"]
+
+  SEC009:
+    name: "debug-flag-enabled"
+    enabled: true
+    severity: medium
+    confidence_threshold: 0.90
+    description: "Debug flag enabled in production"
+    patterns:
+      - "DEBUG\\s*=\\s*True"
+      - "debug=True"
+    fix_template: |
+      # Set DEBUG based on environment
+      DEBUG = os.getenv('DEBUG', 'False').lower() == 'true'
+    explanation: "Debug mode should not be enabled in production environments"
+    cwe_id: "CWE-489"
+    tags: ["security", "configuration", "medium"]
+
+  SEC010:
+    name: "敞开的重定向"
+    enabled: true
+    severity: high
+    confidence_threshold: 0.70
+    description: "Open redirect vulnerability"
+    patterns:
+      - "redirect\\s*\\([^)]*request"
+      - "return\\s+.*redirect.*\\+.*request"
+    fix_template: |
+      # Validate redirect URLs against allowlist
+      ALLOWED_DOMAINS = {'example.com', 'trusted.com'}
+      if urlparse(redirect_url).netloc in ALLOWED_DOMAINS:
+          return redirect(redirect_url)
+    explanation: "Redirect URLs should be validated against an allowlist"
+    cwe_id: "CWE-601"
+    tags: ["security", "redirect", "high"]

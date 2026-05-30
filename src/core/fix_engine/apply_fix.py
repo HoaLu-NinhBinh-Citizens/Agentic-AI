@@ -7,6 +7,7 @@ from pathlib import Path
 from typing import Optional
 
 from src.core.fix_engine.models import Fix, FixBatch, FixResult, FixStatus
+from src.core.fix_engine.conflict_resolver import ConflictResolver
 
 logger = logging.getLogger(__name__)
 
@@ -14,12 +15,13 @@ BACKUP_DIR = Path(".cursor/ai_support/backups")
 
 
 class ApplyFixTool:
-    """Tool for applying code fixes with rollback capability."""
+    """Tool for applying code fixes with rollback capability and conflict resolution."""
 
     def __init__(self, workspace_root: Optional[str] = None):
         self._workspace_root = Path(workspace_root) if workspace_root else Path.cwd()
         self._backup_dir = self._workspace_root / BACKUP_DIR
         self._backup_dir.mkdir(parents=True, exist_ok=True)
+        self.conflict_resolver = ConflictResolver()
 
     def _compute_hash(self, content: str) -> str:
         """Compute SHA256 hash prefix of content for backup naming."""
@@ -99,11 +101,29 @@ class ApplyFixTool:
         return result
 
     def apply_batch(
-        self, fixes: list[Fix], dry_run: bool = False
+        self,
+        fixes: list[Fix],
+        dry_run: bool = False,
+        resolve_conflicts: bool = True,
     ) -> FixBatch:
-        """Apply multiple fixes. If dry_run=True, validate all without applying."""
+        """Apply multiple fixes. If dry_run=True, validate all without applying.
+
+        Args:
+            fixes: List of fixes to apply
+            dry_run: If True, validate without applying
+            resolve_conflicts: If True, detect and resolve conflicts
+
+        Returns:
+            FixBatch with results
+        """
         batch = FixBatch()
         applied_results: list[tuple[Fix, FixResult]] = []
+
+        if resolve_conflicts:
+            conflicts = self.conflict_resolver.detect_conflicts(fixes)
+            if conflicts:
+                logger.info("Detected %d conflicts, resolving...", len(conflicts))
+                fixes = self.conflict_resolver.get_safe_order(fixes)
 
         sorted_fixes = sorted(
             fixes,

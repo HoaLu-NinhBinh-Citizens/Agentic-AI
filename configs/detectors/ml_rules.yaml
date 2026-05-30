@@ -1,0 +1,279 @@
+# ML Detection Rules Configuration
+# These rules detect common ML bugs and anti-patterns
+
+ml_rules:
+  ML001:
+    name: "data-leakage-scaler"
+    enabled: true
+    severity: critical
+    confidence_threshold: 0.70
+    description: "Scaler fit before train_test_split leaks information"
+    patterns:
+      - "scaler.fit("
+      - "scaler.fit_transform("
+      - "StandardScaler().fit("
+      - "MinMaxScaler().fit("
+    fix_template: |
+      # Move scaler.fit() after split
+      scaler = StandardScaler()
+      X_train_scaled = scaler.fit_transform(X_train)
+      X_test_scaled = scaler.transform(X_test)
+    explanation: "Fitting scaler on all data before split leaks statistics from test set"
+    cwe_id: "CWE-69"
+    tags: ["ml", "data-leakage", "critical"]
+
+  ML002:
+    name: "cross-entropy-multi-label"
+    enabled: true
+    severity: critical
+    confidence_threshold: 0.70
+    description: "CrossEntropyLoss used for multi-label classification"
+    patterns:
+      - "CrossEntropyLoss"
+      - "nn.CrossEntropyLoss"
+    fix_template: |
+      # For multi-label, use BCEWithLogitsLoss
+      criterion = nn.BCEWithLogitsLoss()
+    explanation: "CrossEntropyLoss is for single-label multi-class; use BCEWithLogitsLoss for multi-label"
+    cwe_id: "CWE-710"
+    tags: ["ml", "loss-function", "critical"]
+
+  ML003:
+    name: "device-mismatch"
+    enabled: true
+    severity: high
+    confidence_threshold: 0.70
+    description: "Model and data on different devices causes runtime error"
+    patterns:
+      - ".to('cuda')"
+      - ".to('cpu')"
+      - ".cuda()"
+      - ".cpu()"
+    fix_template: |
+      # Ensure model and data are on the same device
+      device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
+      model = model.to(device)
+      data = data.to(device)
+    explanation: "Model and data must be on the same device for computation"
+    cwe_id: "CWE-710"
+    tags: ["ml", "device", "runtime-error", "high"]
+
+  ML004:
+    name: "missing-no-grad"
+    enabled: true
+    severity: high
+    confidence_threshold: 0.70
+    description: "Inference code missing torch.no_grad() causes memory leak"
+    patterns:
+      - "def predict"
+      - "def evaluate"
+      - "def inference"
+    fix_template: |
+      # Wrap inference in no_grad context
+      with torch.no_grad():
+          output = model(input)
+    explanation: "Inference should use no_grad to disable gradient computation and save memory"
+    cwe_id: "CWE-400"
+    tags: ["ml", "memory", "inference", "high"]
+
+  ML005:
+    name: "missing-seed"
+    enabled: true
+    severity: medium
+    confidence_threshold: 0.65
+    description: "No random seed set - training is not reproducible"
+    patterns:
+      - "torch.manual_seed"
+      - "np.random.seed"
+      - "random.seed"
+    fix_template: |
+      # Set seeds for reproducibility
+      def seed_everything(seed: int = 42):
+          random.seed(seed)
+          np.random.seed(seed)
+          torch.manual_seed(seed)
+          torch.cuda.manual_seed_all(seed)
+    explanation: "Set random seeds for all frameworks to ensure reproducible training"
+    cwe_id: "CWE-710"
+    tags: ["ml", "reproducibility", "medium"]
+
+  ML006:
+    name: "hardcoded-config"
+    enabled: true
+    severity: medium
+    confidence_threshold: 0.70
+    description: "Hardcoded ML hyperparameters should be configurable"
+    patterns:
+      - "batch_size = 32"
+      - "learning_rate = 0.001"
+      - "lr = 0.001"
+    fix_template: |
+      # Load from config or args
+      batch_size = args.batch_size
+      lr = config.get('learning_rate', 0.001)
+    explanation: "Hardcoded hyperparameters reduce flexibility and reproducibility"
+    cwe_id: "CWE-547"
+    tags: ["ml", "configuration", "best-practice", "medium"]
+
+  ML007:
+    name: "gradient-accumulation-error"
+    enabled: true
+    severity: high
+    confidence_threshold: 0.70
+    description: "optimizer.step() called every iteration instead of accumulation_steps"
+    patterns:
+      - "optimizer.step()"
+      - "accumulation_steps"
+    fix_template: |
+      # Call optimizer.step() only at accumulation intervals
+      if (step + 1) % accumulation_steps == 0:
+          optimizer.step()
+          optimizer.zero_grad()
+    explanation: "Gradient accumulation requires conditional optimizer.step() calls"
+    cwe_id: "CWE-710"
+    tags: ["ml", "gradient", "training-loop", "high"]
+
+  ML008:
+    name: "wrong-optimizer-usage"
+    enabled: true
+    severity: medium
+    confidence_threshold: 0.65
+    description: "AdamW vs SGD specificity issues with weight_decay"
+    patterns:
+      - "torch.optim.Adam"
+      - "Adam("
+    fix_template: |
+      # Use AdamW for proper decoupled weight decay
+      torch.optim.AdamW(params, weight_decay=0.01)
+    explanation: "Adam with weight_decay applies L2 differently than AdamW's decoupled decay"
+    cwe_id: "CWE-710"
+    tags: ["ml", "optimizer", "weight-decay", "medium"]
+
+  ML009:
+    name: "augmentation-in-eval"
+    enabled: true
+    severity: high
+    confidence_threshold: 0.70
+    description: "Data augmentation applied in eval mode leaks information"
+    patterns:
+      - "RandomHorizontalFlip"
+      - "RandomRotation"
+      - "ColorJitter"
+      - "transforms."
+    fix_template: |
+      # Apply augmentation only to training data
+      train_transform = transforms.Compose([...])
+      val_transform = transforms.Compose([...])  # No augmentation
+    explanation: "Augmentation should only be applied to training, not validation/test"
+    cwe_id: "CWE-69"
+    tags: ["ml", "data-augmentation", "evaluation", "high"]
+
+  ML010:
+    name: "nan-inf-propagation"
+    enabled: true
+    severity: critical
+    confidence_threshold: 0.70
+    description: "Patterns that can cause NaN/Inf values"
+    patterns:
+      - "/ denominator"
+      - "torch.log("
+      - "math.log("
+    fix_template: |
+      # Add safety checks for division
+      result = torch.where(denom != 0, numerator / denom, 0)
+    explanation: "Division without checks can produce NaN/Inf from zero division"
+    cwe_id: "CWE-369"
+    tags: ["ml", "numerical-stability", "critical"]
+
+  ML011:
+    name: "lr-scheduler-error"
+    enabled: true
+    severity: high
+    confidence_threshold: 0.70
+    description: "LR scheduler called in wrong order or wrong place"
+    patterns:
+      - "scheduler.step()"
+      - "lr_scheduler"
+    fix_template: |
+      # Correct order: backward -> optimizer.step() -> scheduler.step()
+      loss.backward()
+      optimizer.step()
+      scheduler.step()  # After optimizer, not before
+    explanation: "LR schedulers should be stepped AFTER optimizer.update, not before"
+    cwe_id: "CWE-710"
+    tags: ["ml", "learning-rate", "scheduler", "high"]
+
+  ML012:
+    name: "batch-norm-small-batch"
+    enabled: true
+    severity: high
+    confidence_threshold: 0.68
+    description: "Batch normalization with batch_size=1 or too small"
+    patterns:
+      - "BatchNorm"
+      - "batch_size = 1"
+    fix_template: |
+      # For small batches, use GroupNorm instead
+      nn.GroupNorm(num_groups=32, num_channels=channels)
+      # Or SyncBatchNorm for multi-GPU
+    explanation: "BatchNorm with batch_size=1 has no meaningful batch statistics"
+    cwe_id: "CWE-710"
+    tags: ["ml", "batch-normalization", "small-batch", "high"]
+
+  ML013:
+    name: "multi-gpu-sync-issues"
+    enabled: true
+    severity: critical
+    confidence_threshold: 0.68
+    description: "DistributedDataParallel model not wrapped correctly"
+    patterns:
+      - "DistributedDataParallel"
+      - "DDP("
+    fix_template: |
+      # Correct DDP wrapping
+      model = model.cuda()
+      model = DistributedDataParallel(model)
+    explanation: "DDP requires proper device placement and state dict synchronization"
+    cwe_id: "CWE-710"
+    tags: ["ml", "distributed", "multi-gpu", "critical"]
+
+  ML014:
+    name: "mixed-precision-error"
+    enabled: true
+    severity: high
+    confidence_threshold: 0.70
+    description: "Missing loss scaling or overflow detection in fp16/bf16"
+    patterns:
+      - "autocast"
+      - "GradScaler"
+    fix_template: |
+      # Use GradScaler for mixed precision
+      scaler = GradScaler()
+      with autocast():
+          loss = criterion(output, target)
+      scaler.scale(loss).backward()
+      scaler.step(optimizer)
+      scaler.update()
+    explanation: "Mixed precision requires GradScaler to prevent gradient underflow"
+    cwe_id: "CWE-710"
+    tags: ["ml", "mixed-precision", "fp16", "high"]
+
+  ML015:
+    name: "early-stopping-bug"
+    enabled: true
+    severity: medium
+    confidence_threshold: 0.70
+    description: "Early stopping monitors wrong metric or has incorrect patience logic"
+    patterns:
+      - "early_stopping"
+      - "patience"
+    fix_template: |
+      # Monitor validation metric, reset only on improvement
+      if val_metric < best_metric:
+          best_metric = val_metric
+          patience_counter = 0
+      else:
+          patience_counter += 1
+    explanation: "Early stopping should monitor validation metrics, not training loss"
+    cwe_id: "CWE-710"
+    tags: ["ml", "early-stopping", "training", "medium"]

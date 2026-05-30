@@ -146,6 +146,78 @@ RULE_CONFIGS: dict[str, dict[str, Any]] = {
         "confidence_boost": 0.05,
         "description": "Hardcoded ML hyperparameters should be configurable",
     },
+    # ML007: Gradient accumulation errors
+    "ML007": {
+        "name": "gradient-accumulation-error",
+        "severity": MLSeverity.HIGH,
+        "base_confidence": 0.82,
+        "confidence_boost": 0.08,
+        "description": "optimizer.step() called every iteration instead of accumulation_steps",
+    },
+    # ML008: Wrong optimizer usage
+    "ML008": {
+        "name": "wrong-optimizer-usage",
+        "severity": MLSeverity.MEDIUM,
+        "base_confidence": 0.78,
+        "confidence_boost": 0.07,
+        "description": "AdamW vs SGD specificity issues with weight_decay",
+    },
+    # ML009: Data augmentation during evaluation
+    "ML009": {
+        "name": "augmentation-in-eval",
+        "severity": MLSeverity.HIGH,
+        "base_confidence": 0.85,
+        "confidence_boost": 0.05,
+        "description": "Data augmentation applied in eval mode leaks information",
+    },
+    # ML010: NaN/Inf propagation detection
+    "ML010": {
+        "name": "nan-inf-propagation",
+        "severity": MLSeverity.CRITICAL,
+        "base_confidence": 0.80,
+        "confidence_boost": 0.10,
+        "description": "Patterns that can cause NaN/Inf values",
+    },
+    # ML011: Learning rate scheduling errors
+    "ML011": {
+        "name": "lr-scheduler-error",
+        "severity": MLSeverity.HIGH,
+        "base_confidence": 0.82,
+        "confidence_boost": 0.08,
+        "description": "LR scheduler called in wrong order or wrong place",
+    },
+    # ML012: Batch size impact on batch normalization
+    "ML012": {
+        "name": "batch-norm-small-batch",
+        "severity": MLSeverity.HIGH,
+        "base_confidence": 0.80,
+        "confidence_boost": 0.10,
+        "description": "Batch normalization with batch_size=1 or too small",
+    },
+    # ML013: Multi-GPU sync issues
+    "ML013": {
+        "name": "multi-gpu-sync-issues",
+        "severity": MLSeverity.CRITICAL,
+        "base_confidence": 0.78,
+        "confidence_boost": 0.12,
+        "description": "DistributedDataParallel model not wrapped correctly",
+    },
+    # ML014: Mixed precision training errors
+    "ML014": {
+        "name": "mixed-precision-error",
+        "severity": MLSeverity.HIGH,
+        "base_confidence": 0.82,
+        "confidence_boost": 0.08,
+        "description": "Missing loss scaling or overflow detection in fp16/bf16",
+    },
+    # ML015: Early stopping logic bugs
+    "ML015": {
+        "name": "early-stopping-bug",
+        "severity": MLSeverity.MEDIUM,
+        "base_confidence": 0.80,
+        "confidence_boost": 0.05,
+        "description": "Early stopping monitors wrong metric or has incorrect patience logic",
+    },
 }
 
 
@@ -205,6 +277,16 @@ class MLDetector:
         findings.extend(self._detect_ml004(content, language))
         findings.extend(self._detect_ml005(content, language))
         findings.extend(self._detect_ml006(file_path, content, language))
+        # New ML007-ML015 detectors
+        findings.extend(self._detect_ml007(content, language))
+        findings.extend(self._detect_ml008(content, language))
+        findings.extend(self._detect_ml009(content, language))
+        findings.extend(self._detect_ml010(content, language))
+        findings.extend(self._detect_ml011(content, language))
+        findings.extend(self._detect_ml012(content, language))
+        findings.extend(self._detect_ml013(content, language))
+        findings.extend(self._detect_ml014(content, language))
+        findings.extend(self._detect_ml015(content, language))
 
         # Apply confidence boosts based on context
         findings = self._boost_confidence(findings, content, language)
@@ -369,6 +451,240 @@ class MLDetector:
         for raw in raw_findings:
             finding = MLFinding(
                 rule_id="ML006",
+                severity=MLSeverity.MEDIUM,
+                line=raw["line"],
+                message=raw["message"],
+                confidence=raw.get("confidence", 0.80),
+                old_code=raw.get("old_code", ""),
+                new_code=raw.get("new_code", ""),
+                explanation=raw.get("explanation", ""),
+                detection_method=raw.get("detection_method", "ast"),
+            )
+            findings.append(finding)
+
+        return findings
+
+    def _detect_ml007(
+        self,
+        content: str,
+        language: str,
+    ) -> list[MLFinding]:
+        """Detect gradient accumulation errors."""
+        findings: list[MLFinding] = []
+
+        raw_findings = self.ast_detector.detect_ml007_gradient_accumulation(content, language)
+
+        for raw in raw_findings:
+            finding = MLFinding(
+                rule_id="ML007",
+                severity=MLSeverity.HIGH,
+                line=raw["line"],
+                message=raw["message"],
+                confidence=raw.get("confidence", 0.82),
+                old_code=raw.get("old_code", ""),
+                new_code=raw.get("new_code", ""),
+                explanation=raw.get("explanation", ""),
+                detection_method=raw.get("detection_method", "ast"),
+            )
+            findings.append(finding)
+
+        return findings
+
+    def _detect_ml008(
+        self,
+        content: str,
+        language: str,
+    ) -> list[MLFinding]:
+        """Detect wrong optimizer usage patterns."""
+        findings: list[MLFinding] = []
+
+        raw_findings = self.ast_detector.detect_ml008_wrong_optimizer(content, language)
+
+        for raw in raw_findings:
+            finding = MLFinding(
+                rule_id="ML008",
+                severity=MLSeverity.MEDIUM,
+                line=raw["line"],
+                message=raw["message"],
+                confidence=raw.get("confidence", 0.78),
+                old_code=raw.get("old_code", ""),
+                new_code=raw.get("new_code", ""),
+                explanation=raw.get("explanation", ""),
+                detection_method=raw.get("detection_method", "ast"),
+            )
+            findings.append(finding)
+
+        return findings
+
+    def _detect_ml009(
+        self,
+        content: str,
+        language: str,
+    ) -> list[MLFinding]:
+        """Detect data augmentation in eval mode."""
+        findings: list[MLFinding] = []
+
+        raw_findings = self.ast_detector.detect_ml009_augmentation_in_eval(content, language)
+
+        for raw in raw_findings:
+            finding = MLFinding(
+                rule_id="ML009",
+                severity=MLSeverity.HIGH,
+                line=raw["line"],
+                message=raw["message"],
+                confidence=raw.get("confidence", 0.85),
+                old_code=raw.get("old_code", ""),
+                new_code=raw.get("new_code", ""),
+                explanation=raw.get("explanation", ""),
+                detection_method=raw.get("detection_method", "ast"),
+            )
+            findings.append(finding)
+
+        return findings
+
+    def _detect_ml010(
+        self,
+        content: str,
+        language: str,
+    ) -> list[MLFinding]:
+        """Detect NaN/Inf propagation patterns."""
+        findings: list[MLFinding] = []
+
+        raw_findings = self.ast_detector.detect_ml010_nan_inf(content, language)
+
+        for raw in raw_findings:
+            finding = MLFinding(
+                rule_id="ML010",
+                severity=MLSeverity.CRITICAL,
+                line=raw["line"],
+                message=raw["message"],
+                confidence=raw.get("confidence", 0.80),
+                old_code=raw.get("old_code", ""),
+                new_code=raw.get("new_code", ""),
+                explanation=raw.get("explanation", ""),
+                detection_method=raw.get("detection_method", "ast"),
+            )
+            findings.append(finding)
+
+        return findings
+
+    def _detect_ml011(
+        self,
+        content: str,
+        language: str,
+    ) -> list[MLFinding]:
+        """Detect learning rate scheduler errors."""
+        findings: list[MLFinding] = []
+
+        raw_findings = self.ast_detector.detect_ml011_lr_scheduler(content, language)
+
+        for raw in raw_findings:
+            finding = MLFinding(
+                rule_id="ML011",
+                severity=MLSeverity.HIGH,
+                line=raw["line"],
+                message=raw["message"],
+                confidence=raw.get("confidence", 0.82),
+                old_code=raw.get("old_code", ""),
+                new_code=raw.get("new_code", ""),
+                explanation=raw.get("explanation", ""),
+                detection_method=raw.get("detection_method", "ast"),
+            )
+            findings.append(finding)
+
+        return findings
+
+    def _detect_ml012(
+        self,
+        content: str,
+        language: str,
+    ) -> list[MLFinding]:
+        """Detect batch normalization with small batch size."""
+        findings: list[MLFinding] = []
+
+        raw_findings = self.ast_detector.detect_ml012_batchnorm_small_batch(content, language)
+
+        for raw in raw_findings:
+            finding = MLFinding(
+                rule_id="ML012",
+                severity=MLSeverity.HIGH,
+                line=raw["line"],
+                message=raw["message"],
+                confidence=raw.get("confidence", 0.80),
+                old_code=raw.get("old_code", ""),
+                new_code=raw.get("new_code", ""),
+                explanation=raw.get("explanation", ""),
+                detection_method=raw.get("detection_method", "ast"),
+            )
+            findings.append(finding)
+
+        return findings
+
+    def _detect_ml013(
+        self,
+        content: str,
+        language: str,
+    ) -> list[MLFinding]:
+        """Detect multi-GPU DDP sync issues."""
+        findings: list[MLFinding] = []
+
+        raw_findings = self.ast_detector.detect_ml013_multi_gpu_sync(content, language)
+
+        for raw in raw_findings:
+            finding = MLFinding(
+                rule_id="ML013",
+                severity=MLSeverity.CRITICAL,
+                line=raw["line"],
+                message=raw["message"],
+                confidence=raw.get("confidence", 0.78),
+                old_code=raw.get("old_code", ""),
+                new_code=raw.get("new_code", ""),
+                explanation=raw.get("explanation", ""),
+                detection_method=raw.get("detection_method", "ast"),
+            )
+            findings.append(finding)
+
+        return findings
+
+    def _detect_ml014(
+        self,
+        content: str,
+        language: str,
+    ) -> list[MLFinding]:
+        """Detect mixed precision training errors."""
+        findings: list[MLFinding] = []
+
+        raw_findings = self.ast_detector.detect_ml014_mixed_precision(content, language)
+
+        for raw in raw_findings:
+            finding = MLFinding(
+                rule_id="ML014",
+                severity=MLSeverity.HIGH,
+                line=raw["line"],
+                message=raw["message"],
+                confidence=raw.get("confidence", 0.82),
+                old_code=raw.get("old_code", ""),
+                new_code=raw.get("new_code", ""),
+                explanation=raw.get("explanation", ""),
+                detection_method=raw.get("detection_method", "ast"),
+            )
+            findings.append(finding)
+
+        return findings
+
+    def _detect_ml015(
+        self,
+        content: str,
+        language: str,
+    ) -> list[MLFinding]:
+        """Detect early stopping logic bugs."""
+        findings: list[MLFinding] = []
+
+        raw_findings = self.ast_detector.detect_ml015_early_stopping(content, language)
+
+        for raw in raw_findings:
+            finding = MLFinding(
+                rule_id="ML015",
                 severity=MLSeverity.MEDIUM,
                 line=raw["line"],
                 message=raw["message"],

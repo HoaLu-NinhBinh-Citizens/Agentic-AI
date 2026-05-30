@@ -1,7 +1,7 @@
 """Slash command parser and dispatcher — mimics Cursor's /command syntax.
 
 Supports:
-    /fix [@file[:line]]           — Show and apply fixes for a file/line
+    /fix [@file[:line]] [--interactive]    — Show and apply fixes with optional interactive mode
     /review [--files=FILES] [--focus=AREA]  — Run code review
     /explain [@symbol]             — Explain a symbol, class, or function
     /stats                        — Show review statistics
@@ -16,6 +16,7 @@ from __future__ import annotations
 
 import argparse
 import asyncio
+import difflib
 import re
 import shlex
 import shutil
@@ -23,6 +24,13 @@ from dataclasses import dataclass, field
 from enum import Enum
 from pathlib import Path
 from typing import Any, Callable, Optional
+
+from src.infrastructure.patching import (
+    ASTPatchEngine,
+    Patch as ASTPatch,
+    PatchResult as ASTPatchResult,
+    create_patch_engine,
+)
 
 
 # ─── Command types ──────────────────────────────────────────────────────────
@@ -92,9 +100,9 @@ class FixApplicator:
 
     This class handles applying suggested fixes to source files:
     1. Creates a backup of the original file
-    2. Replaces the problematic code with the fix
-    3. Writes the modified content back
-    4. Returns success/failure status
+    2. Uses AST-aware patching for safe replacement
+    3. Validates syntax after patch application
+    4. Returns success/failure status with diff preview
     """
 
     def __init__(self, backup_dir: str | None = None) -> None:
@@ -106,6 +114,7 @@ class FixApplicator:
         self.backup_dir = Path(backup_dir) if backup_dir else Path(".ai_support/backups")
         self._applied_count = 0
         self._failed_count = 0
+        self._patch_engine: ASTPatchEngine | None = None
 
     @property
     def applied_count(self) -> int:
@@ -116,6 +125,102 @@ class FixApplicator:
     def failed_count(self) -> int:
         """Number of fixes that failed to apply."""
         return self._failed_count
+
+    def _get_patch_engine(self) -> ASTPatchEngine:
+        """Get or create the AST patch engine instance."""
+        if self._patch_engine is None:
+            self._patch_engine = create_patch_engine()
+        return self._patch_engine
+
+    async def apply_fix_ast(
+        self,
+        file_path: Path | str,
+        line: int,
+        new_code: str,
+        old_code: str | None = None,
+        create_backup: bool = True,
+        dry_run: bool = False,
+        language: str = "python",
+    ) -> dict:
+        """Apply a fix using AST-aware patching with syntax validation.
+
+        Args:
+            file_path: Path to the file to fix
+            line: Line number (1-based) of the fix
+            new_code: The new code to insert
+            old_code: Optional old code to replace (for exact matching)
+            create_backup: Whether to create a backup first
+            dry_run: If True, return diff without applying
+            language: Programming language for AST parsing
+
+        Returns:
+            Dict with success status, diff, and optional error message
+        """
+        file_path = Path(file_path)
+
+        try:
+            if not file_path.exists():
+                return {"success": False, "error": f"File not found: {file_path}"}
+
+            content = file_path.read_text(encoding="utf-8", errors="replace")
+
+            # Find AST node at target position
+            engine = self._get_patch_engine()
+            column = 0
+            node_info = engine.find_node_at_position(content, line, column, language)
+
+            if not node_info:
+                return {"success": False, "error": f"Could not find AST node at {file_path}:{line}"}
+
+            # Generate patch
+            patch = engine.generate_patch(
+                file_path=file_path,
+                content=content,
+                node_start=node_info.start_point,
+                node_end=node_info.end_point,
+                new_code=new_code,
+            )
+
+            # Generate diff for preview
+            patched_content = engine.apply_patch(content, patch)
+            diff = engine.generate_diff(content, patched_content)
+
+            if dry_run:
+                return {
+                    "success": True,
+                    "dry_run": True,
+                    "diff": patch.to_diff(),
+                    "patched_preview": patched_content,
+                }
+
+            # Create backup if requested
+            if create_backup:
+                await self._create_backup(file_path, content.split("\n"))
+
+            # Apply and validate
+            result = engine.apply_and_validate(content, patch, language)
+
+            if result.validation_passed:
+                file_path.write_text(result.patched_content, encoding="utf-8")
+                self._applied_count += 1
+                return {
+                    "success": True,
+                    "patched": result.patched_content,
+                    "modified_lines": result.modified_lines,
+                }
+            else:
+                self._failed_count += 1
+                return {
+                    "success": False,
+                    "error": f"Syntax validation failed: {result.error}",
+                }
+
+        except PermissionError:
+            self._failed_count += 1
+            return {"success": False, "error": f"Permission denied: {file_path}"}
+        except Exception as e:
+            self._failed_count += 1
+            return {"success": False, "error": f"Failed to apply fix: {e}"}
 
     async def apply_fix(
         self,
@@ -191,12 +296,14 @@ class FixApplicator:
         self,
         finding,
         create_backup: bool = True,
+        use_ast: bool = True,
     ) -> tuple[bool, str]:
-        """Apply a fix from a Finding object.
+        """Apply a fix from a Finding object using AST-aware patching.
 
         Args:
             finding: Finding object with file, line, and metadata
             create_backup: Whether to create a backup first
+            use_ast: If True, use AST-aware patching (default: True)
 
         Returns:
             Tuple of (success: bool, message: str)
@@ -207,7 +314,6 @@ class FixApplicator:
 
         # If no new_code in metadata, try the fix field
         if not new_code and finding.fix:
-            # Try to extract code from fix suggestion
             new_code = self._extract_code_from_fix(finding.fix)
 
         if not new_code:
@@ -215,9 +321,47 @@ class FixApplicator:
 
         old_code = finding.metadata.get("old_code", "") if finding.metadata else None
 
+        # Detect language from file extension
+        language = self._detect_language(file_path)
+
+        if use_ast:
+            result = await self.apply_fix_ast(
+                file_path=file_path,
+                line=line,
+                new_code=new_code,
+                old_code=old_code,
+                create_backup=create_backup,
+                language=language,
+            )
+            if result["success"]:
+                if result.get("dry_run"):
+                    return True, f"Would apply AST patch (dry run):\n{result.get('diff', '')}"
+                return True, f"Applied AST fix at {file_path}:{line}"
+            else:
+                return False, result.get("error", "Unknown error")
+
         return await self.apply_fix(
             file_path, line, new_code, old_code, create_backup
         )
+
+    def _detect_language(self, file_path: Path) -> str:
+        """Detect programming language from file extension."""
+        ext_map = {
+            ".py": "python",
+            ".js": "javascript",
+            ".ts": "typescript",
+            ".jsx": "javascript",
+            ".tsx": "typescript",
+            ".c": "c",
+            ".cpp": "cpp",
+            ".cc": "cpp",
+            ".h": "c",
+            ".hpp": "cpp",
+            ".go": "go",
+            ".rs": "rust",
+            ".java": "java",
+        }
+        return ext_map.get(file_path.suffix.lower(), "python")
 
     def _extract_code_from_fix(self, fix_text: str) -> str:
         """Extract code from a fix suggestion string.
@@ -370,8 +514,17 @@ async def _fallback_to_legacy_review(
 
 
 async def cmd_fix(ctx: CommandContext) -> CommandResult:
-    """Show and apply fixes for a specific file or line using UnifiedReviewEngine."""
+    """Show and apply fixes for a specific file or line using UnifiedReviewEngine.
+    
+    Supports interactive mode with --interactive or -i flag for user confirmation
+    before applying each fix.
+    """
     from pathlib import Path
+
+    is_interactive = "--interactive" in ctx.raw_flags or "-i" in ctx.raw_flags
+
+    if is_interactive:
+        return await cmd_fix_interactive(ctx)
 
     if not ctx.primary_file:
         return CommandResult(
@@ -403,7 +556,8 @@ async def cmd_fix(ctx: CommandContext) -> CommandResult:
     # Initialize fix applicator
     applicator = FixApplicator()
     auto_apply = "--apply" in ctx.raw_flags or ctx.raw_flags.get("apply") == "true"
-    dry_run = not auto_apply
+    explicit_dry_run = "--dry-run" in ctx.raw_flags or ctx.raw_flags.get("dry_run") == "true"
+    show_diff = explicit_dry_run or not auto_apply  # Show diffs unless --apply is specified
 
     try:
         engine = UnifiedReviewEngine(config)
@@ -440,6 +594,20 @@ async def cmd_fix(ctx: CommandContext) -> CommandResult:
 
             if fix.fix:
                 output_lines.append(f"**Fix:** {fix.fix[:80]}")
+
+            # Show diff preview for dry-run mode
+            if show_diff:
+                result = await applicator.apply_fix_ast(
+                    file_path=Path(fix.file),
+                    line=fix.line,
+                    new_code=applicator._extract_code_from_fix(fix.fix) if fix.fix else "",
+                    create_backup=False,
+                    dry_run=True,
+                )
+                if result.get("diff"):
+                    output_lines.append(f"\n```diff\n{result['diff']}\n```")
+                elif result.get("error"):
+                    output_lines.append(f"\nAST patch error: {result['error']}")
 
             # Apply fix if auto-apply is enabled
             if auto_apply:
@@ -499,6 +667,123 @@ async def _fallback_to_legacy_fix(
         success=False,
         output=f"Fix command unavailable. Unified pipeline failed: {error_msg or 'Unknown error'}",
     )
+
+
+async def cmd_fix_interactive(ctx: CommandContext) -> CommandResult:
+    """Interactive fix mode with user confirmation before each fix.
+
+    Args:
+        ctx: Command context with files, lines, and flags
+
+    Returns:
+        CommandResult with fix application results
+    """
+    from pathlib import Path
+
+    if not ctx.primary_file:
+        return CommandResult(
+            success=False,
+            output="Usage: /fix @filename[:line] --interactive\n"
+                   "  /fix @src/main.py:42 --interactive\n"
+                   "  /fix @src/utils.py -i",
+        )
+
+    try:
+        from src.application.workflows.unified.review_engine import (
+            UnifiedReviewEngine,
+            ReviewEngineConfig,
+        )
+        from src.interfaces.cli.commands.fix_interactive import (
+            run_interactive_fix,
+            ConsolePromptProvider,
+        )
+    except ImportError as e:
+        return CommandResult(
+            success=False,
+            output=f"Interactive fix mode unavailable: {e}",
+        )
+
+    files = [ctx.primary_file]
+
+    config = ReviewEngineConfig(
+        focus_areas=["security", "quality", "ml", "embedded"],
+        output_format="markdown",
+        confidence_threshold=0.5,
+    )
+
+    try:
+        engine = UnifiedReviewEngine(config)
+        result = await engine.review([Path(f) for f in files], incremental=False)
+
+        fixes = result.findings
+        if ctx.primary_line:
+            fixes = [f for f in fixes if f.line == ctx.primary_line]
+
+        fixable = [f for f in fixes if f.fix or (f.metadata and f.metadata.get("new_code"))]
+
+        if not fixable:
+            return CommandResult(
+                success=True,
+                output="No fixable issues found for the specified file/line.",
+            )
+
+        output_lines = [
+            f"## Interactive Fix Mode",
+            f"",
+            f"Found {len(fixable)} fixable issue(s).",
+            f"",
+            f"Options:",
+            f"  [y] Yes - apply this fix",
+            f"  [n] No - skip this fix",
+            f"  [a] Yes to all - apply all remaining fixes",
+            f"  [q] Quit - skip all remaining fixes",
+            f"  [e] Edit - open in editor for manual fix",
+            f"  [s] Skip - skip this fix only",
+            f"  [h] Help - show more details",
+            f"",
+        ]
+
+        session_result = await run_interactive_fix(
+            fixes=fixable,
+            workspace_root=ctx.workspace_root,
+            prompt_provider=ConsolePromptProvider(),
+        )
+
+        output_lines.append("")
+        output_lines.append(f"### Session Summary")
+        output_lines.append(f"- Applied: {session_result.applied_count}")
+        output_lines.append(f"- Skipped: {session_result.skipped_count}")
+        output_lines.append(f"- Total processed: {session_result.total_processed}")
+
+        if session_result.was_aborted:
+            output_lines.append("")
+            output_lines.append("**Note:** Session was aborted by user.")
+
+        applied = session_result.session.applied_fixes
+        if applied:
+            output_lines.append("")
+            output_lines.append("### Applied Fixes")
+            for fix in applied:
+                output_lines.append(f"- `{fix.file_path}:{fix.line_start}` [{fix.rule_id}]")
+
+        return CommandResult(
+            success=True,
+            output="\n".join(output_lines),
+            data={
+                "fix_count": len(fixable),
+                "applied_count": session_result.applied_count,
+                "skipped_count": session_result.skipped_count,
+                "was_aborted": session_result.was_aborted,
+            },
+        )
+
+    except Exception as e:
+        import logging
+        logging.warning("Interactive fix failed: %s", e)
+        return CommandResult(
+            success=False,
+            output=f"Interactive fix failed: {e}",
+        )
 
 
 def _format_unified_fixes_list(fixes: list) -> str:
@@ -652,7 +937,7 @@ _BUILTIN_COMMANDS: dict[str, Command] = {
     ),
     "fix": Command(
         name="fix",
-        description="Show and apply fixes for a file or line",
+        description="Show and apply fixes for a file or line (use --interactive for confirmation)",
         category=CommandCategory.FIX,
         aliases=["f"],
         handler=cmd_fix,
@@ -661,6 +946,8 @@ _BUILTIN_COMMANDS: dict[str, Command] = {
             "/fix @src/utils.py:42",
             "/fix @src/handlers/auth.py:100",
             "/fix @src/main.py --apply",
+            "/fix @src/main.py --interactive",
+            "/fix @src/main.py -i",
         ],
     ),
     "explain": Command(

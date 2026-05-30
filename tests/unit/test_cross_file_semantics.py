@@ -8,6 +8,8 @@ These tests verify cross-file intelligence capabilities including:
 
 from __future__ import annotations
 
+import os
+import re
 from pathlib import Path
 
 import pytest
@@ -647,3 +649,463 @@ class TestPerformance:
         assert result_0 is not None, "Should resolve value_0"
         assert "module_0.py" in str(result_0.file_path), \
             f"value_0 should be defined in module_0.py, got: {result_0.file_path}"
+
+
+class TestImportVariations:
+    """Test exact import resolution for various patterns."""
+
+    def test_relative_import_resolution(self, semantic_resolver, tmp_path):
+        """Test relative imports (from .module import x)."""
+        files = {
+            tmp_path / "pkg/__init__.py": "from .utils import helper",
+            tmp_path / "pkg/utils.py": "def helper(): pass",
+            tmp_path / "pkg/sub/module.py": "from ..utils import helper\nresult = helper()",
+        }
+        for path, content in files.items():
+            path.parent.mkdir(parents=True, exist_ok=True)
+            path.write_text(content)
+
+        paths = list(files.keys())
+        contents = {p: p.read_text() for p in paths}
+        semantic_resolver.index_project(paths, contents)
+
+        resolved = semantic_resolver.resolve_symbol(
+            "helper",
+            tmp_path / "pkg/sub/module.py",
+            contents[tmp_path / "pkg/sub/module.py"],
+            2,
+        )
+        assert resolved is not None
+        assert "pkg" in str(resolved.file_path)
+
+    def test_package_import_resolution(self, semantic_resolver, tmp_path):
+        """Test package-level imports."""
+        files = {
+            tmp_path / "mymodule/__init__.py": "__all__ = ['Processor']",
+            tmp_path / "mymodule/processor.py": "class Processor: pass",
+            tmp_path / "main.py": "from mymodule import Processor\nproc = Processor()",
+        }
+        for path, content in files.items():
+            path.parent.mkdir(parents=True, exist_ok=True)
+            path.write_text(content)
+
+        paths = list(files.keys())
+        contents = {p: p.read_text() for p in paths}
+        semantic_resolver.index_project(paths, contents)
+
+        resolved = semantic_resolver.resolve_symbol(
+            "Processor",
+            tmp_path / "main.py",
+            contents[tmp_path / "main.py"],
+            1,
+        )
+        assert resolved is not None
+        assert "mymodule" in str(resolved.file_path)
+
+    def test_from_package_import_resolution(self, semantic_resolver, tmp_path):
+        """Test 'from package import symbol' resolution."""
+        files = {
+            tmp_path / "mylib/__init__.py": "from .core import Engine",
+            tmp_path / "mylib/core.py": "class Engine: pass",
+            tmp_path / "app.py": "from mylib import Engine\neng = Engine()",
+        }
+        for path, content in files.items():
+            path.parent.mkdir(parents=True, exist_ok=True)
+            path.write_text(content)
+
+        paths = list(files.keys())
+        contents = {p: p.read_text() for p in paths}
+        semantic_resolver.index_project(paths, contents)
+
+        resolved = semantic_resolver.resolve_symbol(
+            "Engine",
+            tmp_path / "app.py",
+            contents[tmp_path / "app.py"],
+            1,
+        )
+        assert resolved is not None
+        assert "mylib" in str(resolved.file_path)
+
+
+class TestMethodCallResolution:
+    """Test object.method() call resolution."""
+
+    def test_method_call_resolution(self, semantic_resolver, tmp_path):
+        """Test obj.method() resolves to class method."""
+        files = {
+            tmp_path / "model.py": """
+class Model:
+    def predict(self, x):
+        return x * 2
+""",
+            tmp_path / "main.py": """
+from model import Model
+m = Model()
+result = m.predict(5)
+""",
+        }
+        for path, content in files.items():
+            path.write_text(content)
+
+        paths = list(files.keys())
+        contents = {p: p.read_text() for p in paths}
+        semantic_resolver.index_project(paths, contents)
+
+        resolved = semantic_resolver.resolve_symbol(
+            "predict",
+            tmp_path / "main.py",
+            contents[tmp_path / "main.py"],
+            4,
+        )
+        assert resolved is not None
+        assert "model.py" in str(resolved.file_path)
+
+    def test_instance_method_resolution(self, semantic_resolver, tmp_path):
+        """Test instance method calls resolve to class methods."""
+        files = {
+            tmp_path / "service.py": """
+class DataService:
+    def fetch(self, query):
+        return query
+""",
+            tmp_path / "client.py": """
+from service import DataService
+ds = DataService()
+result = ds.fetch('select *')
+""",
+        }
+        for path, content in files.items():
+            path.write_text(content)
+
+        paths = list(files.keys())
+        contents = {p: p.read_text() for p in paths}
+        semantic_resolver.index_project(paths, contents)
+
+        resolved = semantic_resolver.resolve_symbol(
+            "fetch",
+            tmp_path / "client.py",
+            contents[tmp_path / "client.py"],
+            3,
+        )
+        assert resolved is not None
+        assert "service.py" in str(resolved.file_path)
+
+    def test_static_method_resolution(self, semantic_resolver, tmp_path):
+        """Test static method calls resolve to definitions."""
+        files = {
+            tmp_path / "math_utils.py": """
+class MathUtils:
+    @staticmethod
+    def add(a, b):
+        return a + b
+""",
+            tmp_path / "calc.py": """
+from math_utils import MathUtils
+total = MathUtils.add(1, 2)
+""",
+        }
+        for path, content in files.items():
+            path.write_text(content)
+
+        paths = list(files.keys())
+        contents = {p: p.read_text() for p in paths}
+        semantic_resolver.index_project(paths, contents)
+
+        resolved = semantic_resolver.resolve_symbol(
+            "add",
+            tmp_path / "calc.py",
+            contents[tmp_path / "calc.py"],
+            2,
+        )
+        assert resolved is not None
+        assert "math_utils.py" in str(resolved.file_path)
+
+
+class TestClassInheritance:
+    """Test class inheritance resolution."""
+
+    def test_inheritance_resolution(self, semantic_resolver, tmp_path):
+        """Test parent class resolution through inheritance."""
+        files = {
+            tmp_path / "base.py": "class BaseModel: pass",
+            tmp_path / "child.py": """
+from base import BaseModel
+class MyModel(BaseModel):
+    pass
+""",
+        }
+        for path, content in files.items():
+            path.write_text(content)
+
+        paths = list(files.keys())
+        contents = {p: p.read_text() for p in paths}
+        semantic_resolver.index_project(paths, contents)
+
+        resolved = semantic_resolver.resolve_symbol(
+            "BaseModel",
+            tmp_path / "child.py",
+            contents[tmp_path / "child.py"],
+            3,
+        )
+        assert resolved is not None
+        assert "base.py" in str(resolved.file_path)
+
+    def test_multi_inheritance_resolution(self, semantic_resolver, tmp_path):
+        """Test multiple inheritance resolution."""
+        files = {
+            tmp_path / "mixin_a.py": "class MixinA: pass",
+            tmp_path / "mixin_b.py": "class MixinB: pass",
+            tmp_path / "composite.py": """
+from mixin_a import MixinA
+from mixin_b import MixinB
+class Composite(MixinA, MixinB):
+    pass
+""",
+        }
+        for path, content in files.items():
+            path.write_text(content)
+
+        paths = list(files.keys())
+        contents = {p: p.read_text() for p in paths}
+        semantic_resolver.index_project(paths, contents)
+
+        resolved_a = semantic_resolver.resolve_symbol(
+            "MixinA",
+            tmp_path / "composite.py",
+            contents[tmp_path / "composite.py"],
+            4,
+        )
+        resolved_b = semantic_resolver.resolve_symbol(
+            "MixinB",
+            tmp_path / "composite.py",
+            contents[tmp_path / "composite.py"],
+            5,
+        )
+        assert resolved_a is not None
+        assert resolved_b is not None
+        assert "mixin_a.py" in str(resolved_a.file_path)
+        assert "mixin_b.py" in str(resolved_b.file_path)
+
+    def test_inherited_method_resolution(self, semantic_resolver, tmp_path):
+        """Test inherited methods resolve to parent class."""
+        files = {
+            tmp_path / "parent.py": """
+class Parent:
+    def common_method(self):
+        return 'parent'
+""",
+            tmp_path / "child.py": """
+from parent import Parent
+class Child(Parent):
+    pass
+""",
+            tmp_path / "use_child.py": """
+from child import Child
+c = Child()
+result = c.common_method()
+""",
+        }
+        for path, content in files.items():
+            path.write_text(content)
+
+        paths = list(files.keys())
+        contents = {p: p.read_text() for p in paths}
+        semantic_resolver.index_project(paths, contents)
+
+        resolved = semantic_resolver.resolve_symbol(
+            "common_method",
+            tmp_path / "use_child.py",
+            contents[tmp_path / "use_child.py"],
+            3,
+        )
+        assert resolved is not None
+        assert "parent.py" in str(resolved.file_path)
+
+
+class TestAliasCollision:
+    """Test handling of alias/namespace collisions."""
+
+    def test_alias_collision_resolution(self, semantic_resolver, tmp_path):
+        """Test same name from different modules - SemanticResolver tests resolution."""
+        files = {
+            tmp_path / "lib1.py": "def process(): pass",
+            tmp_path / "lib2.py": "def process(): pass",
+            tmp_path / "main.py": """
+from lib1 import process
+from lib2 import process as lib2_process
+result = process() + lib2_process()
+""",
+        }
+        for path, content in files.items():
+            path.write_text(content)
+
+        paths = list(files.keys())
+        contents = {p: p.read_text() for p in paths}
+        semantic_resolver.index_project(paths, contents)
+
+        resolved = semantic_resolver.resolve_symbol(
+            "process",
+            tmp_path / "main.py",
+            contents[tmp_path / "main.py"],
+            4,
+        )
+        assert resolved is not None
+
+    def test_alias_collision_distinction(self, semantic_resolver, tmp_path):
+        """Test that imports from different modules resolve correctly to their sources."""
+        files = {
+            tmp_path / "module_a.py": "class DataHandler: pass",
+            tmp_path / "module_b.py": "class DataHandler: pass",
+            tmp_path / "app.py": """
+from module_a import DataHandler
+from module_b import DataHandler
+ha = DataHandler()
+hb = DataHandler()
+""",
+        }
+        for path, content in files.items():
+            path.write_text(content)
+
+        paths = list(files.keys())
+        contents = {p: p.read_text() for p in paths}
+        semantic_resolver.index_project(paths, contents)
+
+        resolved_a = semantic_resolver.resolve_symbol(
+            "DataHandler",
+            tmp_path / "app.py",
+            contents[tmp_path / "app.py"],
+            4,
+        )
+        assert resolved_a is not None
+        assert "module" in str(resolved_a.file_path)
+
+    def test_import_as_different_aliases(self, semantic_resolver, tmp_path):
+        """Test same symbol imported with different names from different files."""
+        files = {
+            tmp_path / "shared.py": "value = 42",
+            tmp_path / "user1.py": """
+from shared import value
+print(value)
+""",
+            tmp_path / "user2.py": """
+from shared import value
+print(value)
+""",
+        }
+        for path, content in files.items():
+            path.write_text(content)
+
+        paths = list(files.keys())
+        contents = {p: p.read_text() for p in paths}
+        semantic_resolver.index_project(paths, contents)
+
+        resolved1 = semantic_resolver.resolve_symbol(
+            "value",
+            tmp_path / "user1.py",
+            contents[tmp_path / "user1.py"],
+            2,
+        )
+        resolved2 = semantic_resolver.resolve_symbol(
+            "value",
+            tmp_path / "user2.py",
+            contents[tmp_path / "user2.py"],
+            2,
+        )
+        assert resolved1 is not None
+        assert resolved2 is not None
+        assert "shared.py" in str(resolved1.file_path)
+        assert "shared.py" in str(resolved2.file_path)
+
+
+class TestSameSymbolMultipleFiles:
+    """Test same symbol name in multiple files."""
+
+    def test_duplicate_symbol_names(self, semantic_resolver, tmp_path):
+        """Test resolution when same name exists in multiple files."""
+        files = {
+            tmp_path / "utils1.py": "def helper(): return 1",
+            tmp_path / "utils2.py": "def helper(): return 2",
+            tmp_path / "main.py": """
+from utils1 import helper
+result = helper()
+""",
+        }
+        for path, content in files.items():
+            path.write_text(content)
+
+        paths = list(files.keys())
+        contents = {p: p.read_text() for p in paths}
+        semantic_resolver.index_project(paths, contents)
+
+        resolved = semantic_resolver.resolve_symbol(
+            "helper",
+            tmp_path / "main.py",
+            contents[tmp_path / "main.py"],
+            2,
+        )
+        assert resolved is not None
+        assert "utils1.py" in str(resolved.file_path)
+
+    def test_duplicate_class_names(self, semantic_resolver, tmp_path):
+        """Test class with same name in different modules resolves correctly."""
+        files = {
+            tmp_path / "db_models.py": "class User: pass",
+            tmp_path / "ui_models.py": "class User: pass",
+            tmp_path / "app.py": """
+from db_models import User
+db_user = User()
+""",
+        }
+        for path, content in files.items():
+            path.write_text(content)
+
+        paths = list(files.keys())
+        contents = {p: p.read_text() for p in paths}
+        semantic_resolver.index_project(paths, contents)
+
+        resolved = semantic_resolver.resolve_symbol(
+            "User",
+            tmp_path / "app.py",
+            contents[tmp_path / "app.py"],
+            2,
+        )
+        assert resolved is not None
+        assert "models.py" in str(resolved.file_path)
+
+    def test_wildcard_import_resolution(self, semantic_resolver, tmp_path):
+        """Test wildcard import __all__ resolution."""
+        files = {
+            tmp_path / "mylib/__init__.py": "__all__ = ['exported_func', 'ExportClass']",
+            tmp_path / "mylib/core.py": """
+def exported_func(): return 1
+class ExportClass: pass
+""",
+            tmp_path / "main.py": """
+from mylib import exported_func, ExportClass
+f = exported_func()
+c = ExportClass()
+""",
+        }
+        for path, content in files.items():
+            path.parent.mkdir(parents=True, exist_ok=True)
+            path.write_text(content)
+
+        paths = list(files.keys())
+        contents = {p: p.read_text() for p in paths}
+        semantic_resolver.index_project(paths, contents)
+
+        resolved_func = semantic_resolver.resolve_symbol(
+            "exported_func",
+            tmp_path / "main.py",
+            contents[tmp_path / "main.py"],
+            2,
+        )
+        resolved_class = semantic_resolver.resolve_symbol(
+            "ExportClass",
+            tmp_path / "main.py",
+            contents[tmp_path / "main.py"],
+            3,
+        )
+        assert resolved_func is not None
+        assert resolved_class is not None
+        assert "mylib" in str(resolved_func.file_path) or "core.py" in str(resolved_func.file_path)

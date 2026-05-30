@@ -1181,7 +1181,1057 @@ class MLDetectorAST:
 
         return findings
 
-    def _detect_ml005_regex_fallback(self, content: str) -> list[dict[str, Any]]:
+    def detect_ml007_gradient_accumulation(
+        self,
+        content: str,
+        language: str,
+    ) -> list[dict[str, Any]]:
+        """Detect gradient accumulation errors.
+
+        Detects when optimizer.step() is called every iteration instead of
+        at accumulation_steps intervals, breaking gradient accumulation.
+        """
+        findings = []
+
+        if language != "python":
+            return self._detect_ml007_regex_fallback(content)
+
+        try:
+            import tree_sitter
+            import tree_sitter_languages
+
+            parser = tree_sitter_languages.get_parser("python")
+            tree = parser.parse(content.encode("utf-8"))
+            root = tree.root_node
+
+            # Find training loops with optimizer.step()
+            training_loops = self._find_training_loops_with_optimizer(root)
+
+            for loop_node, line_no in training_loops:
+                # Check if there's gradient accumulation logic
+                has_accumulation = self._has_gradient_accumulation_logic(loop_node)
+                has_step = self._loop_has_optimizer_step(loop_node)
+
+                # If step is called but no accumulation tracking, flag it
+                if has_step and not has_accumulation:
+                    findings.append({
+                        "rule_id": "ML007",
+                        "severity": "HIGH",
+                        "line": line_no,
+                        "message": "optimizer.step() called in loop without gradient accumulation tracking",
+                        "confidence": 0.82,
+                        "old_code": self._get_code_snippet(content, line_no, lines=10),
+                        "new_code": (
+                            "if (step + 1) % accumulation_steps == 0:\n"
+                            "    optimizer.step()\n"
+                            "    optimizer.zero_grad()"
+                        ),
+                        "explanation": (
+                            "Gradient accumulation requires calling optimizer.step() "
+                            "only every accumulation_steps iterations, not every iteration. "
+                            "This breaks the intended gradient accumulation behavior."
+                        ),
+                        "detection_method": "ast",
+                    })
+
+        except ImportError:
+            return self._detect_ml007_regex_fallback(content)
+        except Exception as e:
+            logger.warning("AST analysis failed for ML007", error=str(e))
+            return self._detect_ml007_regex_fallback(content)
+
+        return findings
+
+    def detect_ml008_wrong_optimizer(
+        self,
+        content: str,
+        language: str,
+    ) -> list[dict[str, Any]]:
+        """Detect wrong optimizer usage patterns.
+
+        Detects AdamW vs SGD specificity issues like weight_decay
+        not working correctly with Adam optimizer.
+        """
+        findings = []
+
+        if language != "python":
+            return self._detect_ml008_regex_fallback(content)
+
+        try:
+            import tree_sitter
+            import tree_sitter_languages
+
+            parser = tree_sitter_languages.get_parser("python")
+            tree = parser.parse(content.encode("utf-8"))
+            root = tree.root_node
+
+            # Find optimizer instantiations
+            optimizers = self._find_optimizer_usages(root)
+
+            for opt_node, opt_type, line_no in optimizers:
+                if opt_type == "Adam":
+                    # Check for weight_decay with Adam (should use AdamW instead)
+                    if self._has_weight_decay_param(opt_node):
+                        findings.append({
+                            "rule_id": "ML008",
+                            "severity": "MEDIUM",
+                            "line": line_no,
+                            "message": f"weight_decay parameter with {opt_type} optimizer",
+                            "confidence": 0.78,
+                            "old_code": self._get_code_snippet(content, line_no),
+                            "new_code": "torch.optim.AdamW(model.parameters(), weight_decay=0.01)",
+                            "explanation": (
+                                f"Adam optimizer applies weight_decay to all parameters equally, "
+                                f"which is different from AdamW's decoupled weight decay. "
+                                f"Consider using AdamW for proper L2 regularization."
+                            ),
+                            "detection_method": "ast",
+                        })
+
+        except ImportError:
+            return self._detect_ml008_regex_fallback(content)
+        except Exception as e:
+            logger.warning("AST analysis failed for ML008", error=str(e))
+            return self._detect_ml008_regex_fallback(content)
+
+        return findings
+
+    def detect_ml009_augmentation_in_eval(
+        self,
+        content: str,
+        language: str,
+    ) -> list[dict[str, Any]]:
+        """Detect data augmentation applied during evaluation.
+
+        Augmentation should only be applied to training data, not validation/test.
+        """
+        findings = []
+
+        if language != "python":
+            return self._detect_ml009_regex_fallback(content)
+
+        try:
+            import tree_sitter
+            import tree_sitter_languages
+
+            parser = tree_sitter_languages.get_parser("python")
+            tree = parser.parse(content.encode("utf-8"))
+            root = tree.root_node
+
+            # Find eval/validation functions
+            eval_functions = self._find_eval_functions(root)
+
+            for func_node, func_name, line_no in eval_functions:
+                # Check for augmentation calls inside eval function
+                has_augmentation = self._has_augmentation_in_function(func_node)
+                if has_augmentation:
+                    findings.append({
+                        "rule_id": "ML009",
+                        "severity": "HIGH",
+                        "line": line_no,
+                        "message": f"Data augmentation detected in evaluation function '{func_name}'",
+                        "confidence": 0.85,
+                        "old_code": self._get_code_snippet(content, line_no, lines=15),
+                        "new_code": (
+                            "# Move augmentation to train dataloader only:\n"
+                            "# train_loader = DataLoader(train_dataset, transform=train_transform)\n"
+                            "# val_loader = DataLoader(val_dataset, transform=None)  # No augmentation"
+                        ),
+                        "explanation": (
+                            "Data augmentation should only be applied to training data. "
+                            "Applying augmentation during evaluation/test causes inconsistent "
+                            "predictions and unreliable metrics."
+                        ),
+                        "detection_method": "ast",
+                    })
+
+        except ImportError:
+            return self._detect_ml009_regex_fallback(content)
+        except Exception as e:
+            logger.warning("AST analysis failed for ML009", error=str(e))
+            return self._detect_ml009_regex_fallback(content)
+
+        return findings
+
+    def detect_ml010_nan_inf(
+        self,
+        content: str,
+        language: str,
+    ) -> list[dict[str, Any]]:
+        """Detect patterns that can cause NaN/Inf propagation.
+
+        Detects division without checks, log of negative numbers, etc.
+        """
+        findings = []
+
+        if language != "python":
+            return self._detect_ml010_regex_fallback(content)
+
+        try:
+            import tree_sitter
+            import tree_sitter_languages
+
+            parser = tree_sitter_languages.get_parser("python")
+            tree = parser.parse(content.encode("utf-8"))
+            root = tree.root_node
+
+            # Find division and log operations
+            dangerous_ops = self._find_dangerous_numeric_ops(root)
+
+            for op_node, op_type, line_no in dangerous_ops:
+                findings.append({
+                    "rule_id": "ML010",
+                    "severity": "CRITICAL",
+                    "line": line_no,
+                    "message": f"Potential NaN/Inf source: {op_type} without safety checks",
+                    "confidence": 0.80,
+                    "old_code": self._get_code_snippet(content, line_no),
+                    "new_code": (
+                        "# Add safety checks:\n"
+                        "if denominator != 0 and not torch.isnan(denominator).any():\n"
+                        "    result = numerator / denominator"
+                    ),
+                    "explanation": (
+                        f"Operation '{op_type}' can produce NaN/Inf if the divisor contains "
+                        f"zeros or if the operand contains NaN values. Add explicit checks "
+                        f"or use safe division functions."
+                    ),
+                    "detection_method": "ast",
+                })
+
+        except ImportError:
+            return self._detect_ml010_regex_fallback(content)
+        except Exception as e:
+            logger.warning("AST analysis failed for ML010", error=str(e))
+            return self._detect_ml010_regex_fallback(content)
+
+        return findings
+
+    def detect_ml011_lr_scheduler(
+        self,
+        content: str,
+        language: str,
+    ) -> list[dict[str, Any]]:
+        """Detect learning rate scheduler errors.
+
+        Scheduler should be stepped after optimizer update, not before.
+        """
+        findings = []
+
+        if language != "python":
+            return self._detect_ml011_regex_fallback(content)
+
+        try:
+            import tree_sitter
+            import tree_sitter_languages
+
+            parser = tree_sitter_languages.get_parser("python")
+            tree = parser.parse(content.encode("utf-8"))
+            root = tree.root_node
+
+            # Find training loops with scheduler
+            training_with_scheduler = self._find_training_with_scheduler(root)
+
+            for loop_node, scheduler_step_pos, line_no in training_with_scheduler:
+                # If scheduler is stepped before optimizer, flag it
+                if scheduler_step_pos == "before_optimizer":
+                    findings.append({
+                        "rule_id": "ML011",
+                        "severity": "HIGH",
+                        "line": line_no,
+                        "message": "LR scheduler stepped before optimizer.step()",
+                        "confidence": 0.82,
+                        "old_code": self._get_code_snippet(content, line_no, lines=15),
+                        "new_code": (
+                            "# Correct order:\n"
+                            "loss.backward()\n"
+                            "optimizer.step()\n"
+                            "scheduler.step()  # Step AFTER optimizer"
+                        ),
+                        "explanation": (
+                            "Learning rate schedulers should be stepped AFTER optimizer.step(), "
+                            "not before. Stepping before causes incorrect learning rate "
+                            "scheduling and suboptimal training."
+                        ),
+                        "detection_method": "ast",
+                    })
+
+        except ImportError:
+            return self._detect_ml011_regex_fallback(content)
+        except Exception as e:
+            logger.warning("AST analysis failed for ML011", error=str(e))
+            return self._detect_ml011_regex_fallback(content)
+
+        return findings
+
+    def detect_ml012_batchnorm_small_batch(
+        self,
+        content: str,
+        language: str,
+    ) -> list[dict[str, Any]]:
+        """Detect batch normalization with very small batch sizes.
+
+        BatchNorm requires sufficient batch size for stable statistics.
+        """
+        findings = []
+
+        if language != "python":
+            return self._detect_ml012_regex_fallback(content)
+
+        try:
+            import tree_sitter
+            import tree_sitter_languages
+
+            parser = tree_sitter_languages.get_parser("python")
+            tree = parser.parse(content.encode("utf-8"))
+            root = tree.root_node
+
+            # Find batch size assignments and BatchNorm layers
+            batchnorm_with_small_batch = self._find_batchnorm_small_batch_patterns(root)
+
+            for model_node, batch_size, line_no in batchnorm_with_small_batch:
+                findings.append({
+                    "rule_id": "ML012",
+                    "severity": "HIGH",
+                    "line": line_no,
+                    "message": f"BatchNorm with batch_size={batch_size} may cause unstable statistics",
+                    "confidence": 0.80,
+                    "old_code": self._get_code_snippet(content, line_no, lines=10),
+                    "new_code": (
+                        "# Consider alternatives for small batch:\n"
+                        "# 1. Use SyncBatchNorm for multi-GPU\n"
+                        "# 2. Use GroupNorm instead of BatchNorm\n"
+                        "# 3. Increase batch size if possible"
+                    ),
+                    "explanation": (
+                        f"BatchNorm with batch_size={batch_size} is problematic because "
+                        f"BatchNorm relies on batch statistics. Very small batches lead to "
+                        f"unstable running statistics and poor model performance. "
+                        f"Consider using GroupNorm or SyncBatchNorm instead."
+                    ),
+                    "detection_method": "ast",
+                })
+
+        except ImportError:
+            return self._detect_ml012_regex_fallback(content)
+        except Exception as e:
+            logger.warning("AST analysis failed for ML012", error=str(e))
+            return self._detect_ml012_regex_fallback(content)
+
+        return findings
+
+    def detect_ml013_multi_gpu_sync(
+        self,
+        content: str,
+        language: str,
+    ) -> list[dict[str, Any]]:
+        """Detect DistributedDataParallel sync issues.
+
+        Model must be wrapped correctly before DDP wrapping.
+        """
+        findings = []
+
+        if language != "python":
+            return self._detect_ml013_regex_fallback(content)
+
+        try:
+            import tree_sitter
+            import tree_sitter_languages
+
+            parser = tree_sitter_languages.get_parser("python")
+            tree = parser.parse(content.encode("utf-8"))
+            root = tree.root_node
+
+            # Find DDP wrapping patterns
+            ddp_patterns = self._find_ddp_patterns(root)
+
+            for pattern, line_no in ddp_patterns:
+                findings.append({
+                    "rule_id": "ML013",
+                    "severity": "CRITICAL",
+                    "line": line_no,
+                    "message": f"DistributedDataParallel wrapping issue: {pattern}",
+                    "confidence": 0.78,
+                    "old_code": self._get_code_snippet(content, line_no, lines=10),
+                    "new_code": (
+                        "# Correct DDP wrapping:\n"
+                        "model = model.cuda()\n"
+                        "model = DistributedDataParallel(model)\n"
+                        "# Not: model = DistributedDataParallel(model.cuda())"
+                    ),
+                    "explanation": (
+                        f"DistributedDataParallel requires careful handling of device placement "
+                        f"and state dict synchronization. Issues with '{pattern}' can cause "
+                        f"incorrect gradients, parameter desync, or runtime errors."
+                    ),
+                    "detection_method": "ast",
+                })
+
+        except ImportError:
+            return self._detect_ml013_regex_fallback(content)
+        except Exception as e:
+            logger.warning("AST analysis failed for ML013", error=str(e))
+            return self._detect_ml013_regex_fallback(content)
+
+        return findings
+
+    def detect_ml014_mixed_precision(
+        self,
+        content: str,
+        language: str,
+    ) -> list[dict[str, Any]]:
+        """Detect mixed precision training errors.
+
+        Missing loss scaling, overflow detection, etc.
+        """
+        findings = []
+
+        if language != "python":
+            return self._detect_ml014_regex_fallback(content)
+
+        try:
+            import tree_sitter
+            import tree_sitter_languages
+
+            parser = tree_sitter_languages.get_parser("python")
+            tree = parser.parse(content.encode("utf-8"))
+            root = tree.root_node
+
+            # Find AMP/autocast usage
+            amp_patterns = self._find_amp_patterns(root)
+
+            for pattern, line_no in amp_patterns:
+                findings.append({
+                    "rule_id": "ML014",
+                    "severity": "HIGH",
+                    "line": line_no,
+                    "message": f"Mixed precision issue: {pattern}",
+                    "confidence": 0.82,
+                    "old_code": self._get_code_snippet(content, line_no, lines=10),
+                    "new_code": (
+                        "# Use GradScaler for loss scaling:\n"
+                        "scaler = GradScaler()\n"
+                        "with autocast():\n"
+                        "    loss = criterion(output, target)\n"
+                        "scaler.scale(loss).backward()\n"
+                        "scaler.step(optimizer)\n"
+                        "scaler.update()"
+                    ),
+                    "explanation": (
+                        f"Mixed precision training requires proper loss scaling to prevent "
+                        f"gradient underflow. Issue with '{pattern}' can cause training "
+                        f"instability or NaN losses."
+                    ),
+                    "detection_method": "ast",
+                })
+
+        except ImportError:
+            return self._detect_ml014_regex_fallback(content)
+        except Exception as e:
+            logger.warning("AST analysis failed for ML014", error=str(e))
+            return self._detect_ml014_regex_fallback(content)
+
+        return findings
+
+    def detect_ml015_early_stopping(
+        self,
+        content: str,
+        language: str,
+    ) -> list[dict[str, Any]]:
+        """Detect early stopping logic bugs.
+
+        Wrong metric monitoring, incorrect patience reset logic.
+        """
+        findings = []
+
+        if language != "python":
+            return self._detect_ml015_regex_fallback(content)
+
+        try:
+            import tree_sitter
+            import tree_sitter_languages
+
+            parser = tree_sitter_languages.get_parser("python")
+            tree = parser.parse(content.encode("utf-8"))
+            root = tree.root_node
+
+            # Find early stopping implementations
+            early_stopping_impls = self._find_early_stopping_impls(root)
+
+            for impl_node, impl_type, line_no in early_stopping_impls:
+                if impl_type == "wrong_metric":
+                    findings.append({
+                        "rule_id": "ML015",
+                        "severity": "MEDIUM",
+                        "line": line_no,
+                        "message": "Early stopping monitors loss instead of validation metric",
+                        "confidence": 0.80,
+                        "old_code": self._get_code_snippet(content, line_no, lines=15),
+                        "new_code": (
+                            "# Monitor validation metric, not training loss:\n"
+                            "if val_metric < best_metric:\n"
+                            "    best_metric = val_metric\n"
+                            "    patience_counter = 0\n"
+                            "else:\n"
+                            "    patience_counter += 1"
+                        ),
+                        "explanation": (
+                            "Early stopping should monitor validation metrics, not training loss. "
+                            "Training loss always decreases; validation metrics show true generalization. "
+                            "Monitoring training loss leads to premature or delayed stopping."
+                        ),
+                        "detection_method": "ast",
+                    })
+                elif impl_type == "wrong_patience":
+                    findings.append({
+                        "rule_id": "ML015",
+                        "severity": "MEDIUM",
+                        "line": line_no,
+                        "message": "Early stopping patience reset logic is incorrect",
+                        "confidence": 0.78,
+                        "old_code": self._get_code_snippet(content, line_no, lines=15),
+                        "new_code": (
+                            "# Correct patience reset: only when metric IMPROVES\n"
+                            "if mode == 'min':\n"
+                            "    if current < best:\n"
+                            "        best = current\n"
+                            "        patience_counter = 0\n"
+                            "else:\n"
+                            "    if current > best:\n"
+                            "        best = current\n"
+                            "        patience_counter = 0"
+                        ),
+                        "explanation": (
+                            "Early stopping patience should only reset when the monitored metric "
+                            "improves. Resetting on every iteration defeats the purpose of patience."
+                        ),
+                        "detection_method": "ast",
+                    })
+
+        except ImportError:
+            return self._detect_ml015_regex_fallback(content)
+        except Exception as e:
+            logger.warning("AST analysis failed for ML015", error=str(e))
+            return self._detect_ml015_regex_fallback(content)
+
+        return findings
+
+    # ─── Helper Methods for New Detections ────────────────────────────────────
+
+    def _detect_ml007_regex_fallback(self, content: str) -> list[dict[str, Any]]:
+        """Regex fallback for ML007 gradient accumulation."""
+        findings = []
+
+        # Find optimizer.step() in training loops
+        step_pattern = re.compile(
+            r"optimizer\.step\(\).*?(?=\n\s*(?:optimizer\.|scheduler\.|for|if|$))",
+            re.DOTALL
+        )
+
+        for match in step_pattern.finditer(content):
+            line_no = content[:match.start()].count("\n") + 1
+            step_context = content[max(0, match.start()-500):match.end()+500]
+
+            # Check for accumulation tracking
+            has_accumulation = any(
+                p in step_context for p in ["accumulation_steps", "%", "modulo", "if step"]
+            )
+
+            if not has_accumulation and "for" in step_context:
+                findings.append({
+                    "rule_id": "ML007",
+                    "severity": "HIGH",
+                    "line": line_no,
+                    "message": "optimizer.step() called without gradient accumulation tracking",
+                    "confidence": 0.70,
+                    "old_code": match.group(0)[:100],
+                    "new_code": "if (step + 1) % accumulation_steps == 0:\n    optimizer.step()",
+                    "explanation": "Gradient accumulation requires conditional step() calls.",
+                    "detection_method": "regex_fallback",
+                })
+
+        return findings
+
+    def _detect_ml008_regex_fallback(self, content: str) -> list[dict[str, Any]]:
+        """Regex fallback for ML008 wrong optimizer."""
+        findings = []
+
+        # Find Adam with weight_decay
+        pattern = re.compile(
+            r"torch\.optim\.Adam\([^)]*weight_decay\s*=",
+            re.DOTALL
+        )
+
+        for match in pattern.finditer(content):
+            line_no = content[:match.start()].count("\n") + 1
+            findings.append({
+                "rule_id": "ML008",
+                "severity": "MEDIUM",
+                "line": line_no,
+                "message": "weight_decay with Adam optimizer",
+                "confidence": 0.65,
+                "old_code": content.split("\n")[line_no-1].strip(),
+                "new_code": "torch.optim.AdamW(params, weight_decay=0.01)",
+                "explanation": "Use AdamW for proper L2 regularization with decoupled weight decay.",
+                "detection_method": "regex_fallback",
+            })
+
+        return findings
+
+    def _detect_ml009_regex_fallback(self, content: str) -> list[dict[str, Any]]:
+        """Regex fallback for ML009 augmentation in eval."""
+        findings = []
+
+        eval_func_pattern = re.compile(
+            r"def\s+(?:evaluate|eval|validate|inference)\s*\([^)]*\):.*?"
+            r"(?=\n(?:def |class |\Z))",
+            re.DOTALL
+        )
+
+        aug_patterns = [
+            r"transforms\.", r"Random", r"augment", r"ColorJitter", r"RandomRotation",
+            r"RandomHorizontalFlip", r"RandomCrop", r"Compose"
+        ]
+
+        for eval_match in eval_func_pattern.finditer(content):
+            func_content = eval_match.group(0)
+            line_no = content[:eval_match.start()].count("\n") + 1
+
+            if any(re.search(p, func_content, re.IGNORECASE) for p in aug_patterns):
+                findings.append({
+                    "rule_id": "ML009",
+                    "severity": "HIGH",
+                    "line": line_no,
+                    "message": "Data augmentation detected in evaluation function",
+                    "confidence": 0.72,
+                    "old_code": func_content[:100],
+                    "new_code": "# Remove augmentation from val/test loader",
+                    "explanation": "Augmentation should only be applied to training data.",
+                    "detection_method": "regex_fallback",
+                })
+
+        return findings
+
+    def _detect_ml010_regex_fallback(self, content: str) -> list[dict[str, Any]]:
+        """Regex fallback for ML010 NaN/Inf patterns."""
+        findings = []
+
+        # Find division operations without safety
+        div_pattern = re.compile(
+            r"(?<!torch\.isnan\()(?<!torch\.isfinite\()"
+            r"(?<!np\.isfinite\()(?<!\.item\(\))\s*/\s*"
+            r"(?![\s]*[a-zA-Z_]+\s*\))"
+        )
+
+        lines = content.split("\n")
+        for i, line in enumerate(lines, 1):
+            if "/" in line and "def " not in line:
+                # Skip if already has safety checks
+                if "isnan" not in line and "isfinite" not in line and "where" not in line:
+                    if "scaler" not in line.lower():  # Skip scaler divisions
+                        findings.append({
+                            "rule_id": "ML010",
+                            "severity": "CRITICAL",
+                            "line": i,
+                            "message": "Division without NaN/Inf safety checks",
+                            "confidence": 0.65,
+                            "old_code": line.strip(),
+                            "new_code": "result = torch.where(denom != 0, numerator / denom, 0)",
+                            "explanation": "Add explicit checks for division by zero or NaN values.",
+                            "detection_method": "regex_fallback",
+                        })
+
+        return findings[:5]  # Limit findings
+
+    def _detect_ml011_regex_fallback(self, content: str) -> list[dict[str, Any]]:
+        """Regex fallback for ML011 LR scheduler."""
+        findings = []
+
+        # Find scheduler.step() before optimizer.step()
+        scheduler_step = re.compile(r"scheduler\.step\(\)")
+        optimizer_step = re.compile(r"optimizer\.step\(\)")
+
+        scheduler_matches = list(scheduler_step.finditer(content))
+        optimizer_matches = list(optimizer_step.finditer(content))
+
+        for sched_match in scheduler_matches:
+            sched_line = content[:sched_match.start()].count("\n") + 1
+
+            for opt_match in optimizer_matches:
+                opt_line = content[:opt_match.start()].count("\n") + 1
+
+                # If scheduler is before optimizer in same loop
+                if opt_line > sched_line:
+                    findings.append({
+                        "rule_id": "ML011",
+                        "severity": "HIGH",
+                        "line": sched_line,
+                        "message": "LR scheduler.step() called before optimizer.step()",
+                        "confidence": 0.70,
+                        "old_code": lines[sched_line-1].strip(),
+                        "new_code": "# Move scheduler.step() AFTER optimizer.step()",
+                        "explanation": "Schedulers should be stepped after optimizer updates.",
+                        "detection_method": "regex_fallback",
+                    })
+                    break
+
+        return findings
+
+    def _detect_ml012_regex_fallback(self, content: str) -> list[dict[str, Any]]:
+        """Regex fallback for ML012 batch norm small batch."""
+        findings = []
+
+        # Find batch_size = 1 patterns
+        pattern = re.compile(r"batch_size\s*=\s*1\b")
+
+        for match in pattern.finditer(content):
+            line_no = content[:match.start()].count("\n") + 1
+            findings.append({
+                "rule_id": "ML012",
+                "severity": "HIGH",
+                "line": line_no,
+                "message": "batch_size=1 may cause unstable BatchNorm statistics",
+                "confidence": 0.68,
+                "old_code": content.split("\n")[line_no-1].strip(),
+                "new_code": "# Use GroupNorm or SyncBatchNorm for small batches",
+                "explanation": "BatchNorm with batch_size=1 has no batch statistics. Use GroupNorm.",
+                "detection_method": "regex_fallback",
+            })
+
+        return findings
+
+    def _detect_ml013_regex_fallback(self, content: str) -> list[dict[str, Any]]:
+        """Regex fallback for ML013 DDP issues."""
+        findings = []
+
+        # Find DDP wrapping patterns
+        pattern = re.compile(
+            r"DistributedDataParallel\s*\(\s*[^)]*\.cuda\(\)",
+            re.DOTALL
+        )
+
+        for match in pattern.finditer(content):
+            line_no = content[:match.start()].count("\n") + 1
+            findings.append({
+                "rule_id": "ML013",
+                "severity": "CRITICAL",
+                "line": line_no,
+                "message": "DDP wrapping model.cuda() inside constructor",
+                "confidence": 0.68,
+                "old_code": content.split("\n")[line_no-1].strip(),
+                "new_code": "model = model.cuda()\nmodel = DDP(model)",
+                "explanation": "Move device placement outside DDP constructor for proper syncing.",
+                "detection_method": "regex_fallback",
+            })
+
+        return findings
+
+    def _detect_ml014_regex_fallback(self, content: str) -> list[dict[str, Any]]:
+        """Regex fallback for ML014 mixed precision."""
+        findings = []
+
+        # Find autocast without GradScaler
+        has_autocast = "autocast" in content
+        has_scaler = "GradScaler" in content or "scaler.scale" in content
+
+        if has_autocast and not has_scaler:
+            autocast_pattern = re.compile(r"with\s+autocast\(\)")
+            for match in autocast_pattern.finditer(content):
+                line_no = content[:match.start()].count("\n") + 1
+                findings.append({
+                    "rule_id": "ML014",
+                    "severity": "HIGH",
+                    "line": line_no,
+                    "message": "autocast used without GradScaler",
+                    "confidence": 0.70,
+                    "old_code": content.split("\n")[line_no-1].strip(),
+                    "new_code": "scaler = GradScaler()\nscaler.scale(loss).backward()",
+                    "explanation": "Use GradScaler for loss scaling to prevent gradient underflow.",
+                    "detection_method": "regex_fallback",
+                })
+
+        return findings
+
+    def _detect_ml015_regex_fallback(self, content: str) -> list[dict[str, Any]]:
+        """Regex fallback for ML015 early stopping."""
+        findings = []
+
+        # Find early stopping with training loss
+        early_stop_pattern = re.compile(
+            r"(?:patience|early_stopping).*?"
+            r"(?:if|when).*?(?:loss|metric).*?"
+            r"(?:>|>=|<|<=)",
+            re.IGNORECASE | re.DOTALL
+        )
+
+        for match in early_stop_pattern.finditer(content):
+            line_no = content[:match.start()].count("\n") + 1
+            context = content[max(0, match.start()-200):match.end()+200]
+
+            # Check if monitoring training loss
+            if "val" not in context.lower() and "test" not in context.lower():
+                if "train_loss" in context or ("loss" in context and "val" not in context):
+                    findings.append({
+                        "rule_id": "ML015",
+                        "severity": "MEDIUM",
+                        "line": line_no,
+                        "message": "Early stopping monitors training loss instead of validation metric",
+                        "confidence": 0.68,
+                        "old_code": match.group(0)[:100],
+                        "new_code": "# Monitor val_metric, not train_loss",
+                        "explanation": "Use validation metrics for early stopping, not training loss.",
+                        "detection_method": "regex_fallback",
+                    })
+
+        return findings
+
+    def _find_training_loops_with_optimizer(
+        self,
+        root: Any,
+    ) -> list[tuple[Any, int]]:
+        """Find training loops containing optimizer.step()."""
+        loops = []
+
+        def traverse(node: Any) -> None:
+            if node.type in ("for_statement", "while_statement"):
+                body_text = self._get_node_text(node)
+                if "optimizer.step()" in body_text and "for" in body_text:
+                    line_no = node.start_point[0] + 1
+                    loops.append((node, line_no))
+            for child in node.children:
+                traverse(child)
+
+        traverse(root)
+        return loops
+
+    def _has_gradient_accumulation_logic(self, node: Any) -> bool:
+        """Check if node has gradient accumulation tracking logic."""
+        content = self._get_node_text(node)
+        patterns = ["accumulation_steps", "%", "mod", "if step", "if (step"]
+        return any(p in content for p in patterns)
+
+    def _loop_has_optimizer_step(self, node: Any) -> bool:
+        """Check if loop has optimizer.step()."""
+        content = self._get_node_text(node)
+        return "optimizer.step()" in content
+
+    def _find_optimizer_usages(
+        self,
+        root: Any,
+    ) -> list[tuple[Any, str, int]]:
+        """Find optimizer instantiations."""
+        optimizers = []
+
+        def traverse(node: Any) -> None:
+            if node.type == "call":
+                func = node.child_by_field_name("function")
+                if func:
+                    func_text = self._get_node_text(func)
+                    for opt_type in ["Adam", "SGD", "AdamW", "RMSprop"]:
+                        if opt_type in func_text:
+                            line_no = node.start_point[0] + 1
+                            optimizers.append((node, opt_type, line_no))
+            for child in node.children:
+                traverse(child)
+
+        traverse(root)
+        return optimizers
+
+    def _has_weight_decay_param(self, node: Any) -> bool:
+        """Check if optimizer has weight_decay parameter."""
+        content = self._get_node_text(node)
+        return "weight_decay" in content
+
+    def _find_eval_functions(
+        self,
+        root: Any,
+    ) -> list[tuple[Any, str, int]]:
+        """Find evaluation/validation functions."""
+        funcs = []
+        eval_names = {"evaluate", "eval", "validate", "inference", "test"}
+
+        def traverse(node: Any) -> None:
+            if node.type in ("function_definition", "async_function_definition"):
+                name_node = node.child_by_field_name("name")
+                if name_node:
+                    name = name_node.text.decode("utf-8")
+                    if name in eval_names:
+                        line_no = node.start_point[0] + 1
+                        funcs.append((node, name, line_no))
+            for child in node.children:
+                traverse(child)
+
+        traverse(root)
+        return funcs
+
+    def _has_augmentation_in_function(self, func_node: Any) -> bool:
+        """Check if function has data augmentation."""
+        content = self._get_node_text(func_node)
+        aug_patterns = [
+            r"transforms?\.", r"Random", r"augment", r"ColorJitter",
+            r"RandomRotation", r"RandomFlip", r"Compose"
+        ]
+        return any(re.search(p, content, re.IGNORECASE) for p in aug_patterns)
+
+    def _find_dangerous_numeric_ops(
+        self,
+        root: Any,
+    ) -> list[tuple[Any, str, int]]:
+        """Find division and log operations that can cause NaN/Inf."""
+        ops = []
+
+        def traverse(node: Any) -> None:
+            if node.type == "binary_operator":
+                op = node.child_by_field_name("operator")
+                if op:
+                    op_text = op.text.decode("utf-8")
+                    if op_text == "/":
+                        line_no = node.start_point[0] + 1
+                        ops.append((node, "division", line_no))
+            elif node.type == "call":
+                func = node.child_by_field_name("function")
+                if func:
+                    func_text = self._get_node_text(func)
+                    if "log" in func_text.lower():
+                        line_no = node.start_point[0] + 1
+                        ops.append((node, "log", line_no))
+            for child in node.children:
+                traverse(child)
+
+        traverse(root)
+        return ops
+
+    def _find_training_with_scheduler(
+        self,
+        root: Any,
+    ) -> list[tuple[Any, str, int]]:
+        """Find training loops with LR scheduler."""
+        patterns = []
+
+        def traverse(node: Any) -> None:
+            if node.type in ("for_statement", "while_statement"):
+                body = self._get_node_text(node)
+                if "scheduler.step()" in body or "lr_scheduler" in body:
+                    # Determine order
+                    body_lines = body.split("\n")
+                    scheduler_line = -1
+                    optimizer_line = -1
+                    for i, line in enumerate(body_lines):
+                        if "scheduler.step()" in line and scheduler_line < 0:
+                            scheduler_line = i
+                        if "optimizer.step()" in line and optimizer_line < 0:
+                            optimizer_line = i
+
+                    if scheduler_line >= 0 and optimizer_line >= 0:
+                        if scheduler_line < optimizer_line:
+                            pos = "before_optimizer"
+                        else:
+                            pos = "after_optimizer"
+                    else:
+                        pos = "unknown"
+
+                    line_no = node.start_point[0] + 1
+                    patterns.append((node, pos, line_no))
+            for child in node.children:
+                traverse(child)
+
+        traverse(root)
+        return patterns
+
+    def _find_batchnorm_small_batch_patterns(
+        self,
+        root: Any,
+    ) -> list[tuple[Any, int, int]]:
+        """Find BatchNorm layers with small batch sizes."""
+        patterns = []
+
+        def traverse(node: Any) -> None:
+            if node.type == "call":
+                func = node.child_by_field_name("function")
+                if func:
+                    func_text = self._get_node_text(func)
+                    if "BatchNorm" in func_text:
+                        # Check nearby for batch_size
+                        parent_text = self._get_node_text(node.parent)
+                        batch_match = re.search(r"batch_size\s*=\s*(\d+)", parent_text)
+                        if batch_match:
+                            batch_size = int(batch_match.group(1))
+                            if batch_size <= 4:
+                                line_no = node.start_point[0] + 1
+                                patterns.append((node, batch_size, line_no))
+            for child in node.children:
+                traverse(child)
+
+        traverse(root)
+        return patterns
+
+    def _find_ddp_patterns(
+        self,
+        root: Any,
+    ) -> list[tuple[str, int]]:
+        """Find DistributedDataParallel wrapping patterns."""
+        patterns = []
+
+        def traverse(node: Any) -> None:
+            if node.type == "call":
+                func = node.child_by_field_name("function")
+                if func:
+                    func_text = self._get_node_text(func)
+                    if "DistributedDataParallel" in func_text:
+                        # Check for .cuda() inside
+                        args = node.child_by_field_name("arguments")
+                        if args:
+                            args_text = self._get_node_text(args)
+                            if ".cuda()" in args_text:
+                                patterns.append(("cuda_inside_ddp", node.start_point[0] + 1))
+            for child in node.children:
+                traverse(child)
+
+        traverse(root)
+        return patterns
+
+    def _find_amp_patterns(
+        self,
+        root: Any,
+    ) -> list[tuple[str, int]]:
+        """Find AMP/autocast usage patterns."""
+        patterns = []
+
+        def traverse(node: Any) -> None:
+            if node.type == "with":
+                body = self._get_node_text(node)
+                if "autocast" in body:
+                    # Check if GradScaler is used
+                    has_scaler = "scaler.scale" in body or "GradScaler" in body
+                    if not has_scaler:
+                        patterns.append(("autocast_without_scaler", node.start_point[0] + 1))
+            for child in node.children:
+                traverse(child)
+
+        traverse(root)
+        return patterns
+
+    def _find_early_stopping_impls(
+        self,
+        root: Any,
+    ) -> list[tuple[Any, str, int]]:
+        """Find early stopping implementations."""
+        impls = []
+
+        def traverse(node: Any) -> None:
+            if node.type in ("function_definition", "for_statement"):
+                text = self._get_node_text(node)
+                if "early_stop" in text.lower() or "patience" in text.lower():
+                    # Determine issue type
+                    if "train_loss" in text or ("loss" in text and "val" not in text):
+                        impls.append((node, "wrong_metric", node.start_point[0] + 1))
+                    elif re.search(r"patience\s*=\s*0(?!\d)", text):
+                        impls.append((node, "wrong_patience", node.start_point[0] + 1))
+            for child in node.children:
+                traverse(child)
+
+        traverse(root)
+        return impls
         """Regex fallback for ML005."""
         findings = []
 

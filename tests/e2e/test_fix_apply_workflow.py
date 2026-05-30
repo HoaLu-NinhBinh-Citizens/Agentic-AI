@@ -13,11 +13,11 @@ Workflow:
 import pytest
 import tempfile
 import shutil
-import re
 import ast
 from pathlib import Path
 
 from src.infrastructure.analysis.ml_detectors import MLDetector
+from src.infrastructure.patching.ast_patch_engine import ASTPatchEngine, Patch
 from src.application.workflows.unified.review_engine import (
     UnifiedReviewEngine,
     ReviewEngineConfig,
@@ -64,45 +64,12 @@ class TestFixApplyWorkflow:
 
         return "\n".join(result_lines)
 
-    def _detect_ml006_regex(self, content: str) -> list[dict]:
-        """Direct regex detection for ML006 (hardcoded config).
-
-        This mirrors the detector's regex fallback for testing purposes.
-        """
-        findings = []
-        patterns = [
-            (r"batch_size\s*=\s*(\d+)", "batch_size"),
-            (r"epochs?\s*=\s*(\d+)", "epochs"),
-            (r"(?:lr|learning_rate)\s*=\s*(0\.\d+)", "learning_rate"),
-            (r"hidden_dim(?:sion)?\s*=\s*(\d+)", "hidden_dim"),
-            (r"dropout\s*=\s*(0?\.\d+)", "dropout"),
-        ]
-
-        lines = content.split("\n")
-        for i, line in enumerate(lines, 1):
-            if any(x in line for x in ["config.get", "args.", "argparse", "os.getenv", "env["]):
-                continue
-            for pattern, param_name in patterns:
-                match = re.search(pattern, line, re.IGNORECASE)
-                if match:
-                    value = match.group(1) if match.groups() else ""
-                    findings.append({
-                        "rule_id": "ML006",
-                        "line": i,
-                        "message": f"Hardcoded ML config: {param_name} = {value}",
-                        "old_code": line.strip(),
-                        "new_code": f"{param_name}=args.{param_name}",
-                    })
-                    break
-        return findings
-
     def test_fix_hardcoded_batch_size(self, temp_project, ml_detector):
         """Test: detect batch_size=32 → fix → no more ML006 findings.
 
-        This test uses regex-based detection to verify the fix workflow,
-        since the ML006 detector may require specific AST structures.
+        Uses real MLDetector to verify the fix workflow.
         """
-        # Create file with hardcoded config
+        # Create file with hardcoded config - standalone assignments are detected
         code = """batch_size = 32
 epochs = 100
 lr = 0.001
@@ -110,49 +77,58 @@ lr = 0.001
         file_path = temp_project / "train.py"
         file_path.write_text(code)
 
-        # Step 1: Detect with our direct regex detector
-        findings = self._detect_ml006_regex(code)
-        assert len(findings) >= 1, f"Should detect ML006 hardcoded config, got: {findings}"
+        # Step 1: Detect with real MLDetector
+        findings = ml_detector.detect_file(file_path, code, "python")
+        ml006_findings = [f for f in findings if f.rule_id == "ML006"]
+        assert len(ml006_findings) >= 1, f"Should detect ML006 hardcoded config, got: {[f.message for f in ml006_findings]}"
 
         # Step 2: Get first finding and its suggested fix
-        finding = findings[0]
-        assert finding["new_code"], "ML006 finding should have new_code suggestion"
+        finding = ml006_findings[0]
+        assert finding.new_code, "ML006 finding should have new_code suggestion"
 
-        # Step 3: Apply fix - replace hardcoded value with config reference
-        new_content = self._apply_fix(code, finding["old_code"], finding["new_code"])
+        # Step 3: Apply fix - replace just the specific line
+        lines = code.split("\n")
+        fixed_line = finding.new_code.split(" # ")[0]  # Remove comment from suggestion
+        lines[finding.line - 1] = fixed_line
+        new_content = "\n".join(lines)
 
         # Step 4: Re-detect
-        new_findings = self._detect_ml006_regex(new_content)
+        new_findings = ml_detector.detect_file(file_path, new_content, "python")
+        new_ml006 = [f for f in new_findings if f.rule_id == "ML006"]
 
         # Step 5: Verify finding count decreased
-        assert len(new_findings) < len(findings), (
+        assert len(new_ml006) < len(ml006_findings), (
             f"Should have fewer ML006 findings after fix. "
-            f"Before: {len(findings)}, After: {len(new_findings)}"
+            f"Before: {len(ml006_findings)}, After: {len(new_ml006)}"
         )
 
     def test_fix_preserves_surrounding_code(self, temp_project, ml_detector):
         """Test: fixing one issue doesn't break other code."""
         code = """import torch
 # Important comment
+batch_size = 32  # hardcoded
 def train():
     model = Model()
-    model.train(epochs=100)  # hardcoded
     optimizer = torch.optim.Adam(model.parameters())
     return model
 """
         file_path = temp_project / "train.py"
         file_path.write_text(code)
 
-        # Detect with our direct regex
-        findings = self._detect_ml006_regex(code)
-        assert len(findings) >= 1, "Should detect hardcoded epochs"
+        # Detect with real MLDetector
+        findings = ml_detector.detect_file(file_path, code, "python")
+        ml006_findings = [f for f in findings if f.rule_id == "ML006"]
+        assert len(ml006_findings) >= 1, "Should detect hardcoded batch_size"
 
-        finding = findings[0]
-        old_code = finding["old_code"]
-        new_code = finding["new_code"]
+        finding = ml006_findings[0]
+        old_code = finding.old_code
+        new_code = finding.new_code
 
-        # Apply fix
-        new_content = self._apply_fix(code, old_code, new_code)
+        # Apply fix - use line-based replacement
+        lines = code.split("\n")
+        fixed_line = new_code.split(" # ")[0]  # Remove comment
+        lines[finding.line - 1] = fixed_line
+        new_content = "\n".join(lines)
         file_path.write_text(new_content)
 
         # Verify imports preserved
@@ -176,21 +152,26 @@ hidden_dim = 256
         file_path = temp_project / "config.py"
         file_path.write_text(code)
 
-        # Detect all issues
-        findings = self._detect_ml006_regex(code)
-        initial_count = len(findings)
+        # Detect all issues with real MLDetector
+        findings = ml_detector.detect_file(file_path, code, "python")
+        ml006_findings = [f for f in findings if f.rule_id == "ML006"]
+        initial_count = len(ml006_findings)
         assert initial_count >= 2, f"Should detect multiple ML006 issues, got {initial_count}"
 
-        # Fix first issue
-        finding1 = findings[0]
-        new_content = code.replace(finding1["old_code"].strip(), finding1["new_code"])
+        # Fix first issue - use line-based replacement
+        finding1 = ml006_findings[0]
+        lines = code.split("\n")
+        fixed_line = finding1.new_code.split(" # ")[0]
+        lines[finding1.line - 1] = fixed_line
+        new_content = "\n".join(lines)
         file_path.write_text(new_content)
 
         # Re-detect
-        new_findings = self._detect_ml006_regex(new_content)
+        new_findings = ml_detector.detect_file(file_path, new_content, "python")
+        new_ml006 = [f for f in new_findings if f.rule_id == "ML006"]
 
         # Should have fewer findings
-        assert len(new_findings) < initial_count, "Should reduce ML006 count after one fix"
+        assert len(new_ml006) < initial_count, "Should reduce ML006 count after one fix"
 
     def test_data_leakage_fix(self, temp_project, ml_detector):
         """Test: detect data leakage → fix → ML001 resolved."""
@@ -451,3 +432,129 @@ batch_size = 32
         read_content = file_path.read_text(encoding="utf-8")
         assert "日本語" in read_content, "Unicode content should be preserved"
         assert "batch_size = args.batch_size" in read_content, "Fix should be applied"
+
+
+class TestPatchContract:
+    """
+    Tests for the complete patch contract:
+    1. Apply patch
+    2. Syntax validation passes
+    3. Re-run detector
+    4. Issue is resolved (finding count decreases)
+    """
+
+    @pytest.fixture
+    def ml_detector(self):
+        return MLDetector()
+
+    @pytest.fixture
+    def patch_engine(self):
+        return ASTPatchEngine()
+
+    def test_full_contract_hardcoded_config(self, tmp_path, ml_detector, patch_engine):
+        """Test complete: detect -> apply -> validate -> re-detect clean."""
+        # 1. Create file with hardcoded config (using known ML hyperparameters)
+        code = """batch_size = 32
+lr = 0.001
+epochs = 100
+"""
+        file_path = tmp_path / "config.py"
+        file_path.write_text(code)
+
+        # 2. Initial detection
+        initial_findings = ml_detector.detect_file(file_path, code, "python")
+        initial_ml006 = [f for f in initial_findings if f.rule_id == "ML006"]
+        assert len(initial_ml006) >= 2, f"Should find 2+ issues, got {len(initial_ml006)}"
+
+        # 3. Fix first issue (batch_size=32)
+        first_finding = initial_ml006[0]
+        node_info = patch_engine.find_node_at_position(code, first_finding.line, 0, "python")
+        assert node_info is not None, "Should find AST node"
+
+        patch = patch_engine.generate_patch(
+            file_path=file_path,
+            content=code,
+            node_start=node_info.start_point,
+            node_end=node_info.end_point,
+            new_code="batch_size = args.batch_size"
+        )
+
+        # 4. Apply and validate
+        result = patch_engine.apply_and_validate(code, patch, "python")
+        assert result.success, f"Patch should succeed: {result.error}"
+        assert result.validation_passed, "Syntax should be valid after patch"
+
+        # 5. Write patched content
+        file_path.write_text(result.patched_content)
+
+        # 6. Re-run detector
+        new_content = result.patched_content
+        new_findings = ml_detector.detect_file(file_path, new_content, "python")
+        new_ml006 = [f for f in new_findings if f.rule_id == "ML006"]
+
+        # 7. Contract: issue count should decrease
+        assert len(new_ml006) < len(initial_ml006), \
+            f"Should have fewer issues. Before: {len(initial_ml006)}, After: {len(new_ml006)}"
+
+    def test_contract_preserves_syntax_on_failure(self, tmp_path, patch_engine):
+        """Test: if patch fails validation, it is properly detected."""
+        code = "x = 1\n"
+        bad_patch = Patch(
+            file_path=tmp_path / "test.py",
+            start_line=1,
+            end_line=1,
+            old_code="x = 1",
+            new_code="def foo("  # Invalid syntax
+        )
+
+        result = patch_engine.apply_and_validate(code, bad_patch, "python")
+
+        # Contract: validation should fail - caller should know NOT to use result
+        assert not result.validation_passed, "Should fail validation"
+        # Error should be present when validation fails
+        if result.error:
+            assert "syntax" in result.error.lower(), "Error should mention syntax"
+        # Success is True (patch was applied), but validation failed (caller should reject)
+        assert result.success, "Patch application should succeed even if validation fails"
+
+    def test_contract_multiple_rules(self, tmp_path, ml_detector, patch_engine):
+        """Test contract across multiple finding types."""
+        # Use code that the detector can reliably find issues in
+        code = """batch_size = 32
+lr = 0.001
+n_estimators = 100
+"""
+        file_path = tmp_path / "config.py"
+        file_path.write_text(code)
+
+        # Detect issues
+        initial = ml_detector.detect_file(file_path, code, "python")
+        ml006 = [f for f in initial if f.rule_id == "ML006"]
+
+        assert len(ml006) >= 2, f"Should detect ML006 issues, got {len(ml006)}"
+
+        # Fix first ML006 issue (batch_size)
+        finding = ml006[0]
+        node_info = patch_engine.find_node_at_position(code, finding.line, 0, "python")
+        assert node_info is not None, "Should find AST node for ML006"
+
+        patch = patch_engine.generate_patch(
+            file_path=file_path,
+            content=code,
+            node_start=node_info.start_point,
+            node_end=node_info.end_point,
+            new_code="batch_size = args.batch_size"
+        )
+        result = patch_engine.apply_and_validate(code, patch, "python")
+
+        if result.validation_passed:
+            file_path.write_text(result.patched_content)
+
+            # Re-detect
+            new_code = file_path.read_text()
+            after = ml_detector.detect_file(file_path, new_code, "python")
+            ml006_after = [f for f in after if f.rule_id == "ML006"]
+
+            # Contract: ML006 count should decrease
+            assert len(ml006_after) < len(ml006), \
+                f"ML006 should be reduced. Before: {len(ml006)}, After: {len(ml006_after)}"

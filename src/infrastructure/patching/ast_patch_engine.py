@@ -205,7 +205,7 @@ class ASTPatchEngine:
                     start_byte=node.start_byte,
                     end_byte=node.end_byte,
                     start_point=node.start_point,
-                    end_point=node.end_byte,
+                    end_point=node.end_point,
                     text=node.text.decode("utf-8") if node.text else "",
                 )
         except Exception as e:

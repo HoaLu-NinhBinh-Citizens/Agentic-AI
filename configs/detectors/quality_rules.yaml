@@ -1,0 +1,168 @@
+# Quality Detection Rules Configuration
+# These rules detect code quality issues and anti-patterns
+
+quality_rules:
+  QUAL001:
+    name: "long-function"
+    enabled: true
+    severity: warning
+    confidence_threshold: 0.80
+    description: "Function exceeds recommended line limit"
+    max_lines_per_function: 50
+    fix_template: "# Break this function into smaller, focused functions\ndef process_data(data):\n    cleaned = clean_data(data)\n    validated = validate_data(cleaned)\n    return transform_data(validated)"
+    explanation: "Functions longer than 50 lines are harder to test and maintain"
+    cwe_id: "CWE-710"
+    tags:
+      - "quality"
+      - "complexity"
+      - "maintainability"
+      - "warning"
+
+  QUAL002:
+    name: "complex-function"
+    enabled: true
+    severity: warning
+    confidence_threshold: 0.75
+    description: "Function has high cyclomatic complexity"
+    max_cyclomatic_complexity: 10
+    fix_template: "# Simplify function by extracting complex logic\ndef handle_edge_case(data):\n    pass"
+    explanation: "High complexity functions are harder to test and maintain"
+    cwe_id: "CWE-710"
+    tags:
+      - "quality"
+      - "complexity"
+      - "cyclomatic"
+      - "warning"
+
+  QUAL003:
+    name: "too-many-arguments"
+    enabled: true
+    severity: warning
+    confidence_threshold: 0.80
+    description: "Function has too many parameters"
+    max_parameters: 5
+    fix_template: "# Use a configuration object or dataclass\n@dataclass\nclass ProcessConfig:\n    param1: str\n    param2: int\n    param3: bool\ndef process(config: ProcessConfig):\n    pass"
+    explanation: "Functions with more than 5 parameters are harder to call correctly"
+    cwe_id: "CWE-710"
+    tags:
+      - "quality"
+      - "api-design"
+      - "warning"
+
+  QUAL004:
+    name: "unused-import"
+    enabled: true
+    severity: info
+    confidence_threshold: 0.90
+    description: "Import statement is not used"
+    patterns:
+      - "import [a-zA-Z_]+"
+    fix_template: "# Remove unused imports"
+    explanation: "Unused imports increase load time and may indicate dead code"
+    cwe_id: "CWE-710"
+    tags:
+      - "quality"
+      - "imports"
+      - "cleanup"
+      - "info"
+
+  QUAL005:
+    name: "global-variable"
+    enabled: true
+    severity: warning
+    confidence_threshold: 0.85
+    description: "Use of global variables"
+    patterns:
+      - "global [a-zA-Z_]+"
+    fix_template: "# Use function parameters or a class to encapsulate state\nclass Config:\n    def __init__(self):\n        self.value = initial_value"
+    explanation: "Global variables make code harder to test and reason about"
+    cwe_id: "CWE-710"
+    tags:
+      - "quality"
+      - "state-management"
+      - "warning"
+
+  QUAL006:
+    name: "mutable-default-argument"
+    enabled: true
+    severity: warning
+    confidence_threshold: 0.85
+    description: "Mutable default argument can cause bugs"
+    patterns:
+      - 'def [a-zA-Z_]+\s*\([^)]*=\s*\['
+      - 'def [a-zA-Z_]+\s*\([^)]*=\s*\{'
+    fix_template: "# Use None as default and initialize inside function\ndef func(data=None):\n    if data is None:\n        data = []"
+    explanation: "Mutable defaults are shared across calls and can cause unexpected behavior"
+    cwe_id: "CWE-710"
+    tags:
+      - "quality"
+      - "python-idiom"
+      - "warning"
+
+  QUAL007:
+    name: "broad-except"
+    enabled: true
+    severity: warning
+    confidence_threshold: 0.85
+    description: "Catching too broad exception"
+    patterns:
+      - "except:"
+      - "except Exception:"
+    fix_template: "# Catch specific exceptions\ntry:\n    result = risky_operation()\nexcept ValueError as e:\n    handle_value_error(e)\nexcept ConnectionError as e:\n    handle_connection_error(e)"
+    explanation: "Broad exception catching can hide bugs and make debugging harder"
+    cwe_id: "CWE-710"
+    tags:
+      - "quality"
+      - "error-handling"
+      - "warning"
+
+  QUAL008:
+    name: "empty-except"
+    enabled: true
+    severity: error
+    confidence_threshold: 0.90
+    description: "Empty except block silently swallows errors"
+    patterns:
+      - "except:"
+    fix_template: "# Handle the exception properly\ntry:\n    result = risky_operation()\nexcept SpecificError as e:\n    logger.error(f\"Operation failed: {e}\")\n    raise"
+    explanation: "Empty except blocks hide errors and make debugging nearly impossible"
+    cwe_id: "CWE-703"
+    tags:
+      - "quality"
+      - "error-handling"
+      - "error"
+
+  QUAL009:
+    name: "todo-comment"
+    enabled: true
+    severity: info
+    confidence_threshold: 0.70
+    description: "TODO/FIXME comment found"
+    patterns:
+      - "TODO"
+      - "FIXME"
+      - "XXX"
+      - "HACK"
+    fix_template: "# Create a tracked issue for this task"
+    explanation: "TODO comments indicate incomplete work that should be tracked"
+    cwe_id: "CWE-710"
+    tags:
+      - "quality"
+      - "documentation"
+      - "info"
+
+  QUAL010:
+    name: "missing-docstring"
+    enabled: false
+    severity: info
+    confidence_threshold: 0.80
+    description: "Function/method missing docstring"
+    patterns:
+      - 'def [a-zA-Z_]+\s*\([^)]*\):'
+    fix_template: '# Add a docstring\ndef function_name(param):\n    """Short description."""'
+    explanation: "Functions should have docstrings to explain their purpose and usage"
+    cwe_id: "CWE-710"
+    tags:
+      - "quality"
+      - "documentation"
+      - "info"
