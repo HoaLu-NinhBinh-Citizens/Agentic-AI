@@ -1,12 +1,14 @@
 """Slash command parser and dispatcher — mimics Cursor's /command syntax.
 
 Supports:
-    /fix [@file[:line]] [--interactive]    — Show and apply fixes with optional interactive mode
-    /review [--files=FILES] [--focus=AREA]  — Run code review
-    /explain [@symbol]             — Explain a symbol, class, or function
-    /stats                        — Show review statistics
-    /rules [--enable=RULES] [--disable=RULES]  — Manage rule configuration
-    /help                         — Show available commands
+    /fix [@file[:line]] [--dry-run] [--apply] [--interactive]  — Show and apply fixes
+    /fix @file:line:end_line [options]                       — Range-based fix
+    /fix @file --rule=ML001                                  — Rule-specific fix
+    /review [--files=FILES] [--focus=AREA]                    — Run code review
+    /explain [@symbol]                                        — Explain a symbol, class, or function
+    /stats                                                   — Show review statistics
+    /rules [--enable=RULES] [--disable=RULES]                — Manage rule configuration
+    /help                                                    — Show available commands
 
 Syntax:
     /command arg1 arg2 --flag=value --flag2
@@ -518,9 +520,15 @@ async def _fallback_to_legacy_review(
 
 async def cmd_fix(ctx: CommandContext) -> CommandResult:
     """Show and apply fixes for a specific file or line using UnifiedReviewEngine.
-    
+
     Supports interactive mode with --interactive or -i flag for user confirmation
     before applying each fix.
+
+    Enhanced with FixCommandParser for Cursor-style commands:
+        /fix @file:line          - Fix at specific line
+        /fix @file:line:end      - Fix a range
+        /fix @file --rule=ML001  - Rule-specific fix
+        /fix @file --dry-run     - Preview without applying
     """
     from pathlib import Path
 
@@ -528,6 +536,34 @@ async def cmd_fix(ctx: CommandContext) -> CommandResult:
 
     if is_interactive:
         return await cmd_fix_interactive(ctx)
+
+    # Use FixCommandParser for enhanced command parsing (late import to avoid circular)
+    from src.interfaces.cli.commands.fix import FixCommandParser
+    parser = FixCommandParser()
+
+    # Reconstruct raw command for parser
+    raw = "/fix"
+    if ctx.primary_file:
+        raw += f" @{ctx.primary_file}"
+        if ctx.primary_line:
+            raw += f":{ctx.primary_line}"
+
+    # Add any rule filter
+    if ctx.raw_flags.get("rule"):
+        raw += f" --rule={ctx.raw_flags.get('rule')}"
+
+    cmd = parser.parse(raw)
+
+    if not cmd:
+        return CommandResult(
+            success=False,
+            output="Usage: /fix @filename[:line[:end_line]] [options]\n"
+                   "  /fix @src/main.py:42\n"
+                   "  /fix @src/main.py:42:50\n"
+                   "  /fix @src/main.py:42 --dry-run\n"
+                   "  /fix @src/main.py:42 --rule=ML001\n"
+                   "  /fix @src/main.py --apply",
+        )
 
     if not ctx.primary_file:
         return CommandResult(

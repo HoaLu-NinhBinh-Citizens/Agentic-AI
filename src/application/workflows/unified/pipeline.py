@@ -275,7 +275,7 @@ class UnifiedReviewPipeline:
             language=language,
         )
     
-    def _get_detectors(self -> list[tuple[str, Detector]]:
+    def _get_detectors(self) -> list[tuple[str, "Detector"]]:
         """Get all registered detectors."""
         return [(name, d) for name, d in self._registry._detectors.items()]
     

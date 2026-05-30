@@ -12,6 +12,7 @@ from typing import Optional, Union
 
 from src.core.fix_engine.models import Fix, FixBatch, FixResult, FixStatus
 from src.core.fix_engine.conflict_resolver import ConflictResolver
+from src.infrastructure.patching.diff_parser import ApplyResult
 
 logger = logging.getLogger(__name__)
 
@@ -29,6 +30,8 @@ class ApplyFixTool:
         self._backup_dir = self._workspace_root / BACKUP_DIR
         self._backup_dir.mkdir(parents=True, exist_ok=True)
         self.conflict_resolver = ConflictResolver()
+        # In-memory rollback store: fix_id -> original content
+        self._rollback_store: dict[str, str] = {}
 
     def _compute_hash(self, content: str) -> str:
         """Compute SHA256 hash prefix of content for backup naming."""
@@ -69,7 +72,10 @@ class ApplyFixTool:
             return False, str(exc)
 
     def apply_fix(self, fix: Fix) -> FixResult:
-        """Apply a single fix with backup and validation."""
+        """Apply a single fix with backup and validation.
+
+        Stores original content in _rollback_store for in-memory rollback.
+        """
         result = FixResult(fix_id=fix.id, success=False)
 
         try:
@@ -84,6 +90,9 @@ class ApplyFixTool:
                 result.error = f"old_text not found in {fix.file_path}"
                 fix.mark_failed()
                 return result
+
+            # Store original for in-memory rollback
+            self._rollback_store[fix.id] = current
 
             backup_path = self._create_backup(fix.file_path, current)
             result.backup_path = backup_path
@@ -178,9 +187,27 @@ class ApplyFixTool:
         return restored
 
     def rollback(self, results: list[FixResult]) -> int:
-        """Rollback fixes from a batch of results."""
+        """Rollback fixes from a batch of results.
+
+        Uses in-memory rollback store first, then falls back to backup files.
+        """
         restored = 0
         for result in reversed(results):
+            # Try in-memory rollback first
+            if result.fix_id in self._rollback_store:
+                try:
+                    for fix in self._find_fixes_by_backup(result.fix_id):
+                        full_path = self._workspace_root / fix.file_path
+                        full_path.write_text(self._rollback_store[result.fix_id], encoding="utf-8")
+                        fix.status = FixStatus.PENDING
+                        restored += 1
+                        logger.info("Rolled back fix %s (in-memory)", result.fix_id)
+                    del self._rollback_store[result.fix_id]
+                    continue
+                except Exception as e:
+                    logger.warning("In-memory rollback failed for %s: %s", result.fix_id, e)
+
+            # Fall back to backup file
             if result.has_backup:
                 parts = Path(result.backup_path).name.split("_", 1)
                 if len(parts) > 1:
@@ -190,6 +217,34 @@ class ApplyFixTool:
                             restored += 1
                             fix.status = FixStatus.PENDING
         return restored
+
+    def rollback_fix(self, fix_id: str) -> bool:
+        """Rollback a single fix by ID using in-memory store.
+
+        Args:
+            fix_id: The ID of the fix to rollback.
+
+        Returns:
+            True if rollback succeeded, False otherwise.
+        """
+        if fix_id not in self._rollback_store:
+            logger.warning("No rollback data found for fix_id: %s", fix_id)
+            return False
+
+        try:
+            # Find the fix in our known fixes (we'd need to track applied fixes)
+            # For now, use the backup path approach
+            fixes = self._find_fixes_by_backup(fix_id)
+            if fixes:
+                full_path = self._workspace_root / fixes[0].file_path
+                full_path.write_text(self._rollback_store[fix_id], encoding="utf-8")
+                del self._rollback_store[fix_id]
+                logger.info("Rolled back fix %s", fix_id)
+                return True
+        except Exception as e:
+            logger.error("Rollback failed for %s: %s", fix_id, e)
+
+        return False
 
     def _find_fixes_by_backup(self, fix_id: str) -> list[Fix]:
         """Find fixes by ID from backup directory (used for rollback).
@@ -294,10 +349,16 @@ class ApplyFixTool:
             if fix_option.old_code and fix_option.old_code in current:
                 new_content = current.replace(fix_option.old_code, fix_option.new_code, 1)
             elif fix_option.diff:
-                # Apply from diff
-                new_content = self._apply_diff(current, fix_option.diff)
+                # Apply from diff using the unified diff parser
+                from src.infrastructure.patching.diff_parser import UnifiedDiffParser
+                parser = UnifiedDiffParser()
+                try:
+                    new_content = parser.apply_diff(current, fix_option.diff, target_file)
+                except ValueError as e:
+                    result.error = str(e)
+                    return result
             else:
-                # No old_code, just append/prepend based on context
+                # No old_code, just use new_code directly
                 new_content = fix_option.new_code
 
             # Create backup before applying
@@ -316,32 +377,78 @@ class ApplyFixTool:
 
         return result
 
-    def _apply_diff(self, content: str, diff: str) -> str:
-        """Apply a unified diff to content.
+    def _apply_diff(
+        self,
+        file_path: str,
+        diff: str,
+    ) -> ApplyResult:
+        """Apply a unified diff to a file.
 
         Args:
-            content: Original content
-            diff: Unified diff string
+            file_path: Path to the file to modify.
+            diff: Unified diff string.
 
         Returns:
-            Modified content
+            ApplyResult with success status and details.
         """
-        import re
+        try:
+            full_path = self._workspace_root / file_path
+            if not full_path.exists():
+                return ApplyResult(
+                    success=False,
+                    file_path=file_path,
+                    error=f"File not found: {file_path}",
+                )
 
-        # Parse diff and apply changes
-        # This is a simplified implementation
-        lines = content.splitlines(keepends=True)
+            # Read current content
+            current = full_path.read_text(encoding="utf-8")
 
-        # Extract hunk ranges from diff
-        hunks = re.findall(r'@@ -(\d+),?(\d*) \+(\d+),?(\d*) @@', diff)
+            # Parse and apply diff
+            from src.infrastructure.patching.diff_parser import UnifiedDiffParser
 
-        for hunk in hunks:
-            old_start = int(hunk[0]) - 1  # Convert to 0-indexed
-            old_count = int(hunk[1]) if hunk[1] else 1
-            new_start = int(hunk[2]) - 1
-            # Process the diff lines for this hunk
+            parser = UnifiedDiffParser()
+            result = parser.parse(diff)
 
-        return content  # Placeholder - full diff parsing is complex
+            if not result.success:
+                return ApplyResult(
+                    success=False,
+                    file_path=file_path,
+                    error=f"Invalid diff: {result.error}",
+                )
+
+            # Apply hunks to content
+            content_lines = current.splitlines(keepends=False)
+            total_modified = 0
+
+            for file_diff in result.files:
+                # Skip if paths don't match (when diff contains different file)
+                if file_diff.new_path and file_diff.new_path != file_path:
+                    # Try with old_path too
+                    if file_diff.old_path != file_path:
+                        continue
+
+                for hunk in file_diff.hunks:
+                    content_lines = parser.apply_hunk(content_lines, hunk)
+                    total_modified += hunk.new_count
+
+            # Write back modified content
+            full_path.write_text("\n".join(content_lines), encoding="utf-8")
+
+            logger.info("Applied diff to %s (%d lines modified)", file_path, total_modified)
+
+            return ApplyResult(
+                success=True,
+                file_path=file_path,
+                lines_modified=total_modified,
+            )
+
+        except Exception as exc:
+            logger.error("Failed to apply diff to %s: %s", file_path, exc)
+            return ApplyResult(
+                success=False,
+                file_path=file_path,
+                error=str(exc),
+            )
 
     def apply_review_issue(
         self,

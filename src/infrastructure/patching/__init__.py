@@ -1,5 +1,13 @@
 """Patch infrastructure module."""
 
+from .diff_parser import (
+    UnifiedDiffParser,
+    DiffHunk,
+    ParsedFileDiff,
+    ParseResult,
+    ApplyResult,
+    create_parser,
+)
 from .patch_sandbox import (
     PatchSandbox,
     Patch,
@@ -26,6 +34,13 @@ from .ast_patch_engine import (
 )
 
 __all__ = [
+    # Diff parser
+    "UnifiedDiffParser",
+    "DiffHunk",
+    "ParsedFileDiff",
+    "ParseResult",
+    "ApplyResult",
+    "create_parser",
     # Patch sandbox
     "PatchSandbox",
     "Patch",

@@ -55,6 +55,11 @@ class Severity(Enum):
     LOW = ("low", 25, "🔵")
     INFO = ("info", 10, "⚪")
 
+    # Backward compatibility aliases for legacy code using ERROR/WARNING/HINT
+    ERROR = CRITICAL
+    WARNING = HIGH
+    HINT = INFO
+
     def __init__(self, value: str, weight: int, emoji: str) -> None:
         self._value = value
         self.weight = weight

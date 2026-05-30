@@ -16,52 +16,16 @@ from __future__ import annotations
 
 import difflib
 import re
-from dataclasses import dataclass
 from typing import Any, Optional
 
 from src.application.workflows.unified.code_context import CodeContext
 from src.application.workflows.unified.detector_base import Finding
+from src.domain.models.review_issue import FixOption
+from src.infrastructure.analysis.ml_detectors.fix_templates import get_template
 from src.shared.enums.severity import Severity, risk_to_unified
 
 # Backward compatibility alias
 FindingSeverity = Severity
-
-# ─── Fix Option ─────────────────────────────────────────────────────────────────
-
-
-@dataclass
-class FixOption:
-    """A single fix option with metadata.
-
-    Attributes:
-        description: Human-readable description of the fix
-        code_before: Original code
-        code_after: Fixed code
-        risk_level: Risk assessment ("low", "medium", "high")
-        confidence: Confidence in the fix (0.0-1.0)
-        diff: Optional diff string
-        rule_id: Associated rule ID
-    """
-    description: str
-    code_before: str
-    code_after: str
-    risk_level: str = "medium"
-    confidence: float = 1.0
-    diff: str = ""
-    rule_id: str = ""
-
-    def to_dict(self) -> dict[str, Any]:
-        """Convert to dictionary."""
-        return {
-            "description": self.description,
-            "code_before": self.code_before,
-            "code_after": self.code_after,
-            "risk_level": self.risk_level,
-            "confidence": self.confidence,
-            "diff": self.diff,
-            "rule_id": self.rule_id,
-        }
-
 
 # ─── Suggestion Engine ────────────────────────────────────────────────────────────
 
@@ -145,15 +109,20 @@ class SuggestionEngine:
         """
         options: list[FixOption] = []
 
-        # Get template fix
+        # Check if we have templates for this rule
+        if finding.rule_id.startswith("ML") and get_template(finding.rule_id):
+            options.extend(await self._generate_from_template(finding, context))
+
+        # Get template fix from finding
         if finding.fix:
             options.append(FixOption(
+                id=f"{finding.rule_id}-{finding.line}-fix",
+                title="Suggested fix",
                 description="Apply suggested fix",
-                code_before=self._get_affected_lines(finding, context),
-                code_after=self._apply_template_fix(finding, context),
-                risk_level=self._assess_template_risk(finding),
+                old_code=self._get_affected_lines(finding, context),
+                new_code=self._apply_template_fix(finding, context),
+                risk=self._string_to_severity(self._assess_template_risk(finding)),
                 confidence=finding.confidence,
-                rule_id=finding.rule_id,
             ))
 
         # Generate alternatives based on rule type
@@ -163,14 +132,70 @@ class SuggestionEngine:
             options.extend(await self._generate_quality_alternatives(finding, context))
         elif finding.rule_id.startswith("EMB"):
             options.extend(await self._generate_embedded_alternatives(finding, context))
-        elif finding.rule_id.startswith("ML"):
-            options.extend(await self._generate_ml_alternatives(finding, context))
 
         # Generate refactoring alternative if applicable
         if self._should_suggest_refactor(finding):
             options.append(self._generate_refactor_option(finding, context))
 
         return options
+
+    async def _generate_from_template(
+        self,
+        finding: Finding,
+        context: Optional[CodeContext],
+    ) -> list[FixOption]:
+        """Generate multiple fix options from template.
+
+        Args:
+            finding: Finding to fix
+            context: Code context
+
+        Returns:
+            List of fix options from template
+        """
+        templates = get_template(finding.rule_id)
+        if not templates:
+            return []
+
+        options: list[FixOption] = []
+        affected_lines = self._get_affected_lines(finding, context)
+
+        for idx, (key, template) in enumerate(templates.items()):
+            option_id = f"{finding.rule_id}-{finding.line}-{idx+1}"
+            risk_str = template.get("risk", "medium")
+            risk = self._string_to_severity(risk_str)
+            confidence = 0.9 if key == "primary" else 0.75
+
+            option = FixOption(
+                id=option_id,
+                title=template.get("title", "Suggested fix"),
+                description=template.get("description", ""),
+                old_code=affected_lines,
+                new_code=template.get("new_code", affected_lines),
+                risk=risk,
+                confidence=confidence,
+                tradeoff=template.get("tradeoff", ""),
+                test_recommendation=template.get("test_recommendation", ""),
+            )
+
+            # Set alternative_to for non-primary options
+            if key != "primary" and options:
+                # Link to primary option (first one)
+                options[0].alternative_to = option_id
+
+            options.append(option)
+
+        return options
+
+    def _string_to_severity(self, risk_str: str) -> Severity:
+        """Convert risk string to Severity enum."""
+        mapping = {
+            "low": Severity.LOW,
+            "medium": Severity.MEDIUM,
+            "high": Severity.HIGH,
+            "critical": Severity.CRITICAL,
+        }
+        return mapping.get(risk_str.lower(), Severity.MEDIUM)
 
     def _get_affected_lines(
         self,
@@ -252,50 +277,55 @@ class SuggestionEngine:
         if finding.rule_id == "SEC001":
             # Hardcoded secret - suggest env var
             options.append(FixOption(
-                description="Use environment variable",
-                code_before=self._extract_secret_assignment(finding, context),
-                code_after="import os\nSECRET = os.environ.get('SECRET_NAME', 'default')",
-                risk_level="low",
+                id="SEC001-1",
+                title="Use environment variable",
+                description="Use environment variable for secrets",
+                old_code=self._extract_secret_assignment(finding, context),
+                new_code="import os\nSECRET = os.environ.get('SECRET_NAME', 'default')",
+                risk=Severity.LOW,
                 confidence=0.95,
-                rule_id="SEC001",
             ))
             options.append(FixOption(
-                description="Use secrets manager",
-                code_before=self._extract_secret_assignment(finding, context),
-                code_after="# Use AWS Secrets Manager / Vault / etc.\nfrom your_secret_manager import get_secret\nSECRET = get_secret('secret-name')",
-                risk_level="low",
+                id="SEC001-2",
+                title="Use secrets manager",
+                description="Use a secrets manager for secrets",
+                old_code=self._extract_secret_assignment(finding, context),
+                new_code="# Use AWS Secrets Manager / Vault / etc.\nfrom your_secret_manager import get_secret\nSECRET = get_secret('secret-name')",
+                risk=Severity.LOW,
                 confidence=0.9,
-                rule_id="SEC001",
             ))
 
         elif finding.rule_id == "SEC002":
             # SQL injection
             options.append(FixOption(
-                description="Use parameterized query",
-                code_before="cursor.execute(f'SELECT * FROM users WHERE id = {user_id}')",
-                code_after="cursor.execute('SELECT * FROM users WHERE id = %s', (user_id,))",
-                risk_level="low",
+                id="SEC002-1",
+                title="Use parameterized query",
+                description="Use parameterized queries to prevent SQL injection",
+                old_code="cursor.execute(f'SELECT * FROM users WHERE id = {user_id}')",
+                new_code="cursor.execute('SELECT * FROM users WHERE id = %s', (user_id,))",
+                risk=Severity.LOW,
                 confidence=0.98,
-                rule_id="SEC002",
             ))
 
         elif finding.rule_id == "SEC003":
             # Command injection
             options.append(FixOption(
-                description="Use shell=False",
-                code_before="subprocess.run(cmd, shell=True)",
-                code_after="subprocess.run(cmd.split(), shell=False)",
-                risk_level="medium",
+                id="SEC003-1",
+                title="Use shell=False",
+                description="Disable shell to prevent command injection",
+                old_code="subprocess.run(cmd, shell=True)",
+                new_code="subprocess.run(cmd.split(), shell=False)",
+                risk=Severity.MEDIUM,
                 confidence=0.9,
-                rule_id="SEC003",
             ))
             options.append(FixOption(
-                description="Use list of arguments",
-                code_before="subprocess.run(cmd, shell=True)",
-                code_after="subprocess.run(['/path/to/cmd', '--arg1', arg1], shell=False)",
-                risk_level="low",
+                id="SEC003-2",
+                title="Use list of arguments",
+                description="Pass arguments as list to prevent injection",
+                old_code="subprocess.run(cmd, shell=True)",
+                new_code="subprocess.run(['/path/to/cmd', '--arg1', arg1], shell=False)",
+                risk=Severity.LOW,
                 confidence=0.95,
-                rule_id="SEC003",
             ))
 
         return options
@@ -319,45 +349,49 @@ class SuggestionEngine:
         if finding.rule_id == "QUAL001":
             # Long function
             options.append(FixOption(
-                description="Extract helper functions",
-                code_before="# Long function...",
-                code_after="# Extract to helper functions\ndef _process_chunk(data):\n    ...\n\ndef main_function(data):\n    for chunk in chunks:\n        _process_chunk(chunk)",
-                risk_level="medium",
+                id="QUAL001-1",
+                title="Extract helper functions",
+                description="Break down long function into smaller helper functions",
+                old_code="# Long function...",
+                new_code="# Extract to helper functions\ndef _process_chunk(data):\n    ...\n\ndef main_function(data):\n    for chunk in chunks:\n        _process_chunk(chunk)",
+                risk=Severity.MEDIUM,
                 confidence=0.8,
-                rule_id="QUAL001",
             ))
 
         elif finding.rule_id == "QUAL003":
             # Broad except
             options.append(FixOption(
-                description="Catch specific exception",
-                code_before="except:",
-                code_after="except ValueError as e:\n    logger.error(f'Value error: {e}')",
-                risk_level="low",
+                id="QUAL003-1",
+                title="Catch specific exception",
+                description="Catch specific exception types instead of broad except",
+                old_code="except:",
+                new_code="except ValueError as e:\n    logger.error(f'Value error: {e}')",
+                risk=Severity.LOW,
                 confidence=0.95,
-                rule_id="QUAL003",
             ))
 
         elif finding.rule_id == "QUAL006":
             # Print statement
             options.append(FixOption(
-                description="Use logging module",
-                code_before="print('message')",
-                code_after="import logging\nlogger = logging.getLogger(__name__)\nlogger.info('message')",
-                risk_level="low",
+                id="QUAL006-1",
+                title="Use logging module",
+                description="Replace print statements with proper logging",
+                old_code="print('message')",
+                new_code="import logging\nlogger = logging.getLogger(__name__)\nlogger.info('message')",
+                risk=Severity.LOW,
                 confidence=0.9,
-                rule_id="QUAL006",
             ))
 
         elif finding.rule_id == "QUAL007":
             # Magic number
             options.append(FixOption(
-                description="Define named constant",
-                code_before="if size > 4096:",
-                code_after="MAX_BUFFER_SIZE = 4096\nif size > MAX_BUFFER_SIZE:",
-                risk_level="low",
+                id="QUAL007-1",
+                title="Define named constant",
+                description="Replace magic numbers with named constants",
+                old_code="if size > 4096:",
+                new_code="MAX_BUFFER_SIZE = 4096\nif size > MAX_BUFFER_SIZE:",
+                risk=Severity.LOW,
                 confidence=0.9,
-                rule_id="QUAL007",
             ))
 
         return options
@@ -381,93 +415,49 @@ class SuggestionEngine:
         if finding.rule_id == "EMB001":
             # NULL dereference
             options.append(FixOption(
-                description="Add NULL check",
-                code_before="ptr->value",
-                code_after="if (ptr != NULL) {\n    ptr->value;\n}",
-                risk_level="low",
+                id="EMB001-1",
+                title="Add NULL check",
+                description="Add NULL check before dereferencing pointer",
+                old_code="ptr->value",
+                new_code="if (ptr != NULL) {\n    ptr->value;\n}",
+                risk=Severity.LOW,
                 confidence=0.95,
-                rule_id="EMB001",
             ))
 
         elif finding.rule_id == "EMB004":
             # Buffer overflow
             options.append(FixOption(
-                description="Use safe string function",
-                code_before="strcpy(dest, src)",
-                code_after="strncpy(dest, src, sizeof(dest) - 1);\ndest[sizeof(dest) - 1] = '\\0';",
-                risk_level="low",
+                id="EMB004-1",
+                title="Use safe string function",
+                description="Use safe string functions to prevent buffer overflow",
+                old_code="strcpy(dest, src)",
+                new_code="strncpy(dest, src, sizeof(dest) - 1);\ndest[sizeof(dest) - 1] = '\\0';",
+                risk=Severity.LOW,
                 confidence=0.95,
-                rule_id="EMB004",
             ))
 
         elif finding.rule_id == "EMB007":
             # ISR blocking
             options.append(FixOption(
-                description="Use non-blocking pattern",
-                code_before="HAL_Delay(100);",
-                code_after="/* Set flag for main loop to handle */\nflag_set = 1;",
-                risk_level="medium",
+                id="EMB007-1",
+                title="Use non-blocking pattern",
+                description="Use non-blocking pattern in ISR",
+                old_code="HAL_Delay(100);",
+                new_code="/* Set flag for main loop to handle */\nflag_set = 1;",
+                risk=Severity.MEDIUM,
                 confidence=0.9,
-                rule_id="EMB007",
             ))
 
         elif finding.rule_id == "EMB014":
             # Stack overflow
             options.append(FixOption(
-                description="Use static allocation",
-                code_before="uint8_t buffer[8192];",
-                code_after="static uint8_t buffer[8192];  /* Placed in .bss section */",
-                risk_level="low",
+                id="EMB014-1",
+                title="Use static allocation",
+                description="Use static allocation for large buffers",
+                old_code="uint8_t buffer[8192];",
+                new_code="static uint8_t buffer[8192];  /* Placed in .bss section */",
+                risk=Severity.LOW,
                 confidence=0.95,
-                rule_id="EMB014",
-            ))
-
-        return options
-
-    async def _generate_ml_alternatives(
-        self,
-        finding: Finding,
-        context: Optional[CodeContext],
-    ) -> list[FixOption]:
-        """Generate ML-specific alternatives.
-
-        Args:
-            finding: ML finding
-            context: Code context
-
-        Returns:
-            List of fix options
-        """
-        options: list[FixOption] = []
-
-        if finding.rule_id == "ML001":
-            # Dead code
-            options.append(FixOption(
-                description="Mark as deprecated",
-                code_before="def unused_func():",
-                code_after="@deprecated('This function will be removed in v2.0')\ndef unused_func():",
-                risk_level="low",
-                confidence=0.85,
-                rule_id="ML001",
-            ))
-            options.append(FixOption(
-                description="Remove unused function",
-                code_before="def unused_func():...\n\ndef used_func():",
-                code_after="def used_func():",
-                risk_level="medium",
-                confidence=0.9,
-                rule_id="ML001",
-            ))
-
-        elif finding.rule_id == "ML002":
-            # Unused parameter
-            options.append(FixOption(
-                description="Prefix with underscore",
-                code_before="def func(unused_param):",
-                code_after="def func(_unused_param):",
-                risk_level="low",
-                confidence=0.95,
-                rule_id="ML002",
             ))
 
         return options
@@ -499,12 +489,13 @@ class SuggestionEngine:
             Refactoring fix option
         """
         return FixOption(
+            id=f"{finding.rule_id}-refactor",
+            title="Refactor for maintainability",
             description="Consider refactoring for better maintainability",
-            code_before="",
-            code_after="# Refactoring suggestions:\n# 1. Extract to smaller functions\n# 2. Use design patterns where appropriate\n# 3. Add unit tests for complex logic",
-            risk_level="medium",
+            old_code="",
+            new_code="# Refactoring suggestions:\n# 1. Extract to smaller functions\n# 2. Use design patterns where appropriate\n# 3. Add unit tests for complex logic",
+            risk=Severity.MEDIUM,
             confidence=0.7,
-            rule_id=finding.rule_id,
         )
 
     def _assess_overall_risk(self, options: list[FixOption]) -> str:

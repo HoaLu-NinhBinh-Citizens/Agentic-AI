@@ -171,7 +171,7 @@ class UnifiedFormatter(ABC):
             Severity.LOW: "🔵 LOW",
             Severity.INFO: "⚪ INFO",
         }
-        return badges.get(severity, str(severity.label))
+        return badges.get(severity, str(severity.value))
 
 
 class UnifiedMarkdownFormatter(UnifiedFormatter):
@@ -334,13 +334,25 @@ class UnifiedMarkdownFormatter(UnifiedFormatter):
             
             # Show fix options
             if issue.fixes:
-                lines.append("**Fix Options:**")
-                for j, fix in enumerate(issue.fixes, 1):
-                    risk_icon = "✅" if fix.is_safe else "⚠️"
-                    lines.append(f"{j}. {risk_icon} **{fix.title}**")
-                    if fix.description:
-                        lines.append(f"   - {fix.description}")
-                lines.append("")
+                if len(issue.fixes) == 1:
+                    # Single fix option
+                    fix = issue.fixes[0]
+                    lines.append("**Fix:**")
+                    lines.append(f"```python\n{fix.new_code}\n```")
+                    if fix.tradeoff:
+                        lines.append(f"*Tradeoff:* {fix.tradeoff}")
+                else:
+                    # Multiple fix options
+                    lines.append("**Fix Options:**")
+                    for j, fix in enumerate(issue.fixes, 1):
+                        risk_icon = "✅" if fix.is_safe else "⚠️"
+                        lines.append(f"\n##### Option {j}: {risk_icon} {fix.title}")
+                        if fix.tradeoff:
+                            lines.append(f"*Tradeoff:* {fix.tradeoff}")
+                        lines.append(f"\n```python\n{fix.new_code}\n```")
+                        if fix.test_recommendation:
+                            lines.append(f"\n*Test:* {fix.test_recommendation}")
+                    lines.append("")
             
             # Show CWE reference
             if issue.cwe_id:

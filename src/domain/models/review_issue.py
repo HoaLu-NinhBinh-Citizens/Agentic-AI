@@ -132,6 +132,11 @@ class FixOption:
     rollback_command: str = ""
     tests_to_run: list[str] = field(default_factory=list)
     
+    # Multi-option fields
+    tradeoff: str = ""  # Explanation of tradeoffs
+    alternative_to: Optional[str] = None  # ID of alternative this replaces
+    test_recommendation: str = ""  # Tests to run after applying
+    
     def __post_init__(self) -> None:
         if not self.diff and self.old_code and self.new_code:
             self.diff = self._generate_diff()
@@ -168,6 +173,9 @@ class FixOption:
             "apply_command": self.apply_command,
             "rollback_command": self.rollback_command,
             "tests_to_run": self.tests_to_run,
+            "tradeoff": self.tradeoff,
+            "alternative_to": self.alternative_to,
+            "test_recommendation": self.test_recommendation,
         }
 
 
@@ -309,12 +317,26 @@ class ReviewIssue:
         
         # Fix options
         if self.fixes:
-            lines.append("**Fix Options:**")
-            for i, fix in enumerate(self.fixes, 1):
-                risk_icon = "✅" if fix.is_safe else "⚠️"
-                lines.append(f"{i}. {risk_icon} **{fix.title}**")
-                if fix.description:
-                    lines.append(f"   - {fix.description}")
+            if len(self.fixes) == 1:
+                fix = self.fixes[0]
+                lines.append("**Fix:**")
+                lines.append("```python")
+                lines.append(fix.new_code)
+                lines.append("```")
+                if fix.tradeoff:
+                    lines.append(f"*Tradeoff:* {fix.tradeoff}")
+            else:
+                lines.append("**Fix Options:**")
+                for i, fix in enumerate(self.fixes, 1):
+                    risk_icon = "✅" if fix.is_safe else "⚠️"
+                    lines.append(f"\n{i}. {risk_icon} **{fix.title}**")
+                    if fix.tradeoff:
+                        lines.append(f"   - Tradeoff: {fix.tradeoff}")
+                    lines.append("```python")
+                    lines.append(fix.new_code)
+                    lines.append("```")
+                    if fix.test_recommendation:
+                        lines.append(f"   - Test: {fix.test_recommendation}")
             lines.append("")
         
         # CWE reference
@@ -394,6 +416,9 @@ class ReviewIssue:
                 apply_command=fix_data.get("apply_command", ""),
                 rollback_command=fix_data.get("rollback_command", ""),
                 tests_to_run=fix_data.get("tests_to_run", []),
+                tradeoff=fix_data.get("tradeoff", ""),
+                alternative_to=fix_data.get("alternative_to"),
+                test_recommendation=fix_data.get("test_recommendation", ""),
             ))
         
         return cls(
