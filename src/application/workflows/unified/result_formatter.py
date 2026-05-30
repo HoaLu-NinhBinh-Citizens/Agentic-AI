@@ -24,23 +24,6 @@ from typing import Any, Optional
 
 from src.domain.models.review_issue import ReviewIssue, Severity, FixOption
 
-# Backward compatibility aliases for old code that imports from result_formatter
-from src.application.workflows.unified.detector_base import Finding, FindingSeverity
-from src.infrastructure.reporting.markdown_report import PipelineStats as LegacyPipelineStats
-
-# Aliases for backward compatibility
-PipelineStats = LegacyPipelineStats
-
-# Alias old formatter classes to the new unified ones
-UnifiedMarkdownFormatter = UnifiedMarkdownFormatter
-UnifiedJsonFormatter = UnifiedJsonFormatter
-UnifiedConsoleFormatter = UnifiedConsoleFormatter
-UnifiedFormatter = UnifiedFormatter
-MarkdownFormatter = UnifiedMarkdownFormatter  # Old name
-JsonFormatter = UnifiedJsonFormatter
-ConsoleFormatter = UnifiedConsoleFormatter
-ResultFormatter = UnifiedFormatter
-
 
 @dataclass
 class UnifiedPipelineStats:
@@ -576,3 +559,19 @@ def get_formatter(format_type: str) -> UnifiedFormatter:
     
     formatter_class = formatters.get(format_type.lower(), UnifiedMarkdownFormatter)
     return formatter_class()
+
+
+# =============================================================================
+# Backward Compatibility Aliases
+# =============================================================================
+
+# Import for backward compatibility
+from src.application.workflows.unified.detector_base import Finding, FindingSeverity
+from src.infrastructure.reporting.markdown_report import PipelineStats as LegacyPipelineStats
+
+# Alias old names to new unified classes
+PipelineStats = LegacyPipelineStats
+MarkdownFormatter = UnifiedMarkdownFormatter  # Old name
+JsonFormatter = UnifiedJsonFormatter
+ConsoleFormatter = UnifiedConsoleFormatter
+ResultFormatter = UnifiedFormatter  # Old base class name

@@ -210,12 +210,13 @@ class TestUnifiedSuggestionEngine:
     @pytest.mark.asyncio
     async def test_template_fix_generation(self, engine):
         """Test template-based fix generation."""
-        from src.application.workflows.unified.detector_base import Finding, FindingSeverity
+        from src.application.workflows.unified.detector_base import Finding
+        from src.shared.enums.severity import Severity
 
         finding = Finding(
             rule_id="QUAL003",
             rule_name="Broad Except",
-            severity=FindingSeverity.WARNING,
+            severity=Severity.HIGH,  # Unified: HIGH instead of WARNING
             file="test.py",
             line=10,
             end_line=10,
@@ -236,12 +237,13 @@ class TestUnifiedSuggestionEngine:
     @pytest.mark.asyncio
     async def test_multiple_options_generated(self, engine):
         """Test that multiple fix options are generated."""
-        from src.application.workflows.unified.detector_base import Finding, FindingSeverity
+        from src.application.workflows.unified.detector_base import Finding
+        from src.shared.enums.severity import Severity
 
         finding = Finding(
             rule_id="SEC001",
             rule_name="Hardcoded Secret",
-            severity=FindingSeverity.ERROR,
+            severity=Severity.CRITICAL,  # Unified: CRITICAL instead of ERROR
             file="test.py",
             line=5,
             end_line=5,
@@ -262,12 +264,13 @@ class TestUnifiedSuggestionEngine:
         )
         engine = UnifiedSuggestionEngine(config=config)
 
-        from src.application.workflows.unified.detector_base import Finding, FindingSeverity
+        from src.application.workflows.unified.detector_base import Finding
+        from src.shared.enums.severity import Severity
 
         finding = Finding(
             rule_id="QUAL003",
             rule_name="Broad Except",
-            severity=FindingSeverity.WARNING,
+            severity=Severity.HIGH,  # Unified: HIGH instead of WARNING
             file="test.py",
             line=10,
             end_line=10,
