@@ -14,6 +14,8 @@ src/agent/planner.py
 src/agent/state.py
 src/agentic_ai/__init__.py
 src/agentic_ai/cli.py
+src/agentic_ai/codegraph_client.py
+src/agentic_ai/codegraph_tools.py
 src/app/aikicad_orchestrator.py
 src/app/api_server.py
 src/app/embedded_agent.py
@@ -242,9 +244,6 @@ src/core/multi_agent/coordination/archivable_dlq.py
 src/core/multi_agent/coordination/automated_mitigation.py
 src/core/multi_agent/coordination/backpressure.py
 src/core/multi_agent/coordination/batch_idempotency.py
-src/core/multi_agent/coordination/byzantine_protection.py
-src/core/multi_agent/coordination/cdc_consistency.py
-src/core/multi_agent/coordination/chaos_secrets.py
 src/core/multi_agent/coordination/circuit_breaker.py
 src/core/multi_agent/coordination/config.py
 src/core/multi_agent/coordination/consistent_policy_cache.py
@@ -252,18 +251,11 @@ src/core/multi_agent/coordination/coordinator.py
 src/core/multi_agent/coordination/cross_region_retry.py
 src/core/multi_agent/coordination/dead_letter_alert.py
 src/core/multi_agent/coordination/deterministic_scheduler.py
-src/core/multi_agent/coordination/enhanced_chaos_audit.py
-src/core/multi_agent/coordination/enhanced_governance.py
-src/core/multi_agent/coordination/enhanced_health.py
-src/core/multi_agent/coordination/enhanced_leader_election.py
-src/core/multi_agent/coordination/enhanced_saga.py
-src/core/multi_agent/coordination/enhanced_sandbox.py
 src/core/multi_agent/coordination/execution_semantics.py
 src/core/multi_agent/coordination/fair_share_quota.py
 src/core/multi_agent/coordination/governance.py
 src/core/multi_agent/coordination/health.py
 src/core/multi_agent/coordination/hierarchical_quota.py
-src/core/multi_agent/coordination/injection_explainer.py
 src/core/multi_agent/coordination/leader_election.py
 src/core/multi_agent/coordination/message_ordering.py
 src/core/multi_agent/coordination/network_load.py
@@ -275,8 +267,6 @@ src/core/multi_agent/coordination/readonly_follower.py
 src/core/multi_agent/coordination/resource_scheduling.py
 src/core/multi_agent/coordination/retry_coordination.py
 src/core/multi_agent/coordination/safe_injection.py
-src/core/multi_agent/coordination/safety_formal.py
-src/core/multi_agent/coordination/saga_compensation.py
 src/core/multi_agent/coordination/scalable_rate_limiter.py
 src/core/multi_agent/coordination/schema_evolution.py
 src/core/multi_agent/coordination/secure_workspace.py
@@ -285,7 +275,6 @@ src/core/multi_agent/coordination/snapshotter.py
 src/core/multi_agent/coordination/tenant_isolation.py
 src/core/multi_agent/coordination/types.py
 src/core/multi_agent/coordination/versioned_claim.py
-src/core/multi_agent/coordination/worm_archive.py
 src/core/orchestration/__init__.py
 src/core/orchestration/langgraph_agent.py
 src/core/orchestration/langgraph_workflow.py
@@ -306,7 +295,6 @@ src/core/runtime/__init__.py
 src/core/runtime/admission.py
 src/core/runtime/admission_control.py
 src/core/runtime/backpressure.py
-src/core/runtime/cancellation.py
 src/core/runtime/circuit_breaker.py
 src/core/runtime/controller.py
 src/core/runtime/dead_letter_queue.py
@@ -315,7 +303,6 @@ src/core/runtime/deterministic_replay_contract.py
 src/core/runtime/dispatcher.py
 src/core/runtime/dlq.py
 src/core/runtime/execution_tracker.py
-src/core/runtime/idempotency.py
 src/core/runtime/introspector.py
 src/core/runtime/journal.py
 src/core/runtime/kernel.py
@@ -323,7 +310,6 @@ src/core/runtime/replayer.py
 src/core/runtime/resource_governor.py
 src/core/runtime/retry_policy.py
 src/core/runtime/runtime_manager.py
-src/core/runtime/scheduler.py
 src/core/runtime/tool_isolation.py
 src/core/runtime/admission_control/__init__.py
 src/core/runtime/cancellation/__init__.py
@@ -346,7 +332,6 @@ src/core/runtime/enterprise/rbac_approval.py
 src/core/runtime/enterprise/state_machine.py
 src/core/runtime/enterprise/sticky_execution.py
 src/core/runtime/enterprise/workflow_sharding.py
-src/core/runtime/idempotency/__init__.py
 src/core/runtime/retry_policy/__init__.py
 src/core/runtime/scheduler/__init__.py
 src/core/runtime/workflow/__init__.py
@@ -560,10 +545,7 @@ src/domains/review/__init__.py
 src/domains/review/audit.py
 src/domains/runtime/__init__.py
 src/domains/runtime/board_profile.py
-src/domains/runtime/controller.py
 src/domains/runtime/dlq.py
-src/domains/runtime/journal.py
-src/domains/runtime/replayer.py
 src/domains/safety/__init__.py
 src/domains/schema_validator/__init__.py
 src/domains/validation/__init__.py
@@ -1049,11 +1031,13 @@ src/shared/protocols/__init__.py
 src/shared/utils/__init__.py
 src/shared/validators/__init__.py
 src/tools/__init__.py
+src/tools/audit.py
 src/tools/cache.py
 src/tools/context.py
 src/tools/executor.py
 src/tools/flash_tools.py
 src/tools/registry.py
+src/tools/sandbox.py
 src/tools/schema.py
 tests/test_agent_control_flow.py
 tests/test_agent_executor.py

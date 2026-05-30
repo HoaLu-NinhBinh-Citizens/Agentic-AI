@@ -7,22 +7,22 @@ from datetime import datetime
 
 import pytest
 
-from src.distributed.registry import (
+from src.infrastructure.distributed.registry import (
     AgentRegistry,
     AgentInfo,
     AgentStatus,
 )
-from src.distributed.message import (
+from src.infrastructure.distributed.message import (
     AgentMessage,
     MessageType,
     MessagePriority,
     MessageBuilder,
 )
-from src.distributed.load_balancer import (
+from src.infrastructure.distributed.load_balancer import (
     LoadBalancer,
     LoadBalancingStrategy,
 )
-from src.distributed.consensus import (
+from src.infrastructure.distributed.consensus import (
     ConsensusModule,
     ConsensusState,
 )

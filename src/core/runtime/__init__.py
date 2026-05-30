@@ -27,20 +27,14 @@ class _LazyLoader:
     """Lazy loading wrapper for Phase 15 modules."""
 
     _phase15_imports = {
-        "RuntimeController": ("src.domains.runtime.controller", "RuntimeController"),
-        "RuntimeState": ("src.domains.runtime.controller", "RuntimeState"),
-        "LifecycleEvent": ("src.domains.runtime.controller", "LifecycleEvent"),
-        "EventJournal": ("src.domains.runtime.journal", "EventJournal"),
-        "JournalEntry": ("src.domains.runtime.journal", "JournalEntry"),
-        "JournalPartition": ("src.domains.runtime.journal", "JournalPartition"),
-        "PartitionStrategy": ("src.domains.runtime.journal", "PartitionStrategy"),
+        # Note: RuntimeController, EventJournal, EventReplayer live in src.core.runtime
+        # (not src.domains.runtime) — those stubs were deleted as Phase 15 duplicates.
+        # Keeping stub imports here would cause ImportError; the active implementations
+        # in src/core/runtime/ are the authoritative sources.
         "DeadLetterQueue": ("src.domains.runtime.dlq", "DeadLetterQueue"),
         "DLQEntry": ("src.domains.runtime.dlq", "DLQEntry"),
         "DLQReason": ("src.domains.runtime.dlq", "DLQReason"),
         "DLQStatus": ("src.domains.runtime.dlq", "DLQStatus"),
-        "EventReplayer": ("src.domains.runtime.replayer", "EventReplayer"),
-        "ReplayResult": ("src.domains.runtime.replayer", "ReplayResult"),
-        "ReplayFilter": ("src.domains.runtime.replayer", "ReplayFilter"),
         "TaskScheduler": ("src.core.scheduler", "TaskScheduler"),
         "CircuitBreaker": ("src.domains.runtime.circuit_breaker", "CircuitBreaker"),
     }
@@ -69,27 +63,5 @@ def __getattr__(name: str):
 
 
 # Also expose under core.runtime namespace for backward compatibility
-sys.modules['core.runtime'].RuntimeController = property(
-    lambda self: _lazy_loader.__getattr__("RuntimeController")
-)
-sys.modules['core.runtime'].RuntimeState = property(
-    lambda self: _lazy_loader.__getattr__("RuntimeState")
-)
-sys.modules['core.runtime'].LifecycleEvent = property(
-    lambda self: _lazy_loader.__getattr__("LifecycleEvent")
-)
-sys.modules['core.runtime'].EventJournal = property(
-    lambda self: _lazy_loader.__getattr__("EventJournal")
-)
-sys.modules['core.runtime'].DeadLetterQueue = property(
-    lambda self: _lazy_loader.__getattr__("DeadLetterQueue")
-)
-sys.modules['core.runtime'].EventReplayer = property(
-    lambda self: _lazy_loader.__getattr__("EventReplayer")
-)
-sys.modules['core.runtime'].TaskScheduler = property(
-    lambda self: _lazy_loader.__getattr__("TaskScheduler")
-)
-sys.modules['core.runtime'].CircuitBreaker = property(
-    lambda self: _lazy_loader.__getattr__("CircuitBreaker")
-)
+# Note: RuntimeController, EventJournal, EventReplayer and related types
+# live in src/core/runtime/*.py directly — not lazy-loaded from src.domains.runtime.

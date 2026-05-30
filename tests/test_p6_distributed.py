@@ -21,14 +21,14 @@ from dataclasses import dataclass, field
 
 sys.path.insert(0, "C:/Users/thang/Desktop/carv")
 
-from src.distributed.consensus import (
+from src.infrastructure.distributed.consensus import (
     ConsensusModule,
     ConsensusConfig,
     ConsensusState,
     Vote,
     LogEntry,
 )
-from src.distributed.message import (
+from src.infrastructure.distributed.message import (
     AgentMessage,
     MessageType,
     MessagePriority,

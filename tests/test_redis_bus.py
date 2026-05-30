@@ -8,7 +8,7 @@ import pytest
 import asyncio
 from unittest.mock import MagicMock, AsyncMock, patch
 
-from src.distributed.redis_bus import (
+from src.infrastructure.distributed.redis_bus import (
     RedisEventBus,
     RedisEventBusConfig,
     EventBusProtocol,

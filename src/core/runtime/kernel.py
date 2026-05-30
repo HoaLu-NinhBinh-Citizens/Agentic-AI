@@ -51,7 +51,7 @@ KERNEL_BOUNDARY = {
     "runtime/admission": KernelBoundary.KERNEL,
     "runtime/cancellation": KernelBoundary.KERNEL,
     "runtime/backpressure": KernelBoundary.KERNEL,
-    "runtime/idempotency": KernelBoundary.KERNEL,
+    "execution/idempotency": KernelBoundary.KERNEL,
     "scheduler/": KernelBoundary.KERNEL,
     # EXTENSION: Optional, loadable
     "llm/": KernelBoundary.EXTENSION,
@@ -89,7 +89,7 @@ KERNEL_MODULES = [
     "runtime/admission.py",
     "runtime/cancellation.py",
     "runtime/backpressure.py",
-    "runtime/idempotency.py",
+    "execution/idempotency.py",
     "scheduler/task_scheduler.py",
 ]
 
