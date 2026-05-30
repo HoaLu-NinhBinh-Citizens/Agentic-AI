@@ -451,12 +451,14 @@ class SafeTreeSitterIndexer:
         start = time.monotonic()
         symbols: list[dict[str, Any]] = []
         used_parser = False
+        ast_root = None
 
         parser = _get_parser(language)
         if parser is not None:
             try:
                 tree = parser.parse(source_bytes)
-                symbols = _extract_symbols(tree.root_node, language, source_bytes)
+                ast_root = tree.root_node
+                symbols = _extract_symbols(ast_root, language, source_bytes)
                 used_parser = True
             except Exception as e:
                 logger.debug("tree_sitter_parse_fallback", path=path, error=str(e))
@@ -472,6 +474,7 @@ class SafeTreeSitterIndexer:
         return {
             "line_count": len(lines),
             "symbols": symbols,
+            "ast_root": ast_root,  # Return actual AST root node
             "language": language,
             "parser": "tree-sitter" if used_parser else ("regex" if symbols else "none"),
             "parse_time_ms": round(elapsed * 1000, 2),

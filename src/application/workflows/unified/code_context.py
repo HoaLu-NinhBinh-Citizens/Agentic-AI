@@ -443,7 +443,7 @@ class CodeContextBuilder:
         )
 
         # Build dependency info
-        imports, exports, alias_map = self._build_dependency_info(file_path)
+        imports, exports, alias_map = await self._build_dependency_info(file_path)
 
         # Build semantic chunks
         chunks = self._build_chunks(ast_root, content, language)
@@ -476,8 +476,18 @@ class CodeContextBuilder:
         try:
             result = await self.indexer.index_file(str(file_path), content)
             if result.get("status") == "success":
-                # Return a simplified AST representation for compatibility
-                return result.get("symbols", [])
+                # FIX: Return actual AST root node, not symbols list
+                ast_root = result.get("ast_root")
+                if ast_root is not None:
+                    self.ast_root = ast_root
+                    return ast_root
+                # Fallback: try to get tree object from parser
+                parser = self.indexer._parser_cache.get(language)
+                if parser is not None:
+                    import tree_sitter_languages
+                    tree = parser.parse(content.encode("utf-8", errors="replace"))
+                    self.ast_root = tree.root_node
+                    return tree.root_node
         except Exception:
             pass
         return None
@@ -556,7 +566,7 @@ class CodeContextBuilder:
 
         return symbol_defs, symbol_refs, call_graph
 
-    def _build_dependency_info(
+    async def _build_dependency_info(
         self,
         file_path: Path,
     ) -> tuple[list[ImportInfo], list[str], dict[str, str]]:
@@ -565,9 +575,8 @@ class CodeContextBuilder:
         exports: list[str] = []
         alias_map: dict[str, str] = {}
 
-        # Index the file in dependency graph
-        import asyncio
-        asyncio.create_task(self.dep_graph.index_file(str(file_path)))
+        # Index the file in dependency graph (await to avoid race condition)
+        await self.dep_graph.index_file(str(file_path))
 
         # Collect imports
         module_name = self.dep_graph._path_to_module.get(str(file_path), "")

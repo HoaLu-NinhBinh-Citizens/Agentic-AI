@@ -1,7 +1,7 @@
 """Slash command parser and dispatcher — mimics Cursor's /command syntax.
 
 Supports:
-    /fix [@file[:line]]           — Show fix suggestions for a file/line
+    /fix [@file[:line]]           — Show and apply fixes for a file/line
     /review [--files=FILES] [--focus=AREA]  — Run code review
     /explain [@symbol]             — Explain a symbol, class, or function
     /stats                        — Show review statistics
@@ -18,6 +18,7 @@ import argparse
 import asyncio
 import re
 import shlex
+import shutil
 from dataclasses import dataclass, field
 from enum import Enum
 from pathlib import Path
@@ -81,6 +82,196 @@ class Command:
     aliases: list[str] = field(default_factory=list)
     handler: Callable[[CommandContext], Any] = field(default=None)
     examples: list[str] = field(default_factory=list)
+
+
+# ─── Fix Applicator ─────────────────────────────────────────────────────────
+
+
+class FixApplicator:
+    """Applies code fixes to files with backup support.
+
+    This class handles applying suggested fixes to source files:
+    1. Creates a backup of the original file
+    2. Replaces the problematic code with the fix
+    3. Writes the modified content back
+    4. Returns success/failure status
+    """
+
+    def __init__(self, backup_dir: str | None = None) -> None:
+        """Initialize the fix applicator.
+
+        Args:
+            backup_dir: Directory for backups (default: .ai_support/backups)
+        """
+        self.backup_dir = Path(backup_dir) if backup_dir else Path(".ai_support/backups")
+        self._applied_count = 0
+        self._failed_count = 0
+
+    @property
+    def applied_count(self) -> int:
+        """Number of fixes successfully applied."""
+        return self._applied_count
+
+    @property
+    def failed_count(self) -> int:
+        """Number of fixes that failed to apply."""
+        return self._failed_count
+
+    async def apply_fix(
+        self,
+        file_path: Path | str,
+        line: int,
+        new_code: str,
+        old_code: str | None = None,
+        create_backup: bool = True,
+    ) -> tuple[bool, str]:
+        """Apply a fix to a specific line in a file.
+
+        Args:
+            file_path: Path to the file to fix
+            line: Line number (1-based) of the fix
+            new_code: The new code to insert
+            old_code: Optional old code to replace (for exact matching)
+            create_backup: Whether to create a backup first
+
+        Returns:
+            Tuple of (success: bool, message: str)
+        """
+        file_path = Path(file_path)
+
+        try:
+            # Read original content
+            if not file_path.exists():
+                return False, f"File not found: {file_path}"
+
+            content = file_path.read_text(encoding="utf-8", errors="replace")
+            lines = content.split("\n")
+
+            if line < 1 or line > len(lines):
+                return False, f"Line {line} out of range (file has {len(lines)} lines)"
+
+            # Create backup if requested
+            if create_backup:
+                backup_path = await self._create_backup(file_path, lines)
+                if backup_path:
+                    await self._ensure_backup_dir()
+
+            # Find and replace the target line
+            target_idx = line - 1  # Convert to 0-based index
+            if old_code:
+                # Find the line containing old_code
+                found = False
+                for i in range(max(0, target_idx - 2), min(len(lines), target_idx + 3)):
+                    if old_code.strip() in lines[i].strip():
+                        target_idx = i
+                        found = True
+                        break
+                if not found:
+                    return False, f"Could not find old code to replace: {old_code[:50]}..."
+
+            # Apply the fix
+            original_line = lines[target_idx]
+            lines[target_idx] = new_code
+
+            # Write back
+            new_content = "\n".join(lines)
+            file_path.write_text(new_content, encoding="utf-8")
+
+            self._applied_count += 1
+            return True, f"Applied fix at {file_path}:{line}\n  Old: {original_line.strip()[:50]}...\n  New: {new_code.strip()[:50]}..."
+
+        except PermissionError:
+            self._failed_count += 1
+            return False, f"Permission denied: {file_path}"
+        except Exception as e:
+            self._failed_count += 1
+            return False, f"Failed to apply fix: {e}"
+
+    async def apply_finding_fix(
+        self,
+        finding,
+        create_backup: bool = True,
+    ) -> tuple[bool, str]:
+        """Apply a fix from a Finding object.
+
+        Args:
+            finding: Finding object with file, line, and metadata
+            create_backup: Whether to create a backup first
+
+        Returns:
+            Tuple of (success: bool, message: str)
+        """
+        file_path = Path(finding.file)
+        line = finding.line
+        new_code = finding.metadata.get("new_code", "") if finding.metadata else ""
+
+        # If no new_code in metadata, try the fix field
+        if not new_code and finding.fix:
+            # Try to extract code from fix suggestion
+            new_code = self._extract_code_from_fix(finding.fix)
+
+        if not new_code:
+            return False, "No fix code available in finding"
+
+        old_code = finding.metadata.get("old_code", "") if finding.metadata else None
+
+        return await self.apply_fix(
+            file_path, line, new_code, old_code, create_backup
+        )
+
+    def _extract_code_from_fix(self, fix_text: str) -> str:
+        """Extract code from a fix suggestion string.
+
+        Args:
+            fix_text: The fix suggestion text
+
+        Returns:
+            Extracted code or empty string
+        """
+        # Try to find code in markdown code blocks
+        code_blocks = re.findall(r"```(?:\w+)?\n(.*?)```", fix_text, re.DOTALL)
+        if code_blocks:
+            return code_blocks[0].strip()
+
+        # Try to find inline code
+        inline = re.findall(r"`([^`]+)`", fix_text)
+        if inline:
+            return inline[0].strip()
+
+        return fix_text.strip()
+
+    async def _create_backup(self, file_path: Path, lines: list[str]) -> Path | None:
+        """Create a backup of the file.
+
+        Args:
+            file_path: Original file path
+            lines: File content as lines
+
+        Returns:
+            Path to backup file, or None if backup failed
+        """
+        try:
+            await self._ensure_backup_dir()
+            import datetime
+            timestamp = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
+            backup_name = f"{file_path.stem}_{timestamp}{file_path.suffix}"
+            backup_path = self.backup_dir / backup_name
+
+            content = "\n".join(lines)
+            backup_path.write_text(content, encoding="utf-8")
+            return backup_path
+        except Exception:
+            return None
+
+    async def _ensure_backup_dir(self) -> None:
+        """Ensure backup directory exists."""
+        self.backup_dir.mkdir(parents=True, exist_ok=True)
+
+    def get_backup_count(self) -> int:
+        """Get number of backup files."""
+        if not self.backup_dir.exists():
+            return 0
+        return len(list(self.backup_dir.iterdir()))
 
 
 # ─── Builtin commands ────────────────────────────────────────────────────────
@@ -217,7 +408,8 @@ async def cmd_fix(ctx: CommandContext) -> CommandResult:
             success=False,
             output="Usage: /fix @filename[:line]\n"
                    "  /fix @src/main.py:42\n"
-                   "  /fix @src/utils.py",
+                   "  /fix @src/utils.py\n"
+                   "Use --apply flag to automatically apply fixes.",
         )
 
     files = [ctx.primary_file]
@@ -238,6 +430,11 @@ async def cmd_fix(ctx: CommandContext) -> CommandResult:
         confidence_threshold=0.5,
     )
 
+    # Initialize fix applicator
+    applicator = FixApplicator()
+    auto_apply = "--apply" in ctx.raw_flags or ctx.raw_flags.get("apply") == "true"
+    dry_run = not auto_apply
+
     try:
         engine = UnifiedReviewEngine(config)
         result = await engine.review([Path(f) for f in files], incremental=False)
@@ -248,23 +445,74 @@ async def cmd_fix(ctx: CommandContext) -> CommandResult:
             fixes = [f for f in fixes if f.line == ctx.primary_line]
 
         # Filter to fixable findings
-        fixable = [f for f in fixes if f.fix]
+        fixable = [f for f in fixes if f.fix or (f.metadata and f.metadata.get("new_code"))]
 
-        output = _format_unified_fixes_list(fixable)
-        return CommandResult(success=True, output=output, data={
-            "fix_count": len(fixable),
-            "fixes": [
-                {
-                    "id": f.rule_id,
-                    "file": f.file,
-                    "line": f.line,
-                    "rule": f.rule_id,
-                    "reason": f.message[:80],
-                    "severity": f.severity.value,
-                }
-                for f in fixable
-            ],
-        })
+        if not fixable:
+            output = "No fixes found for the specified file/line."
+            return CommandResult(success=True, output=output)
+
+        output_lines = [f"## Found {len(fixable)} Fixes\n"]
+
+        applied_count = 0
+        failed_count = 0
+
+        for fix in fixable:
+            sev_icon = {
+                "error": "[X]",
+                "warning": "[!]",
+                "info": "[i]",
+            }.get(fix.severity.value, "?")
+            output_lines.append(f"{sev_icon} `{fix.file}:{fix.line}` ")
+            output_lines.append(f"**[{fix.rule_id}]** {fix.message[:60]}")
+
+            if fix.context:
+                output_lines.append(f"```\n{fix.context[:100]}\n```")
+
+            if fix.fix:
+                output_lines.append(f"**Fix:** {fix.fix[:80]}")
+
+            # Apply fix if auto-apply is enabled
+            if auto_apply:
+                success, msg = await applicator.apply_finding_fix(fix, create_backup=True)
+                if success:
+                    applied_count += 1
+                    output_lines.append(f"\n✓ Applied: {msg}")
+                else:
+                    failed_count += 1
+                    output_lines.append(f"\n✗ Failed: {msg}")
+
+            output_lines.append("")
+
+        # Summary
+        if auto_apply:
+            output_lines.append(f"\n### Summary\n")
+            output_lines.append(f"- Applied: {applied_count}")
+            output_lines.append(f"- Failed: {failed_count}")
+            output_lines.append(f"- Backups: {applicator.get_backup_count()}")
+
+            if failed_count > 0:
+                output_lines.append(f"\n**Warning:** {failed_count} fixes failed. Check backups in `.ai_support/backups/`.")
+
+        return CommandResult(
+            success=True,
+            output="\n".join(output_lines),
+            data={
+                "fix_count": len(fixable),
+                "applied_count": applied_count if auto_apply else 0,
+                "failed_count": failed_count,
+                "fixes": [
+                    {
+                        "id": f.rule_id,
+                        "file": f.file,
+                        "line": f.line,
+                        "rule": f.rule_id,
+                        "reason": f.message[:80],
+                        "severity": f.severity.value,
+                    }
+                    for f in fixable
+                ],
+            },
+        )
 
     except Exception as e:
         import logging
@@ -484,6 +732,7 @@ _BUILTIN_COMMANDS: dict[str, Command] = {
             "/fix @src/main.py",
             "/fix @src/utils.py:42",
             "/fix @src/handlers/auth.py:100",
+            "/fix @src/main.py --apply",
         ],
     ),
     "explain": Command(

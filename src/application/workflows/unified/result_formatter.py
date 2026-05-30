@@ -66,19 +66,18 @@ class PipelineStats:
             findings: List of findings
             execution_time_ms: Execution time in milliseconds
             detectors_used: List of detector names used
-            files_scanned: Number of files actually scanned (optional).
-                          If provided, this takes precedence over counting from findings.
+            files_scanned: Number of files actually scanned.
+                          If provided, this takes precedence (recommended).
                           A clean file (no findings) still counts as scanned.
         """
         stats = cls(execution_time_ms=execution_time_ms)
-        # Use provided files_scanned if available, otherwise count from findings
-        # (for backwards compatibility when files_scanned is not provided)
+        # FIX: Use passed files_scanned value if available
+        # This ensures clean files are counted (not just files with findings)
         if files_scanned is not None:
             stats.files_scanned = files_scanned
         else:
-            # Fallback: count unique files with findings
-            # Note: This means clean files won't be counted!
-            # Prefer passing files_scanned explicitly from the engine.
+            # Fallback: count unique files with findings (misses clean files!)
+            # Prefer passing files_scanned explicitly from the engine
             stats.files_scanned = len(set(f.file for f in findings)) if findings else 0
         stats.findings_count = len(findings)
         stats.errors_count = sum(1 for f in findings if f.severity == FindingSeverity.ERROR)
