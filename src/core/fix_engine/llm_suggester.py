@@ -7,10 +7,17 @@ rule-based fixes, using code context to generate appropriate solutions.
 from __future__ import annotations
 
 import logging
+import os
 import re
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Optional
+
+from src.infrastructure.llm.adapters import (
+    LLMProvider,
+    create_llm_provider_from_env,
+    create_llm_provider,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -254,27 +261,72 @@ class CodeContext:
         return None
 
 
+SYSTEM_PROMPT = """You are a code review assistant specialized in generating fixes for code issues.
+
+Your task:
+1. Analyze the issue and code context
+2. Explain the problem briefly
+3. Provide the corrected code
+4. Suggest alternatives if applicable
+
+Format your response as:
+EXPLANATION: <brief explanation>
+FIX: <corrected code>
+ALTERNATIVES: <alternative solutions or "None">
+CONFIDENCE: <confidence score 0.0-1.0>"""
+
+
 class LLMSuggester:
     """Use LLM to generate fix suggestions for complex issues.
 
     This class provides LLM-powered fix generation for issues that
     don't have simple rule-based fixes. It uses code context and
     issue details to generate appropriate solutions.
+
+    The suggester can use:
+    - Real LLM providers (OpenAI, Anthropic) via SDK adapters
+    - Existing LLM infrastructure (LLMManager from infrastructure/llm)
+    - Fallback to template-based suggestions when LLM unavailable
     """
 
     def __init__(
         self,
-        llm_provider: Any = None,
+        provider: Optional[LLMProvider] = None,
+        llm_manager: Any = None,
+        enable_llm: bool = True,
         max_context_lines: int = 20,
     ) -> None:
         """Initialize the LLM suggester.
 
         Args:
-            llm_provider: LLM provider/gateway for API calls
+            provider: LLMProvider instance for direct SDK access
+            llm_manager: LLMManager instance from infrastructure/llm
+            enable_llm: Whether to attempt LLM calls
             max_context_lines: Maximum context lines for prompts
         """
-        self.llm_provider = llm_provider
+        self._provider = provider
+        self._llm_manager = llm_manager
+        self.enable_llm = enable_llm
         self.max_context_lines = max_context_lines
+
+        if enable_llm and provider is None and llm_manager is None:
+            self._provider = create_llm_provider_from_env()
+
+    @property
+    def provider(self) -> Optional[LLMProvider]:
+        """Get the LLM provider if configured."""
+        return self._provider
+
+    @property
+    def is_llm_enabled(self) -> bool:
+        """Check if LLM generation is enabled and available."""
+        if not self.enable_llm:
+            return False
+        if self._provider is not None:
+            return self._provider.is_available()
+        if self._llm_manager is not None:
+            return True
+        return False
 
     async def suggest_fix(
         self,
@@ -299,15 +351,41 @@ class LLMSuggester:
 
         prompt = self._build_prompt(finding, context)
 
-        if self.llm_provider is None:
-            return self._generate_mock_suggestion(finding, context)
+        if not self.is_llm_enabled:
+            return self._template_suggestion(finding, context)
 
         try:
-            response = await self._call_llm(prompt)
+            if self._provider is not None:
+                response = await self._call_provider(self._provider, prompt)
+            else:
+                response = await self._call_llm_manager(prompt)
             return self._parse_llm_response(response, finding, context)
         except Exception as e:
-            logger.error("LLM fix generation failed: %s", e)
-            return self._generate_mock_suggestion(finding, context)
+            logger.warning("LLM call failed: %s, falling back to template", e)
+            return self._template_suggestion(finding, context)
+
+    async def _call_provider(self, provider: LLMProvider, prompt: str) -> str:
+        """Call LLM provider directly using SDK adapter."""
+        response = await provider.generate(
+            prompt=prompt,
+            system_prompt=SYSTEM_PROMPT,
+            temperature=0.3,
+            max_tokens=2048,
+        )
+        return response.content
+
+    async def _call_llm_manager(self, prompt: str) -> str:
+        """Call existing LLMManager infrastructure."""
+        if self._llm_manager is None:
+            raise ValueError("No LLM manager configured")
+
+        response = await self._llm_manager.generate(
+            prompt=prompt,
+            system=SYSTEM_PROMPT,
+            temperature=0.3,
+            max_tokens=2048,
+        )
+        return response.content
 
     async def batch_suggest(
         self,
@@ -366,24 +444,12 @@ class LLMSuggester:
         )
 
     async def _call_llm(self, prompt: str) -> str:
-        """Call LLM with prompt.
-
-        Args:
-            prompt: The prompt to send
-
-        Returns:
-            LLM response text
-        """
-        if self.llm_provider is None:
-            raise ValueError("No LLM provider configured")
-
-        response = await self.llm_provider.complete(
-            prompt=prompt,
-            max_tokens=1000,
-            temperature=0.3,
-        )
-
-        return response
+        """Call LLM with prompt (legacy compatibility)."""
+        if self._provider is not None:
+            return await self._call_provider(self._provider, prompt)
+        if self._llm_manager is not None:
+            return await self._call_llm_manager(prompt)
+        raise ValueError("No LLM provider configured")
 
     def _parse_llm_response(
         self,
@@ -436,12 +502,12 @@ class LLMSuggester:
             rule_id=finding.rule_id,
         )
 
-    def _generate_mock_suggestion(
+    def _template_suggestion(
         self,
         finding: Any,
         context: CodeContext,
     ) -> LLMFixSuggestion:
-        """Generate a mock suggestion when LLM is unavailable.
+        """Generate a template-based suggestion when LLM is unavailable.
 
         Args:
             finding: Finding to generate fix for
@@ -454,32 +520,63 @@ class LLMSuggester:
 
         return LLMFixSuggestion(
             original_code=original_code,
-            suggested_code=f"-- LLM fix for {finding.rule_id} --\n{original_code}",
+            suggested_code=f"-- Fix for {finding.rule_id} --\n{original_code}",
             explanation=(
-                f"LLM provider not configured. Manual fix required for "
+                f"LLM provider not configured. Template-based suggestion for "
                 f"{finding.rule_id}: {finding.message}"
             ),
-            confidence=0.0,
+            confidence=0.3,
             rule_id=finding.rule_id,
         )
+
+    def _generate_mock_suggestion(
+        self,
+        finding: Any,
+        context: CodeContext,
+    ) -> LLMFixSuggestion:
+        """Alias for _template_suggestion for backwards compatibility."""
+        return self._template_suggestion(finding, context)
 
 
 def create_llm_suggester(llm_config: Optional[dict[str, Any]] = None) -> LLMSuggester:
     """Create an LLM suggester with configuration.
 
     Args:
-        llm_config: LLM provider configuration
+        llm_config: Configuration dict with keys:
+            - provider: "openai", "anthropic", or "auto" (default)
+            - api_key: Optional API key override
+            - model: Optional model override
+            - enable_llm: Whether to enable LLM (default True)
 
     Returns:
         Configured LLMSuggester instance
     """
-    llm_provider = None
+    provider = None
+    enable_llm = True
 
     if llm_config:
-        try:
-            from src.infrastructure.llm.gateway import LLMGateway
-            llm_provider = LLMGateway(config=llm_config)
-        except ImportError:
-            logger.warning("LLM gateway not available")
+        enable_llm = llm_config.get("enable_llm", True)
+        provider_type = llm_config.get("provider", "auto")
 
-    return LLMSuggester(llm_provider=llm_provider)
+        if provider_type != "auto" and provider_type is not None:
+            try:
+                provider = create_llm_provider(
+                    provider=provider_type,
+                    api_key=llm_config.get("api_key"),
+                    model=llm_config.get("model"),
+                )
+            except ValueError as e:
+                logger.warning("Failed to create provider: %s", e)
+
+    if provider is None and enable_llm:
+        provider = create_llm_provider_from_env()
+
+    llm_manager = None
+    if llm_config and "llm_manager" in llm_config:
+        llm_manager = llm_config["llm_manager"]
+
+    return LLMSuggester(
+        provider=provider,
+        llm_manager=llm_manager,
+        enable_llm=enable_llm,
+    )

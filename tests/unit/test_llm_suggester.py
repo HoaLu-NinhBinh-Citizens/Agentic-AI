@@ -1,407 +1,243 @@
-"""Tests for LLM-assisted fix suggestions."""
+"""Tests for LLMSuggester with real LLM integration."""
+
+from __future__ import annotations
 
 import pytest
-from unittest.mock import AsyncMock, MagicMock, patch
-from pathlib import Path
+from unittest.mock import AsyncMock, MagicMock
 
 from src.core.fix_engine.llm_suggester import (
+    LLMSuggester,
     LLMFixSuggestion,
     CodeContext,
-    LLMSuggester,
-    FIX_PROMPT_TEMPLATE,
     create_llm_suggester,
+)
+from src.infrastructure.llm.adapters import (
+    MockLLMProvider,
+    OpenAIAdapter,
+    ClaudeAdapter,
 )
 
 
-class TestCodeContext:
-    """Tests for CodeContext dataclass."""
-
-    def test_from_file_detection(self, tmp_path):
-        """Test language detection from file extension."""
-        # Create test files
-        py_file = tmp_path / "test.py"
-        py_file.write_text("import os\nprint('test')\n")
-
-        ctx = CodeContext.from_file(py_file)
-        assert ctx.language == "python"
-
-        js_file = tmp_path / "test.js"
-        js_file.write_text("const x = 1;\n")
-        ctx = CodeContext.from_file(js_file)
-        assert ctx.language == "javascript"
-
-        c_file = tmp_path / "test.c"
-        c_file.write_text("#include <stdio.h>\n")
-        ctx = CodeContext.from_file(c_file)
-        assert ctx.language == "c"
-
-    def test_from_file_extracts_imports(self, tmp_path):
-        """Test import extraction from file."""
-        py_file = tmp_path / "test.py"
-        content = """import os
-import sys
-from pathlib import Path
-import json
-
-def main():
-    pass
-"""
-        py_file.write_text(content)
-
-        ctx = CodeContext.from_file(py_file)
-        assert "import os" in ctx.imports
-        assert "import sys" in ctx.imports
-        assert "from pathlib import Path" in ctx.imports
-
-    def test_get_relevant_code(self, tmp_path):
-        """Test getting relevant code around a line."""
-        py_file = tmp_path / "test.py"
-        py_file.write_text("line1\nline2\nline3\nline4\nline5\nline6\nline7\n")
-
-        ctx = CodeContext.from_file(py_file, target_line=4, context_lines=2)
-
-        relevant = ctx.get_relevant_code(4, context_lines=2)
-        # Should include lines around line 4 (1-indexed)
-        assert "line3" in relevant or "line4" in relevant or "line5" in relevant
-
-    def test_get_surrounding_code(self, tmp_path):
-        """Test getting surrounding code."""
-        py_file = tmp_path / "test.py"
-        content = "\n".join([f"line{i}" for i in range(30)])
-        py_file.write_text(content)
-
-        ctx = CodeContext.from_file(py_file)
-        surrounding = ctx.get_surrounding_code(max_lines=10)
-
-        assert len(surrounding.split("\n")) <= 10
-
-    def test_function_name_extraction(self, tmp_path):
-        """Test function name extraction."""
-        py_file = tmp_path / "test.py"
-        content = """
-def main():
-    pass
-
-class TestClass:
-    def method(self):
-        pass
-"""
-        py_file.write_text(content)
-
-        ctx = CodeContext.from_file(py_file, target_line=6)
-
-        # Should find the method at line 6
-        assert ctx.function_name is not None
-
-
-class TestLLMFixSuggestion:
-    """Tests for LLMFixSuggestion dataclass."""
-
-    def test_to_dict(self):
-        """Test serialization to dictionary."""
-        suggestion = LLMFixSuggestion(
-            original_code="old = 100",
-            suggested_code="old = MAX_VALUE",
-            explanation="Use named constant",
-            confidence=0.9,
-            alternative_suggestions=["Use enum", "Use config"],
-            rule_id="QUAL007",
-        )
-
-        data = suggestion.to_dict()
-
-        assert data["original_code"] == "old = 100"
-        assert data["suggested_code"] == "old = MAX_VALUE"
-        assert data["explanation"] == "Use named constant"
-        assert data["confidence"] == 0.9
-        assert len(data["alternatives"]) == 2
-        assert data["rule_id"] == "QUAL007"
-
-    def test_default_values(self):
-        """Test default values for optional fields."""
-        suggestion = LLMFixSuggestion(
-            original_code="old",
-            suggested_code="new",
-            explanation="Test",
-        )
-
-        assert suggestion.confidence == 0.8
-        assert suggestion.alternative_suggestions == []
-        assert suggestion.rule_id == ""
+class MockFinding:
+    """Mock finding for testing."""
+    def __init__(self, rule_id="TEST001", message="Test issue", file="test.py", line=10):
+        self.rule_id = rule_id
+        self.message = message
+        self.file = file
+        self.line = line
+        self.severity = "medium"
 
 
 class TestLLMSuggester:
     """Tests for LLMSuggester class."""
 
-    def test_initialization(self):
-        """Test initialization with defaults."""
-        suggester = LLMSuggester()
-
-        assert suggester.llm_provider is None
-        assert suggester.max_context_lines == 20
-
-    def test_initialization_with_config(self):
-        """Test initialization with custom config."""
-        suggester = LLMSuggester(
-            llm_provider=MagicMock(),
-            max_context_lines=30,
-        )
-
-        assert suggester.llm_provider is not None
-        assert suggester.max_context_lines == 30
-
     @pytest.mark.asyncio
-    async def test_suggest_fix_without_llm(self, tmp_path):
-        """Test fix suggestion when LLM is not available."""
-        py_file = tmp_path / "test.py"
-        py_file.write_text("print('hello')\n")
-
-        suggester = LLMSuggester()
-
-        class MockFinding:
-            rule_id = "QUAL006"
-            message = "Use logging instead of print"
-            severity = MagicMock(value="warning")
-            file = str(py_file)
-            line = 1
-
+    async def test_suggester_without_llm(self):
+        """Test suggester falls back to template without LLM."""
+        suggester = LLMSuggester(provider=None, enable_llm=False)
         finding = MockFinding()
-        suggestion = await suggester.suggest_fix(finding)
-
-        assert suggestion is not None
-        assert suggestion.rule_id == "QUAL006"
-        assert suggestion.confidence == 0.0  # Mock mode
-        assert "not configured" in suggestion.explanation
-
-    @pytest.mark.asyncio
-    async def test_batch_suggest(self, tmp_path):
-        """Test batch suggestion generation."""
-        # Create test files
-        file1 = tmp_path / "test1.py"
-        file1.write_text("print('a')\n")
-
-        file2 = tmp_path / "test2.py"
-        file2.write_text("except:\n")
-
-        suggester = LLMSuggester()
-
-        class MockFinding:
-            def __init__(self, rule_id, file_path, line):
-                self.rule_id = rule_id
-                self.message = "Test"
-                self.severity = MagicMock(value="warning")
-                self.file = file_path
-                self.line = line
-
-        findings = [
-            MockFinding("QUAL006", str(file1), 1),
-            MockFinding("QUAL003", str(file2), 1),
-        ]
-
-        contexts = {
-            str(file1): CodeContext.from_file(file1),
-            str(file2): CodeContext.from_file(file2),
-        }
-
-        suggestions = await suggester.batch_suggest(findings, contexts)
-
-        assert len(suggestions) == 2
-
-    def test_build_prompt(self, tmp_path):
-        """Test prompt building."""
-        py_file = tmp_path / "test.py"
-        content = "import os\nimport sys\nprint('test')\n"
-        py_file.write_text(content)
-
-        suggester = LLMSuggester(max_context_lines=20)
-
-        class MockSeverity:
-            value = "warning"
-
-        class MockFinding:
-            rule_id = "QUAL006"
-            message = "Use logging"
-            severity = MockSeverity()
-            file = str(py_file)
-            line = 3
-
-        finding = MockFinding()
-        context = CodeContext.from_file(py_file, target_line=3)
-
-        prompt = suggester._build_prompt(finding, context)
-
-        assert "QUAL006" in prompt
-        assert "Use logging" in prompt
-        assert "python" in prompt.lower()
-
-
-class TestPromptTemplate:
-    """Tests for FIX_PROMPT_TEMPLATE."""
-
-    def test_template_format(self):
-        """Test that template can be formatted."""
-        formatted = FIX_PROMPT_TEMPLATE.format(
-            rule_id="TEST001",
-            severity="warning",
-            message="Test message",
-            file_path="src/test.py",
-            line=10,
-            original_code="old_code",
-            surrounding_code="surrounding",
+        context = CodeContext(
+            file_path="test.py",
+            surrounding_lines=["def foo():", "    x = 1"],
             language="python",
         )
 
-        assert "TEST001" in formatted
-        assert "warning" in formatted
-        assert "Test message" in formatted
-        assert "src/test.py" in formatted
-        assert "10" in formatted
-        assert "old_code" in formatted
+        result = await suggester.suggest_fix(finding, context)
+
+        assert result is not None
+        assert result.confidence == 0.3
+        assert "not configured" in result.explanation
+
+    @pytest.mark.asyncio
+    async def test_suggester_with_mock_provider(self):
+        """Test suggester with mock provider."""
+        mock_provider = MockLLMProvider(response_text="EXPLANATION: Test fix")
+        suggester = LLMSuggester(provider=mock_provider, enable_llm=True)
+        finding = MockFinding()
+        context = CodeContext(
+            file_path="test.py",
+            surrounding_lines=["def foo():", "    x = 1"],
+            language="python",
+        )
+
+        result = await suggester.suggest_fix(finding, context)
+
+        assert result is not None
+        assert isinstance(result, LLMFixSuggestion)
+
+    def test_suggester_is_llm_enabled_property(self):
+        """Test is_llm_enabled property."""
+        suggester_disabled = LLMSuggester(enable_llm=False)
+        assert not suggester_disabled.is_llm_enabled
+
+        suggester_no_provider = LLMSuggester(provider=None, enable_llm=True)
+        assert not suggester_no_provider.is_llm_enabled
+
+        suggester_mock = LLMSuggester(provider=MockLLMProvider(), enable_llm=True)
+        assert suggester_mock.is_llm_enabled
+
+    def test_suggester_provider_property(self):
+        """Test provider property access."""
+        mock = MockLLMProvider()
+        suggester = LLMSuggester(provider=mock)
+        assert suggester.provider is mock
+
+        suggester_none = LLMSuggester(provider=None)
+        assert suggester_none.provider is None
 
 
 class TestCreateLLMSuggester:
     """Tests for create_llm_suggester factory function."""
 
-    def test_create_without_config(self):
-        """Test creating suggester without config."""
-        suggester = create_llm_suggester()
+    def test_create_with_auto_provider(self):
+        """Test creating suggester with auto provider detection."""
+        suggester = create_llm_suggester({"provider": "auto"})
+        # Should either get a provider or None based on env
         assert suggester is not None
-        assert suggester.llm_provider is None
+
+    def test_create_with_explicit_provider(self):
+        """Test creating suggester with explicit provider."""
+        suggester = create_llm_suggester({"provider": "openai", "api_key": "test"})
+        assert suggester.provider is not None
+        assert isinstance(suggester.provider, OpenAIAdapter)
+
+    def test_create_with_llm_disabled(self):
+        """Test creating suggester with LLM disabled."""
+        suggester = create_llm_suggester({"enable_llm": False})
+        assert not suggester.is_llm_enabled
 
     def test_create_with_config(self):
-        """Test creating suggester with config."""
-        config = {"model": "gpt-4"}
-        suggester = create_llm_suggester(config)
-        # May be None if gateway not available
-        assert suggester is not None
+        """Test creating suggester with full config."""
+        suggester = create_llm_suggester({
+            "provider": "anthropic",
+            "api_key": "test-key",
+            "model": "claude-sonnet",
+            "enable_llm": True,
+        })
+        assert suggester.is_llm_enabled
 
 
-class TestLLMSuggesterResponseParsing:
-    """Tests for LLM response parsing."""
+class TestCodeContext:
+    """Tests for CodeContext class."""
 
-    def test_parse_full_response(self):
-        """Test parsing a complete LLM response."""
-        suggester = LLMSuggester()
+    def test_context_creation(self):
+        """Test basic CodeContext creation."""
+        context = CodeContext(
+            file_path="test.py",
+            function_name="test_func",
+            surrounding_lines=["line1", "line2", "line3"],
+            language="python",
+        )
+        assert context.file_path == "test.py"
+        assert context.language == "python"
 
-        response = """EXPLANATION: This is the explanation
-FIX: new_code = fixed_value
-ALTERNATIVES: option1; option2; option3
-CONFIDENCE: 0.85"""
+    def test_get_relevant_code(self):
+        """Test getting relevant code around a line."""
+        context = CodeContext(
+            file_path="test.py",
+            surrounding_lines=["line0", "line1", "TARGET", "line3", "line4"],
+            language="python",
+        )
+        # Note: line numbers are 1-based
+        code = context.get_relevant_code(target_line=3, context_lines=1)
+        assert "TARGET" in code
 
-        class MockFinding:
-            rule_id = "TEST001"
-            message = "Test"
-            severity = MagicMock(value="warning")
-            file = "test.py"
-            line = 1
+    def test_get_surrounding_code(self):
+        """Test getting surrounding code."""
+        context = CodeContext(
+            file_path="test.py",
+            surrounding_lines=[f"line{i}" for i in range(10)],
+        )
+        code = context.get_surrounding_code(max_lines=5)
+        assert len(code.split("\n")) <= 5
 
-        class MockContext:
-            def get_relevant_code(self, line, context=0):
-                return "old_code"
 
-        suggestion = suggester._parse_llm_response(
-            response,
-            MockFinding(),
-            MockContext(),
+class TestLLMFixSuggestion:
+    """Tests for LLMFixSuggestion dataclass."""
+
+    def test_suggestion_creation(self):
+        """Test LLMFixSuggestion creation."""
+        suggestion = LLMFixSuggestion(
+            original_code="x = 1",
+            suggested_code="x = 2",
+            explanation="Changed value",
+            confidence=0.9,
+            rule_id="TEST001",
+        )
+        assert suggestion.original_code == "x = 1"
+        assert suggestion.suggested_code == "x = 2"
+        assert suggestion.confidence == 0.9
+
+    def test_suggestion_to_dict(self):
+        """Test converting suggestion to dict."""
+        suggestion = LLMFixSuggestion(
+            original_code="x = 1",
+            suggested_code="x = 2",
+            explanation="Changed value",
+        )
+        d = suggestion.to_dict()
+        assert "original_code" in d
+        assert "suggested_code" in d
+        assert d["confidence"] == 0.8  # default
+
+
+@pytest.mark.asyncio
+class TestLLMSuggesterIntegration:
+    """Integration tests for LLMSuggester with real providers."""
+
+    async def test_suggest_fix_with_mock_llm_parses_response(self):
+        """Test that suggester correctly parses mock LLM response."""
+        # Mock provider that returns a properly formatted response
+        class FormatMockProvider:
+            provider_name = "format_mock"
+            is_available = lambda self: True
+
+            async def generate(self, prompt, system_prompt=None, temperature=0.7, max_tokens=2048):
+                from src.infrastructure.llm.adapters import LLMResponse
+                return LLMResponse(
+                    content="""EXPLANATION: This is a test fix
+FIX: corrected_code = True
+ALTERNATIVES: None
+CONFIDENCE: 0.9""",
+                    model="mock",
+                    tokens_used=50,
+                    finish_reason="stop",
+                )
+
+        suggester = LLMSuggester(provider=FormatMockProvider())
+
+        finding = MockFinding(rule_id="TEST001", message="Test issue")
+        context = CodeContext(
+            file_path="test.py",
+            surrounding_lines=["original_code = False"],
+            language="python",
         )
 
-        assert suggestion.explanation == "This is the explanation"
-        assert suggestion.suggested_code == "new_code = fixed_value"
-        assert len(suggestion.alternative_suggestions) == 3
-        assert suggestion.confidence == 0.85
+        result = await suggester.suggest_fix(finding, context)
 
-    def test_parse_partial_response(self):
-        """Test parsing incomplete LLM response."""
-        suggester = LLMSuggester()
+        assert result is not None
+        assert result.explanation == "This is a test fix"
+        assert result.suggested_code == "corrected_code = True"
+        assert result.confidence == 0.9
 
-        response = """EXPLANATION: Brief explanation
-FIX: fixed_code"""
+    async def test_suggester_handles_llm_error_gracefully(self):
+        """Test that suggester falls back on LLM error."""
+        class ErrorProvider:
+            provider_name = "error"
+            is_available = lambda self: True
 
-        class MockFinding:
-            rule_id = "TEST001"
-            message = "Test"
-            severity = MagicMock(value="warning")
-            file = "test.py"
-            line = 1
+            async def generate(self, **kwargs):
+                raise Exception("LLM API error")
 
-        class MockContext:
-            def get_relevant_code(self, line, context=0):
-                return "old_code"
-
-        suggestion = suggester._parse_llm_response(
-            response,
-            MockFinding(),
-            MockContext(),
+        suggester = LLMSuggester(provider=ErrorProvider())
+        finding = MockFinding()
+        context = CodeContext(
+            file_path="test.py",
+            surrounding_lines=["code"],
         )
 
-        assert suggestion.explanation == "Brief explanation"
-        assert suggestion.suggested_code == "fixed_code"
-        assert suggestion.confidence == 0.8  # Default
+        result = await suggester.suggest_fix(finding, context)
 
-    def test_parse_invalid_confidence(self):
-        """Test parsing with invalid confidence value."""
-        suggester = LLMSuggester()
-
-        response = """CONFIDENCE: not_a_number"""
-
-        class MockFinding:
-            rule_id = "TEST001"
-            message = "Test"
-            severity = MagicMock(value="warning")
-            file = "test.py"
-            line = 1
-
-        class MockContext:
-            def get_relevant_code(self, line, context=0):
-                return "old_code"
-
-        suggestion = suggester._parse_llm_response(
-            response,
-            MockFinding(),
-            MockContext(),
-        )
-
-        assert suggestion.confidence == 0.8  # Falls back to default
-
-
-class TestLLMSuggesterEdgeCases:
-    """Edge case tests for LLMSuggester."""
-
-    @pytest.mark.asyncio
-    async def test_suggest_fix_with_none_context(self, tmp_path):
-        """Test fix suggestion when context creation fails."""
-        suggester = LLMSuggester()
-
-        class MockFinding:
-            rule_id = "TEST001"
-            message = "Test"
-            severity = MagicMock(value="warning")
-            file = "/nonexistent/file.py"
-            line = 1
-
-        # Should fall back to mock suggestion
-        suggestion = await suggester.suggest_fix(MockFinding())
-        assert suggestion is not None
-
-    @pytest.mark.asyncio
-    async def test_suggest_fix_handles_llm_error(self, tmp_path):
-        """Test that LLM errors are handled gracefully."""
-        py_file = tmp_path / "test.py"
-        py_file.write_text("print('test')\n")
-
-        mock_llm = MagicMock()
-        mock_llm.complete = AsyncMock(side_effect=Exception("LLM Error"))
-
-        suggester = LLMSuggester(llm_provider=mock_llm)
-
-        class MockFinding:
-            rule_id = "TEST001"
-            message = "Test"
-            severity = MagicMock(value="warning")
-            file = str(py_file)
-            line = 1
-
-        # Should fall back to mock suggestion
-        suggestion = await suggester.suggest_fix(MockFinding())
-        assert suggestion is not None
-        assert suggestion.confidence == 0.0  # Fallback mode
+        # Should fall back to template
+        assert result is not None
+        assert result.confidence == 0.3

@@ -1,0 +1,50 @@
+# LLM Provider Configuration
+# This file configures LLM providers for AI_SUPPORT
+
+llm:
+  # Enable/disable LLM integration
+  enabled: true
+
+  # Default provider: "openai", "anthropic", or "auto" (detect from env)
+  provider: auto
+
+  # Generation settings
+  temperature: 0.3  # Lower for more deterministic code fixes
+  max_tokens: 2048
+
+  # Fallback behavior
+  fallback_to_template: true
+
+# Provider-specific configuration
+providers:
+  openai:
+    api_key_env: OPENAI_API_KEY
+    default_model: gpt-4o-mini  # Cost-effective default
+    # Available models: gpt-4, gpt-4o, gpt-4o-mini, gpt-3.5-turbo
+
+  anthropic:
+    api_key_env: ANTHROPIC_API_KEY
+    default_model: claude-sonnet-4-20250514
+    # Available models: claude-opus-4-5, claude-sonnet-4-20250514, claude-haiku-4-20250714
+
+  ollama:
+    base_url_env: OLLAMA_BASE_URL
+    default_model: llama3.2
+    # For local LLM inference (no API key required)
+    # Set OLLAMA_BASE_URL if not using default http://localhost:11434
+
+# Fix suggestion settings
+fix_suggestion:
+  # Maximum lines of context to include in prompt
+  max_context_lines: 20
+
+  # Prompt template type: "detailed" or "concise"
+  prompt_style: detailed
+
+  # Minimum confidence threshold
+  min_confidence: 0.5
+
+# Rate limiting
+rate_limits:
+  requests_per_minute: 60
+  tokens_per_minute: 90000
