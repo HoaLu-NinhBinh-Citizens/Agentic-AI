@@ -1,6 +1,19 @@
 """CLI command modules."""
 
 from . import debug, flash, health, review, slash, trace, unified_review
+from .unified_review import register
+
+def get_all_commands():
+    """Get all available commands."""
+    return {
+        "review": review.register,
+        "unified-review": register,
+        "ur": register,  # Short alias
+        "health": health.register,
+        "debug": debug.register,
+        "flash": flash.register,
+        "trace": trace.register,
+    }
 
 __all__ = [
     "debug",
@@ -10,4 +23,5 @@ __all__ = [
     "slash",
     "trace",
     "unified_review",
+    "get_all_commands",
 ]

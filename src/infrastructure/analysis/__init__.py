@@ -1,79 +1,33 @@
-"""Static analysis module."""
+"""Analysis infrastructure."""
 
-from .project_indexer import (
-    ProjectIndexer,
-    IndexResult,
-    Symbol,
-    SymbolKind,
-    CallGraph,
-    ISROutput,
-)
-from .error_patterns import (
-    ErrorPatternLibrary,
-    ErrorPattern,
-    ErrorMatch,
-    ErrorCategory,
-    Severity,
-    CrashCluster,
-    get_error_pattern_library,
-)
-from .rule_engine import (
-    RuleEngine,
-    Rule,
-    Finding,
-    RuleSeverity,
-)
-from .ml_rules import (
-    MLRuleEngine,
-    MLRule,
-    MLFinding,
-    MLSeverity,
-)
 from .ml_detectors import (
     MLDetector,
-    MLFinding as MLDetectorFinding,
+    MLFinding,
     MLDetectorAST,
     DataFlowAnalyzer,
 )
-from .type_resolver import (
-    TypeResolver,
-    TypeInfo,
-    ImportInfo,
-)
-from .import_tracker import (
-    ImportTracker,
-    SymbolExport,
-)
+from .type_resolver import TypeResolver, TypeInfo, ImportInfo
+from .import_tracker import ImportTracker, SymbolExport
+from .semantic_resolver import SemanticResolver, ResolvedSymbol, ImportChain
+from .call_graph_builder import CallGraphBuilder, CallGraph, CallSite
 
 __all__ = [
-    "ProjectIndexer",
-    "IndexResult",
-    "Symbol",
-    "SymbolKind",
-    "CallGraph",
-    "ISROutput",
-    "ErrorPatternLibrary",
-    "ErrorPattern",
-    "ErrorMatch",
-    "ErrorCategory",
-    "Severity",
-    "CrashCluster",
-    "get_error_pattern_library",
-    "RuleEngine",
-    "Rule",
-    "Finding",
-    "RuleSeverity",
-    "MLRuleEngine",
-    "MLRule",
-    "MLFinding",
-    "MLSeverity",
+    # ML Detectors
     "MLDetector",
-    "MLDetectorFinding",
+    "MLFinding",
     "MLDetectorAST",
     "DataFlowAnalyzer",
+    # Type Resolution
     "TypeResolver",
     "TypeInfo",
     "ImportInfo",
     "ImportTracker",
     "SymbolExport",
+    # Semantic Resolution
+    "SemanticResolver",
+    "ResolvedSymbol",
+    "ImportChain",
+    "CallGraphBuilder",
+    "CallGraph",
+    "CallSite",
 ]

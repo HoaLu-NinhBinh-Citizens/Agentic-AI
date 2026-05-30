@@ -27,6 +27,8 @@ from typing import TYPE_CHECKING, Any, Optional
 
 from src.infrastructure.analysis.type_resolver import TypeResolver, TypeInfo
 from src.infrastructure.analysis.import_tracker import ImportTracker
+from src.infrastructure.analysis.semantic_resolver import SemanticResolver, ResolvedSymbol
+from src.infrastructure.analysis.call_graph_builder import CallGraphBuilder, CallGraph
 
 if TYPE_CHECKING:
     from src.infrastructure.indexing.tree_sitter import SafeTreeSitterIndexer
@@ -235,6 +237,12 @@ class ReferenceGraph:
         self._max_file_size = max_file_size_bytes
         self._type_resolver = TypeResolver()
         self._import_tracker: Optional[ImportTracker] = None
+
+        # Semantic resolution
+        self._semantic_resolver = SemanticResolver()
+        self._call_graph_builder = CallGraphBuilder(self._semantic_resolver)
+        self._call_graph: Optional[CallGraph] = None
+        self._contents_cache: dict[Path, str] = {}
 
         # symbol_name → list of RefLocation (all references)
         self._refs: dict[str, list[RefLocation]] = {}
@@ -759,6 +767,138 @@ class ReferenceGraph:
         """Resolve a qualified name (e.g., 'numpy.ndarray')."""
         return self._type_resolver.resolve_qualified_name(qualified_name, content)
 
+    # ─── Semantic Resolution ────────────────────────────────────────────────────
+
+    def build_semantic_index(
+        self,
+        files: list[Path],
+        contents: dict[Path, str]
+    ) -> None:
+        """Build semantic index for cross-file resolution.
+        
+        Must be called before using semantic resolution methods.
+        
+        Args:
+            files: List of file paths to index.
+            contents: Dict mapping file paths to their content strings.
+        """
+        self._contents_cache = dict(contents)
+        self._semantic_resolver.index_project(files, contents)
+        self._call_graph = self._call_graph_builder.build(files, contents)
+
+    def build_call_graph(
+        self,
+        files: list[Path],
+        contents: dict[Path, str]
+    ) -> CallGraph:
+        """Build semantic call graph for the project.
+        
+        Args:
+            files: List of file paths to analyze.
+            contents: Dict mapping file paths to their content strings.
+            
+        Returns:
+            CallGraph with edges, callers, callees, and class info.
+        """
+        self._call_graph = self._call_graph_builder.build(files, contents)
+        return self._call_graph
+
+    def resolve_symbol_semantic(
+        self,
+        name: str,
+        file_path: Path,
+        content: str,
+        line: int
+    ) -> Optional[ResolvedSymbol]:
+        """Resolve symbol using semantic analysis.
+        
+        Uses AST-based resolution to handle:
+        - Local variable definitions
+        - Import statements (including aliases)
+        - Module-level exports
+        - Builtin functions
+        
+        Args:
+            name: Symbol name to resolve.
+            file_path: Path to the file containing the reference.
+            content: File content.
+            line: Line number of the reference (1-indexed).
+            
+        Returns:
+            ResolvedSymbol with full context, or None if not found.
+        """
+        return self._semantic_resolver.resolve_symbol(
+            name, file_path, content, line
+        )
+
+    def resolve_qualified_semantic(
+        self,
+        qualified: str,
+        file_path: Path,
+        content: str
+    ) -> Optional[ResolvedSymbol]:
+        """Resolve qualified name using semantic analysis.
+        
+        Handles names like 'module.ClassName', 'package.module.function', etc.
+        
+        Args:
+            qualified: Qualified name string.
+            file_path: Path to the file containing the reference.
+            content: File content.
+            
+        Returns:
+            ResolvedSymbol with full context, or None if not found.
+        """
+        return self._semantic_resolver.resolve_qualified(qualified, file_path, content)
+
+    def get_semantic_call_graph(self) -> Optional[CallGraph]:
+        """Get the semantic call graph.
+        
+        Returns:
+            CallGraph if build_call_graph() has been called, None otherwise.
+        """
+        return self._call_graph
+
+    def find_call_path(self, start: str, end: str) -> list[str]:
+        """Find call path from start to end.
+        
+        Args:
+            start: Starting function name.
+            end: Target function name.
+            
+        Returns:
+            List of function names from start to end.
+        """
+        if not self._call_graph:
+            return []
+        return self._call_graph.find_path(start, end)
+
+    def find_circular_dependencies_semantic(self) -> list[list[str]]:
+        """Find circular dependencies using semantic call graph.
+        
+        Returns:
+            List of cycles, each cycle is a list of function names.
+        """
+        if not self._call_graph:
+            return []
+        return self._call_graph.find_cycles()
+
+    def get_method_overrides(
+        self,
+        base_method: str
+    ) -> list:
+        """Find methods that override a base class method.
+        
+        Args:
+            base_method: Name of base method (e.g., 'object.__init__').
+            
+        Returns:
+            List of MethodInfo for overriding methods.
+        """
+        if not self._call_graph:
+            return []
+        return self._call_graph.find_override_methods(base_method)
+
     # ─── Maintenance ────────────────────────────────────────────────────────────
 
     def clear(self) -> None:
@@ -769,6 +909,10 @@ class ReferenceGraph:
         self._callers.clear()
         self._callees.clear()
         self._stats = ReferenceGraphStats()
+        self._semantic_resolver = SemanticResolver()
+        self._call_graph_builder = CallGraphBuilder(self._semantic_resolver)
+        self._call_graph = None
+        self._contents_cache.clear()
 
     def remove_file(self, path: str) -> None:
         """Remove all data associated with a file."""

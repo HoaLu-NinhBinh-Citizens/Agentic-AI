@@ -17,60 +17,47 @@ from src.application.workflows.unified.review_engine import (
     UnifiedReviewEngine,
     ReviewEngineConfig,
     ReviewResult,
-    PipelineStats,
 )
 from src.application.workflows.unified.code_context import (
     CodeContext,
     CodeContextBuilder,
-    DefLocation,
-    RefLocation,
-    CallGraph,
-    ImportInfo,
-    ExportInfo,
-    CodeChunk,
-    FileState,
-    CallContext,
-    SymbolDef,
 )
 from src.application.workflows.unified.detector_base import (
     Detector,
     DetectorConfig,
-    DetectorStats,
     Finding,
-    FindingSeverity,
+    DetectorRegistry,
 )
 from src.application.workflows.unified.result_formatter import (
     ResultFormatter,
     MarkdownFormatter,
     JsonFormatter,
+    ConsoleFormatter,
+)
+from src.application.workflows.unified.suggestion_engine import (
+    SuggestionEngine,
+    FixOption,
 )
 
 __all__ = [
-    # Main engine
+    # Core
     "UnifiedReviewEngine",
     "ReviewEngineConfig",
     "ReviewResult",
-    "PipelineStats",
     # Context
     "CodeContext",
     "CodeContextBuilder",
-    "DefLocation",
-    "RefLocation",
-    "CallGraph",
-    "ImportInfo",
-    "ExportInfo",
-    "CodeChunk",
-    "FileState",
-    "CallContext",
-    "SymbolDef",
-    # Base
+    # Detectors
     "Detector",
+    "DetectorRegistry",
     "DetectorConfig",
-    "DetectorStats",
     "Finding",
-    "FindingSeverity",
     # Formatters
     "ResultFormatter",
     "MarkdownFormatter",
     "JsonFormatter",
+    "ConsoleFormatter",
+    # Suggestions
+    "SuggestionEngine",
+    "FixOption",
 ]

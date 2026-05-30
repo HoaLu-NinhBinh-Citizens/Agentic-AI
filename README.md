@@ -1,9 +1,9 @@
 # Agentic-AI
-
+|
 Local AI Agent for Embedded Systems - 100% Feature Parity with oh-my-pi
-
+|
 ## Features
-
+|
 - **LLM Integration**: OpenAI, Anthropic, Ollama, Groq, v.v.
 - **Shell Engine**: Full job control, pipes, built-in commands
 - **LSP/DAP**: Python/TypeScript language server, debugger
@@ -15,208 +15,208 @@ Local AI Agent for Embedded Systems - 100% Feature Parity with oh-my-pi
 - **Persistent Kernel**: Jupyter-like execution
 - **Cloud Sync**: S3, WebDAV, Local
 - **CLI**: PyInstaller + Docker packaging
-
+|
 ## Installation
-
+|
 ```bash
 # Clone repository
 git clone https://github.com/agentic-ai/agentic-ai.git
 cd agentic-ai
-
+|
 # Install dependencies
 pip install -e .
-
+|
 # Hoặc sử dụng Docker
 docker-compose up agentic-ai
 ```
-
+|
 ## Quick Start
-
+|
 ### Interactive Mode
-
+|
 ```bash
 agentic-ai
 ```
-
+|
 ### Chat Mode
-
+|
 ```bash
 agentic-ai chat --prompt "Explain async/await in Python"
 ```
-
+|
 ### Run Task
-
+|
 ```bash
 agentic-ai run "Fix the bug in main.py"
 ```
-
+|
 ### Shell Engine
-
+|
 ```bash
 agentic-ai shell
 ```
-
+|
 ### Web Search
-
+|
 ```bash
 agentic-ai search "Python best practices"
 ```
-
+|
 ## Features Overview
-
+|
 ### Shell Engine
-
+|
 ```python
 from src.infrastructure.shell.shell_engine import ShellEngine
-
+|
 shell = ShellEngine()
-
+|
 # Basic commands
 await shell.execute("ls -la")
 await shell.execute("cd /path/to/project")
-
+|
 # Piping
 await shell.execute("ls | grep .py")
-
+|
 # Background jobs
 await shell.execute("long-task &")
 await shell.execute("jobs")
 await shell.execute("fg 1")
 ```
-
+|
 ### LLM Client
-
+|
 ```python
 from src.infrastructure.llm.llm_client import LLMClient
-
+|
 client = LLMClient()
-
+|
 # Chat
 response = await client.chat("Hello!", model="gpt-4o")
-
+|
 # Streaming
 async for chunk in client.stream("Write a story"):
     print(chunk, end="", flush=True)
 ```
-
+|
 ### LSP (Language Server)
-
+|
 ```python
 from src.infrastructure.lsp.lsp_client import LSPClient
-
+|
 client = LSPClient()
 await client.connect()
-
+|
 # Get completions
 completions = await client.get_completions("file.py", line=1, col=5)
-
+|
 # Get diagnostics
 diagnostics = await client.get_diagnostics("file.py")
-
+|
 # Goto definition
 location = await client.goto_definition("file.py", line=1, col=5)
-
+|
 await client.disconnect()
 ```
-
+|
 ### Git Integration
-
+|
 ```python
 from src.infrastructure.git.git_integration import GitRepo
-
+|
 repo = GitRepo("/path/to/project")
-
+|
 # Status
 status = await repo.status()
-
+|
 # Commit
 await repo.add("file.py")
 await repo.commit("Fix bug")
-
+|
 # Push
 await repo.push()
 ```
-
+|
 ### Web Search
-
+|
 ```python
 from src.infrastructure.web.web_search import DuckDuckGoSearch
-
+|
 search = DuckDuckGoSearch()
 results = await search.search("Python tips", num_results=5)
-
+|
 for r in results:
     print(f"{r.title}: {r.url}")
 ```
-
+|
 ### Persistent Kernel (Jupyter-like)
-
+|
 ```python
 from src.infrastructure.kernel.persistent_kernel import PersistentKernel, KernelLanguage
-
+|
 kernel = PersistentKernel(KernelLanguage.PYTHON)
 await kernel.start()
-
+|
 # Execute - variables persist
 await kernel.execute("x = 10")
 await kernel.execute("y = x * 2")
 print(kernel.variables.get("y"))  # 20
-
+|
 await kernel.stop()
 ```
-
+|
 ### Plugin Marketplace
-
+|
 ```python
 from src.infrastructure.marketplace.plugin_marketplace import PluginMarketplace
-
+|
 marketplace = PluginMarketplace()
-
+|
 # Browse
 listings = await marketplace.browse(sort_by="downloads")
-
+|
 # Install
 await marketplace.install("git-assistant")
-
+|
 # Check updates
 updates = await marketplace.check_updates()
 ```
-
+|
 ### Collaboration
-
+|
 ```python
 from src.infrastructure.collab.collaboration import CollabServer, CollabClient
-
+|
 # Server
 server = CollabServer(host="0.0.0.0", port=8765)
 await server.start()
-
+|
 # Client
 client = CollabClient("ws://localhost:8765")
 await client.connect()
 session = await client.join(session_id="abc", name="User")
 ```
-
+|
 ### Vim Mode
-
+|
 ```python
 from src.infrastructure.vim.vim_mode import VimEngine
-
+|
 vim = VimEngine()
 vim.load_content("Hello World")
-
+|
 # Motions
 vim._move_right()  # l
 vim._move_down()    # j
-
+|
 # Modes
 vim._enter_insert_mode()
 vim.insert_text("New text")
 vim._exit_insert_mode()
 ```
-
+|
 ## Architecture
-
+|
 ```
 Agentic-AI/
 ├── src/
@@ -247,22 +247,22 @@ Agentic-AI/
 └── docs/
     └── USAGE_GUIDE.py            # Examples
 ```
-
+|
 ## Testing
-
+|
 ```bash
 # Run all tests
 python -m pytest tests/
-
+|
 # Run specific test
 python -m pytest tests/unit/test_shell.py
-
+|
 # Run with coverage
 python -m pytest --cov=src tests/
 ```
-
+|
 ## CLI Commands
-
+|
 | Command | Description |
 |---------|-------------|
 | `agentic-ai` | Interactive mode |
@@ -272,7 +272,7 @@ python -m pytest --cov=src tests/
 | `agentic-ai search <query>` | Web search |
 | `agentic-ai plugins list` | List plugins |
 | `agentic-ai plugins install <name>` | Install plugin |
-
+|
 ## License
-
+|
 MIT License

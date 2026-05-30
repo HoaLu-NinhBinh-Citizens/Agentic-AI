@@ -48,7 +48,7 @@ class PipelineStats:
 class MarkdownReportGenerator:
     """Generate Cursor-style markdown reports for code review output."""
 
-    _severity_emoji = {
+    _EMOJI_MAP = {
         Severity.CRITICAL: "🔴",
         Severity.HIGH: "🟠",
         Severity.MEDIUM: "🟡",
@@ -107,7 +107,7 @@ class MarkdownReportGenerator:
         return sorted_findings[:3]
 
     def _severity_emoji(self, severity: Severity) -> str:
-        return self._severity_emoji.get(severity, "⚪")
+        return self._EMOJI_MAP.get(severity, "⚪")
 
     def _build_header(self, stats: PipelineStats) -> str:
         timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")

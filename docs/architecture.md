@@ -1,180 +1,100 @@
-# Architecture - AI_SUPPORT
-
-**Date:** 2026-05-23
-**Phase:** 1a.5
-**Product:** Embedded CI/HIL Intelligence Platform
-
----
+# AI_SUPPORT Architecture
 
 ## Overview
 
+AI_SUPPORT is a local embedded engineering intelligence system with Cursor-like code review capabilities.
+
+## System Architecture
+
 ```
 ┌─────────────────────────────────────────────────────────────────┐
-│                        AI_SUPPORT Platform                       │
-├─────────────────────────────────────────────────────────────────┤
-│  ┌─────────────┐  ┌─────────────┐  ┌─────────────┐             │
-│  │  CLI (TUI)  │  │  WebSocket  │  │    REST     │  Interfaces  │
-│  └──────┬──────┘  └──────┬──────┘  └──────┬──────┘             │
-│         │                │                │                     │
-│  ┌──────┴────────────────┴────────────────┴──────┐             │
-│  │              API Gateway / Router              │  Gateway   │
-│  └──────────────────────┬────────────────────────┘             │
-│                         │                                        │
-│  ┌──────────────────────┴────────────────────────┐             │
-│  │              Agent Runtime Kernel               │  Core       │
-│  │  ┌──────────┐ ┌──────────┐ ┌──────────┐       │             │
-│  │  │ Debug    │ │ Test     │ │ Patch    │       │  Agents     │
-│  │  │ Agent    │ │ Agent    │ │ Agent    │       │             │
-│  │  └──────────┘ └──────────┘ └──────────┘       │             │
-│  └──────────────────────┬────────────────────────┘             │
-│                         │                                        │
-│  ┌──────────┐ ┌──────────┴──────────┐ ┌──────────┐             │
-│  │ Memory   │ │    Tool Registry    │ │  Cost    │  Services    │
-│  │ Service  │ │                     │ │Governance│             │
-│  └──────────┘ └─────────────────────┘ └──────────┘             │
-├─────────────────────────────────────────────────────────────────┤
-│  ┌──────────┐ ┌──────────┐ ┌──────────┐ ┌──────────┐           │
-│  │  LLM     │ │ Hardware │ │ Firmware │ │  Event   │  Ports     │
-│  │ Gateway  │ │  Debug   │ │  Loader  │ │   Bus    │             │
-│  └──────────┘ └──────────┘ └──────────┘ └──────────┘           │
-├─────────────────────────────────────────────────────────────────┤
-│  ┌──────────┐ ┌──────────┐ ┌──────────┐                       │
-│  │ PostgreSQL│ │  Redis   │ │  File    │  Storage              │
-│  └──────────┘ └──────────┘ └──────────┘                       │
+│                         CLI / TUI                                │
+│                    (User Interface Layer)                        │
+└─────────────────────────────────────────────────────────────────┘
+                              │
+                              ▼
+┌─────────────────────────────────────────────────────────────────┐
+│                    Conversation Layer                            │
+│     (ConversationManager, SuggestionHandler)                     │
+└─────────────────────────────────────────────────────────────────┘
+                              │
+                              ▼
+┌─────────────────────────────────────────────────────────────────┐
+│                   Application Layer                               │
+│  ┌─────────────────┐  ┌──────────────────┐  ┌────────────────┐  │
+│  │ Unified Review  │  │ Unified           │  │ Workflows     │  │
+│  │ Engine          │  │ SuggestionEngine  │  │               │  │
+│  └─────────────────┘  └──────────────────┘  └────────────────┘  │
+└─────────────────────────────────────────────────────────────────┘
+                              │
+                              ▼
+┌─────────────────────────────────────────────────────────────────┐
+│                  Infrastructure Layer                            │
+│  ┌──────────────┐ ┌────────────┐ ┌──────────┐ ┌───────────────┐ │
+│  │ Indexing     │ │ Analysis   │ │ Reporting│ │ LLM          │ │
+│  │ - SafeTree   │ │ - ML Rules │ │ - Markdown│ │ - Ollama     │ │
+│  │ - Reference  │ │ - Security │ │ - JSON   │ │ - Prompts    │ │
+│  │ - Dependency │ │ - Quality  │ │ - CLI    │ │              │ │
+│  └──────────────┘ └────────────┘ └──────────┘ └───────────────┘ │
+└─────────────────────────────────────────────────────────────────┘
+                              │
+                              ▼
+┌─────────────────────────────────────────────────────────────────┐
+│                    Core Layer                                    │
+│  ┌──────────────┐ ┌────────────┐ ┌──────────────────────────┐  │
+│  │ Fix Engine   │ │ LLM Fixes  │ │ Type Resolver            │  │
+│  │ - Apply      │ │ - Generate │ │ - Import Tracker          │  │
+│  │ - Preview    │ │ - Explain  │ │ - Semantic Resolver      │  │
+│  │ - Rollback   │ │            │ │ - Call Graph Builder      │  │
+│  └──────────────┘ └────────────┘ └──────────────────────────┘  │
 └─────────────────────────────────────────────────────────────────┘
 ```
 
----
+## Components
 
-## Architecture Principles
-
-1. **Monolithic for MVP** — Single deployment, in-memory for Phase 1-2
-2. **Port/Adapter Pattern** — Decouple core from infrastructure
-3. **Event-Driven** — Async communication via event bus
-4. **AI-Augmented** — LLM enhances, not replaces, engineering judgment
-
----
-
-## Core Components
-
-### 1. Interfaces Layer
-
-| Component | Purpose | Tech |
-|-----------|---------|------|
-| CLI/TUI | Terminal UI | Textual |
-| WebSocket | Real-time streaming | FastAPI |
-| REST API | CRUD operations | FastAPI |
-
-### 2. Gateway Layer
-
-- **API Gateway** — Routing, auth, rate limiting
-- **Session Manager** — WebSocket connection lifecycle
-- **Middleware** — Logging, metrics, tracing
-
-### 3. Agent Runtime Kernel
+### Indexing (`src/infrastructure/indexing/`)
 
 | Component | Purpose |
 |-----------|---------|
-| Agent Lifecycle | Spawn, suspend, resume, cancel |
-| Agent Sandbox | Tool permissions, resource quota |
-| Deterministic FSM | Replayable execution |
-| Agent Scheduler | Priority, fairness, backpressure |
-| Failure Isolation | Crash isolation, retry boundary |
+| `SafeTreeSitterIndexer` | AST parsing with 14+ language support |
+| `IncrementalIndexer` | Content-hash based incremental indexing |
+| `ReferenceGraph` | Symbol definitions, references, call graph |
+| `DependencyGraph` | Import/export tracking |
 
-### 4. Agent Types
+### Analysis (`src/infrastructure/analysis/`)
 
-| Agent | Purpose |
-|-------|---------|
-| Debug Agent | Firmware analysis, root cause |
-| Test Agent | Test generation, execution |
-| Patch Agent | Suggest fixes, validate |
-| Review Agent | Code review, quality gate |
+| Component | Purpose |
+|-----------|---------|
+| `RuleEngine` | 28 general-purpose rules |
+| `MLRuleEngine` | 10 ML-specific rules |
+| `MLDetectors` | AST-based ML bug detection |
+| `TypeResolver` | Import alias resolution |
+| `SemanticResolver` | Cross-file symbol resolution |
 
-### 5. Services Layer
+### Fix Engine (`src/core/fix_engine/`)
 
-| Service | Purpose |
-|---------|---------|
-| Memory Service | Working + long-term memory |
-| Tool Registry | MCP tools, schema, versioning |
-| Cost Governance | Token budget, adaptive routing |
+| Component | Purpose |
+|-----------|---------|
+| `ApplyFixTool` | Apply fixes with backup/rollback |
+| `FixBatch` | Batch fix operations |
 
-### 6. Ports (Interfaces to External)
+### LLM Integration (`src/infrastructure/llm/`)
 
-| Port | Purpose |
-|------|---------|
-| LLM Gateway | Ollama, OpenAI, Anthropic, Gemini |
-| Hardware Debug | J-Link, ST-Link, CMSIS-DAP |
-| Firmware Loader | ELF parsing, symbol index |
-| Event Bus | Async messaging |
-
----
+| Component | Purpose |
+|-----------|---------|
+| `LocalLLMProvider` | Ollama API integration |
+| `LLMManager` | Multi-provider management |
+| `LLMFixEngine` | LLM-powered fix generation |
 
 ## Data Flow
 
-```
-User Input → CLI/WS → Gateway → Agent Runtime → Tool Execution
-                                              ↓
-                                        Hardware Probe
-                                              ↓
-                                        Response → Gateway → User
-```
+1. **Input**: User runs `/review [files]`
+2. **Indexing**: SafeTreeSitterIndexer parses AST
+3. **Analysis**: Detectors run against CodeContext
+4. **Findings**: Results collected and deduplicated
+5. **Suggestions**: Fix options generated
+6. **Output**: Markdown/JSON/CLI report
 
----
+## Configuration
 
-## Technology Stack
-
-| Layer | Technology | Rationale |
-|-------|------------|-----------|
-| API | FastAPI | Async, OpenAPI, WebSocket |
-| Agents | LangGraph | Stateful, graph-based |
-| LLM | Ollama + OpenAI | Local + cloud |
-| DB | PostgreSQL | ACID, JSON, mature |
-| Cache | Redis | Persistence, pub/sub |
-| Hardware | pylink2, pyocd | ARM debug |
-| Logging | structlog | Structured |
-
----
-
-## Migration Path
-
-```
-Phase 1-2: Monolithic + in-memory
-    ↓
-Phase 4: Add PostgreSQL for persistence
-    ↓
-Phase 6: Extract services if needed
-    ↓
-Phase 11+: Multi-node, horizontal scaling
-```
-
----
-
-## Architecture Decision Records
-
-See `docs/adr/` for detailed decisions:
-
-- [ADR-001: Architecture Style](adr/001_architecture_style.md)
-- [ADR-002: Database Choice](adr/002_database.md)
-- [ADR-003: Event Store](adr/003_event_store.md)
-- [ADR-004: LLM Provider](adr/004_llm_provider.md)
-
----
-
-## Non-Functional Requirements
-
-| Requirement | Target |
-|-------------|--------|
-| Latency | <100ms for UI, <5s for analysis |
-| Availability | 99.9% |
-| Sessions | ≤100 concurrent |
-| Memory | ≤500MB per node |
-
----
-
-## Risks & Mitigations
-
-| Risk | Mitigation |
-|------|------------|
-| LLM hallucination | Deterministic validation, hardware constraints |
-| Hardware variability | Abstraction layer, plugin system |
-| Scale bottleneck | Design for stateless, add caching later |
+See `docs/CONFIGURATION.md`
