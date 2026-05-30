@@ -2,6 +2,10 @@
 
 This module provides an interactive session for applying code fixes
 with user confirmation before each fix is applied.
+
+Supports both:
+- Legacy Fix objects (from src.core.fix_engine.models)
+- Unified ReviewIssue objects (from src.domain.models.review_issue)
 """
 
 from __future__ import annotations
@@ -10,11 +14,14 @@ import asyncio
 import logging
 from dataclasses import dataclass, field
 from enum import Enum
-from typing import Optional, Protocol
+from typing import Optional, Protocol, Union
 
 from src.core.fix_engine.models import Fix, FixBatch, FixResult, FixStatus
 
 logger = logging.getLogger(__name__)
+
+# Type alias for supported input types
+FixInput = Union[Fix, "ReviewIssue"]
 
 
 class FixResponse(Enum):
@@ -401,3 +408,164 @@ async def apply_interactive_fixes(
             )
 
     return results, result
+
+
+# ─── ReviewIssue Support (Unified Schema) ─────────────────────────────────────
+
+
+def review_issue_to_fixes(issue: "ReviewIssue") -> list[Fix]:
+    """Convert a ReviewIssue to Fix objects for interactive processing.
+
+    Args:
+        issue: ReviewIssue to convert
+
+    Returns:
+        List of Fix objects
+    """
+    if not issue.is_fixable:
+        return []
+
+    fixes: list[Fix] = []
+    for i, fix_option in enumerate(issue.fixes):
+        fix = Fix(
+            id=fix_option.id,
+            file_path=issue.file,
+            line_start=issue.line,
+            line_end=issue.end_line or issue.line,
+            old_text=fix_option.old_code,
+            new_text=fix_option.new_code,
+            reason=fix_option.title,
+            rule_id=issue.rule_id,
+            severity=FixSeverity.WARNING,
+            confidence=fix_option.confidence,
+            created_by=f"review_issue:{issue.detector}",
+            llm_explanation=issue.explanation or fix_option.description,
+        )
+        fixes.append(fix)
+
+    return fixes
+
+
+async def run_interactive_fix_from_issues(
+    issues: list["ReviewIssue"],
+    workspace_root: str,
+    prompt_provider: Optional[UserPromptProvider] = None,
+    auto_approved_rules: Optional[set[str]] = None,
+) -> InteractiveFixResult:
+    """Run interactive fix session from ReviewIssue list.
+
+    Args:
+        issues: List of ReviewIssues to potentially fix
+        workspace_root: Root directory of the workspace
+        prompt_provider: Provider for user prompts (uses console if None)
+        auto_approved_rules: Set of rule IDs to auto-approve without prompting
+
+    Returns:
+        InteractiveFixResult with session results
+    """
+    # Convert all ReviewIssues to Fix objects
+    all_fixes: list[Fix] = []
+    for issue in issues:
+        all_fixes.extend(review_issue_to_fixes(issue))
+
+    return await run_interactive_fix(
+        fixes=all_fixes,
+        workspace_root=workspace_root,
+        prompt_provider=prompt_provider,
+        auto_approved_rules=auto_approved_rules,
+    )
+
+
+async def apply_interactive_fixes_from_issues(
+    issues: list["ReviewIssue"],
+    workspace_root: str,
+    apply_tool,
+    prompt_provider: Optional[UserPromptProvider] = None,
+) -> tuple[list[FixResult], InteractiveFixResult]:
+    """Apply fixes from ReviewIssue list interactively with user confirmation.
+
+    Args:
+        issues: List of ReviewIssues to potentially fix
+        workspace_root: Root directory of the workspace
+        apply_tool: ApplyFixTool instance to apply actual fixes
+        prompt_provider: Provider for user prompts
+
+    Returns:
+        Tuple of (list of FixResults, InteractiveFixResult)
+    """
+    result = await run_interactive_fix_from_issues(
+        issues=issues,
+        workspace_root=workspace_root,
+        prompt_provider=prompt_provider,
+    )
+
+    results: list[FixResult] = []
+
+    for fix in result.session.applied_fixes:
+        fix_result = apply_tool.apply_fix(fix)
+        results.append(fix_result)
+
+        if not fix_result.success:
+            logger.warning(
+                "Failed to apply fix %s: %s",
+                fix.id,
+                fix_result.error,
+            )
+
+    return results, result
+
+
+def format_review_issue_preview(issue: "ReviewIssue") -> str:
+    """Format a ReviewIssue for preview display.
+
+    Args:
+        issue: ReviewIssue to format
+
+    Returns:
+        Formatted string for preview
+    """
+    lines = [
+        f"## ReviewIssue: {issue.rule_id}",
+        f"",
+        f"**File:** `{issue.location}`",
+        f"**Severity:** {issue.severity.label if hasattr(issue.severity, 'label') else issue.severity}",
+        f"**Confidence:** {issue.confidence:.0%}",
+        f"",
+        f"**Message:** {issue.message}",
+        f"",
+    ]
+
+    if issue.explanation:
+        lines.extend([
+            f"**Explanation:** {issue.explanation}",
+            f"",
+        ])
+
+    if issue.evidence:
+        if issue.evidence.old_code:
+            lines.extend([
+                f"**Current Code:**",
+                f"```",
+                issue.evidence.old_code,
+                f"```",
+                f"",
+            ])
+        if issue.evidence.new_code:
+            lines.extend([
+                f"**Proposed Fix:**",
+                f"```",
+                issue.evidence.new_code,
+                f"```",
+                f"",
+            ])
+
+    if issue.fixes:
+        lines.append("**Fix Options:**")
+        for i, fix in enumerate(issue.fixes, 1):
+            risk_icon = "✅" if fix.is_safe else "⚠️"
+            lines.append(f"{i}. {risk_icon} {fix.title}")
+            if fix.description:
+                lines.append(f"   - {fix.description}")
+        lines.append("")
+
+    return "\n".join(lines)

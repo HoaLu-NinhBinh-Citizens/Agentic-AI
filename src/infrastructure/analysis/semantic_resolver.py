@@ -11,6 +11,20 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Optional
 
+from src.infrastructure.analysis.alias_resolver import AliasResolver, AliasEntry
+
+
+@dataclass
+class SymbolInfo:
+    """Complete symbol information for semantic resolution."""
+    name: str
+    file_path: Path
+    line: int
+    kind: str  # "function", "class", "variable", "method", "builtin"
+    resolved_from: Optional[str] = None  # Original import path if aliased
+    confidence: float = 1.0
+    is_alias: bool = False
+
 
 @dataclass
 class ResolvedSymbol:
@@ -38,7 +52,8 @@ class SemanticResolver:
     """Resolve symbols across files using semantic analysis.
     
     This resolver uses Python AST parsing for accurate symbol resolution,
-    understanding imports, qualified names, and type flow across files.
+    understanding imports, qualified names, type flow across files,
+    and import aliases.
     """
 
     PYTHON_BUILTINS: frozenset[str] = frozenset({
@@ -61,6 +76,10 @@ class SemanticResolver:
         self._type_hints: dict[str, str] = {}  # variable -> type
         self._content_cache: dict[Path, str] = {}
         self._module_name_cache: dict[Path, str] = {}
+        
+        # Alias resolution support
+        self._alias_resolver = AliasResolver()
+        self._alias_map: dict[Path, dict[str, str]] = {}  # file -> {alias: original}
 
     def index_project(
         self,
@@ -78,6 +97,9 @@ class SemanticResolver:
         for path, content in contents.items():
             imports = self._parse_imports(content)
             self._imports[path] = imports
+            # Parse and store alias map
+            self._alias_resolver.parse_import(str(path), content)
+            self._alias_map[path] = self._alias_resolver.get_all_aliases(str(path))
 
         for path, content in contents.items():
             exports = self._parse_exports(path, content)
@@ -85,6 +107,167 @@ class SemanticResolver:
                 module_name = self._get_module_name(path)
                 key = f"{module_name}.{exp.name}"
                 self._exports[key] = exp
+
+    def resolve_symbol_reference(
+        self,
+        file_path: Path,
+        symbol_name: str,
+        line: int,
+        content: Optional[str] = None
+    ) -> Optional[SymbolInfo]:
+        """Resolve symbol reference to its definition.
+        
+        Handles:
+        - Local variables
+        - Imported symbols (with aliases)
+        - Cross-file references
+        - Class/instance methods
+        
+        Args:
+            file_path: Path to the file containing the reference.
+            symbol_name: Name of the symbol to resolve.
+            line: Line number of the reference (1-indexed).
+            content: Optional file content (uses cache if not provided).
+            
+        Returns:
+            SymbolInfo with resolved location, or None if not found.
+        """
+        # Get content if not provided
+        if content is None:
+            content = self._content_cache.get(file_path, "")
+
+        # 1. Check local definitions
+        local = self._resolve_local(symbol_name, content, line)
+        if local:
+            return SymbolInfo(
+                name=symbol_name,
+                file_path=local.file_path or file_path,
+                line=local.line,
+                kind=local.kind,
+                resolved_from="local_definition",
+                confidence=1.0
+            )
+
+        # 2. Check imports with alias support
+        imported = self._resolve_imported_symbol(file_path, symbol_name, content)
+        if imported:
+            return imported
+
+        # 3. Check builtins
+        if symbol_name in self.PYTHON_BUILTINS:
+            return SymbolInfo(
+                name=symbol_name,
+                file_path=Path("builtins"),
+                line=0,
+                kind="builtin",
+                resolved_from="builtin",
+                confidence=1.0
+            )
+
+        # 4. Check module exports
+        for key, exp in self._exports.items():
+            if exp.name == symbol_name:
+                return SymbolInfo(
+                    name=symbol_name,
+                    file_path=exp.file_path,
+                    line=exp.line,
+                    kind=exp.kind,
+                    resolved_from=f"module_export:{key}",
+                    confidence=0.9
+                )
+
+        return None
+
+    def _resolve_imported_symbol(
+        self,
+        file_path: Path,
+        symbol_name: str,
+        content: str
+    ) -> Optional[SymbolInfo]:
+        """Resolve symbol that was imported with possible alias."""
+        file_str = str(file_path)
+        aliases = self._alias_map.get(file_path, {})
+        
+        # Check if symbol is an alias
+        if symbol_name in aliases:
+            original = aliases[symbol_name]
+            # Look up in imports to find module
+            imports = self._imports.get(file_path, [])
+            for imp in imports:
+                for orig, alias in imp.names:
+                    resolved_name = alias if alias else orig.split(".")[-1]
+                    if resolved_name == symbol_name:
+                        # Try to resolve through exports
+                        export_key = f"{imp.module}.{original}" if isinstance(original, str) else original
+                        if export_key in self._exports:
+                            exp = self._exports[export_key]
+                            return SymbolInfo(
+                                name=symbol_name,
+                                file_path=exp.file_path,
+                                line=exp.line,
+                                kind=exp.kind,
+                                resolved_from=f"import_alias:{imp.module}.{original}",
+                                confidence=0.95,
+                                is_alias=True
+                            )
+
+        # Fall back to standard import resolution
+        imports = self._imports.get(file_path, [])
+        for imp in imports:
+            for original, alias in imp.names:
+                resolved_name = alias if alias else original.split(".")[-1]
+                if resolved_name == symbol_name:
+                    export_key = f"{imp.module}.{original}"
+                    if export_key in self._exports:
+                        exp = self._exports[export_key]
+                        return SymbolInfo(
+                            name=symbol_name,
+                            file_path=exp.file_path,
+                            line=exp.line,
+                            kind=exp.kind,
+                            resolved_from=f"import:{imp.module}",
+                            confidence=0.95
+                        )
+
+        return None
+
+    def _follow_import_chain(
+        self,
+        module_path: str,
+        symbol_name: str,
+        visited: Optional[set[str]] = None
+    ) -> Optional[SymbolInfo]:
+        """Follow import chain to find original definition.
+        
+        Args:
+            module_path: Starting module path.
+            symbol_name: Symbol to find.
+            visited: Set of already visited modules (for cycle detection).
+            
+        Returns:
+            SymbolInfo if found, None otherwise.
+        """
+        if visited is None:
+            visited = set()
+        
+        key = f"{module_path}.{symbol_name}"
+        if key in visited:
+            return None
+        visited.add(key)
+
+        # Check exports
+        if key in self._exports:
+            exp = self._exports[key]
+            return SymbolInfo(
+                name=symbol_name,
+                file_path=exp.file_path,
+                line=exp.line,
+                kind=exp.kind,
+                resolved_from=key,
+                confidence=0.9
+            )
+
+        return None
 
     def resolve_symbol(
         self,
@@ -97,7 +280,7 @@ class SemanticResolver:
         """Resolve a symbol at a specific location.
         
         Returns ResolvedSymbol with full context.
-        Resolution order: local -> imports -> builtins -> module exports.
+        Resolution order: local -> imports (with alias support) -> builtins -> module exports.
         
         Args:
             name: Symbol name to resolve.
@@ -114,8 +297,8 @@ class SemanticResolver:
         if local:
             return local
 
-        # 2. Check imports
-        imported = self._resolve_import(name, file_path, content, line)
+        # 2. Check imports with enhanced alias support
+        imported = self._resolve_import_enhanced(name, file_path, content, line)
         if imported:
             return imported
 
@@ -128,6 +311,47 @@ class SemanticResolver:
         exported = self._resolve_export(name, file_path)
         if exported:
             return exported
+
+        return None
+
+    def _resolve_import_enhanced(
+        self,
+        name: str,
+        file_path: Path,
+        content: str,
+        line: int
+    ) -> Optional[ResolvedSymbol]:
+        """Enhanced import resolution with alias tracking."""
+        imports = self._imports.get(file_path, [])
+        aliases = self._alias_map.get(file_path, {})
+
+        for imp in imports:
+            for original, alias in imp.names:
+                resolved_name = alias if alias else original.split(".")[-1]
+                if resolved_name == name:
+                    # Found import - check if it's an alias
+                    is_alias = name in aliases
+                    original_name = aliases.get(name, original) if is_alias else original
+                    
+                    # Look up the exported symbol
+                    export_key = f"{imp.module}.{original_name}"
+                    if export_key in self._exports:
+                        exp = self._exports[export_key]
+                        return ResolvedSymbol(
+                            name=name,
+                            file_path=exp.file_path,
+                            line=exp.line,
+                            end_line=exp.end_line,
+                            kind=exp.kind,
+                            resolved_via=f"import{' (aliased)' if is_alias else ''} {imp.module}",
+                            confidence=0.95
+                        )
+
+                    # Handle 'from X import Y' where Y might be a submodule
+                    if "." in original_name:
+                        module_key = f"{imp.module}.{original_name.split('.')[0]}"
+                        if module_key in self._exports:
+                            return self._exports[module_key]
 
         return None
 

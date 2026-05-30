@@ -1,5 +1,9 @@
 """Unit tests for SymbolGraph."""
 import asyncio
+import os
+import time
+from unittest.mock import patch
+
 import pytest
 from pathlib import Path
 
@@ -10,6 +14,7 @@ from src.infrastructure.indexing.symbol_graph import (
     CycleInfo,
     SymbolGraphStats,
 )
+from src.infrastructure.indexing.hash_utils import compute_content_hash
 
 
 def run_sync(coro):
@@ -128,6 +133,49 @@ class TestSymbolGraph:
         f.write_text("def func():\n    print(1)\n", encoding="utf-8")
         r2 = run_sync(self.graph.index_file(str(f)))
         assert r2["status"] == "indexed"
+
+    def test_content_hash_detection(self, tmp_path):
+        """Test that content changes are detected even when mtime is mocked to stay the same."""
+        f = tmp_path / "test.py"
+        f.write_text("def original():\n    pass\n", encoding="utf-8")
+
+        # First index
+        r1 = run_sync(self.graph.index_file(str(f)))
+        assert r1["status"] == "indexed"
+
+        # Verify hash is stored
+        assert str(f) in self.graph._file_hash
+        original_hash = self.graph._file_hash[str(f)]
+
+        # Modify file content
+        f.write_text("def modified():\n    print(1)\n", encoding="utf-8")
+
+        # Mock mtime to NOT change (simulating Windows filesystem behavior)
+        original_mtime = os.path.getmtime(str(f))
+
+        with patch("src.infrastructure.indexing.symbol_graph.os.path.getmtime", return_value=original_mtime):
+            # File should still be re-indexed because content hash changed
+            r2 = run_sync(self.graph.index_file(str(f)))
+            assert r2["status"] == "indexed", "File should be re-indexed when content hash changes"
+            assert self.graph._file_hash[str(f)] != original_hash, "Hash should be updated"
+
+    def test_content_hash_unchanged_same_content(self, tmp_path):
+        """Test that same content returns unchanged status."""
+        f = tmp_path / "test.py"
+        f.write_text("def func():\n    pass\n", encoding="utf-8")
+
+        # First index
+        r1 = run_sync(self.graph.index_file(str(f)))
+        assert r1["status"] == "indexed"
+
+        # Touch file (update mtime) without changing content
+        old_mtime = os.path.getmtime(str(f))
+        time.sleep(0.01)  # Small delay to ensure different mtime if possible
+        os.utime(str(f), (old_mtime + 1, old_mtime + 1))
+
+        # Second index - should be unchanged due to hash match
+        r2 = run_sync(self.graph.index_file(str(f)))
+        assert r2["status"] == "unchanged", "File should be unchanged when content hash matches"
 
     # ─── Symbol extraction ─────────────────────────────────────────────────
 

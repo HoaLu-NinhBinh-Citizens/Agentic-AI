@@ -18,29 +18,17 @@ from __future__ import annotations
 import logging
 from abc import ABC, abstractmethod
 from dataclasses import dataclass, field
-from enum import Enum
 from pathlib import Path
 from typing import Any, Optional
 
 from src.application.workflows.unified.code_context import CodeContext
+from src.shared.enums.severity import Severity
 
 logger = logging.getLogger(__name__)
 
 
-# ─── Severity Enum ─────────────────────────────────────────────────────────────
-
-
-class FindingSeverity(Enum):
-    """Finding severity level."""
-    ERROR = "error"
-    WARNING = "warning"
-    INFO = "info"
-    HINT = "hint"
-
-    def to_numeric(self) -> float:
-        """Convert severity to numeric score for ranking."""
-        mapping = {"error": 1.0, "warning": 0.7, "info": 0.4, "hint": 0.2}
-        return mapping[self.value]
+# Backward compatibility alias
+FindingSeverity = Severity
 
 
 # ─── Finding Class ─────────────────────────────────────────────────────────────

@@ -2,18 +2,12 @@
 
 from dataclasses import dataclass, field
 from datetime import datetime
-from enum import Enum
 from typing import Optional
 
+from src.shared.enums.severity import Severity
 
-class Severity(Enum):
-    """Finding severity levels."""
-
-    CRITICAL = "critical"
-    HIGH = "high"
-    MEDIUM = "medium"
-    LOW = "low"
-    INFO = "info"
+# Backward compatibility alias
+ReportSeverity = Severity
 
 
 @dataclass

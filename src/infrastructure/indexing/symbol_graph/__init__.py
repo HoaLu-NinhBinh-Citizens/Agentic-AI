@@ -18,12 +18,15 @@ Architecture:
 from __future__ import annotations
 
 import asyncio
+import hashlib
 import logging
 import os
 import re
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Optional
+
+from src.infrastructure.indexing.hash_utils import compute_content_hash
 
 if TYPE_CHECKING:
     from src.infrastructure.indexing.tree_sitter import SafeTreeSitterIndexer
@@ -148,6 +151,7 @@ class SymbolGraph:
         self._callees_map: dict[str, list[CallEdge]] = {}  # caller → outgoing edges
         self._file_content: dict[str, str] = {}  # path → content cache
         self._file_mtime: dict[str, float] = {}  # path → mtime
+        self._file_hash: dict[str, str] = {}  # path → content hash (SHA256)
         self._lock = asyncio.Lock()
         self._stats = SymbolGraphStats()
 
@@ -161,7 +165,8 @@ class SymbolGraph:
         """Index a single file, extract symbols and call edges.
 
         Returns:
-            Dict with symbol count and call edge count.
+            Dict with status ("indexed" | "unchanged" | "error" | "not_found"),
+            symbol count, and call edge count.
         """
         async with self._lock:
             return await self._index_file_impl(path)
@@ -181,8 +186,12 @@ class SymbolGraph:
         except OSError as e:
             return {"path": path, "status": "error", "error": str(e)}
 
-        # Check if incremental update needed
-        if path in self._file_mtime and self._file_mtime[path] == mtime:
+        # Compute content hash for change detection
+        content_hash = compute_content_hash(content)
+
+        # Check if content hash unchanged (primary change detection)
+        # This handles cases where mtime doesn't update (Windows, fast writes)
+        if path in self._file_hash and self._file_hash[path] == content_hash:
             return {"path": path, "status": "unchanged", "symbols": 0, "edges": 0}
 
         # Remove old data for this file
@@ -190,6 +199,7 @@ class SymbolGraph:
 
         self._file_mtime[path] = mtime
         self._file_content[path] = content
+        self._file_hash[path] = content_hash
 
         # Extract symbols and build call edges
         symbols = self._extract_symbols(path, content)
@@ -281,6 +291,7 @@ class SymbolGraph:
 
         self._file_content.pop(path, None)
         self._file_mtime.pop(path, None)
+        self._file_hash.pop(path, None)
 
     # ─── Symbol extraction ─────────────────────────────────────────────────────
 
@@ -701,6 +712,7 @@ class SymbolGraph:
         self._callees_map.clear()
         self._file_content.clear()
         self._file_mtime.clear()
+        self._file_hash.clear()
         self._stats = SymbolGraphStats()
 
     def get_stats(self) -> dict[str, Any]:

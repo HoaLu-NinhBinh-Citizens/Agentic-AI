@@ -20,8 +20,8 @@ from src.application.workflows.unified.detector_base import (
     Detector,
     DetectorConfig,
     Finding,
-    FindingSeverity,
 )
+from src.shared.enums.severity import Severity
 
 if TYPE_CHECKING:
     from src.infrastructure.analysis.ml_detectors import MLDetector as InfraMLDetector
@@ -29,11 +29,11 @@ if TYPE_CHECKING:
 
 logger = logging.getLogger(__name__)
 
-# Map MLSeverity to FindingSeverity
+# Map MLSeverity string values to unified Severity
 _ML_SEVERITY_MAP = {
-    "CRITICAL": FindingSeverity.ERROR,
-    "HIGH": FindingSeverity.WARNING,
-    "MEDIUM": FindingSeverity.INFO,
+    "critical": Severity.CRITICAL,
+    "high": Severity.HIGH,
+    "medium": Severity.MEDIUM,
 }
 
 
@@ -154,10 +154,10 @@ class MLDetectorAdapter(Detector):
         Returns:
             Unified Finding object
         """
-        # Map severity
+        # Map severity using unified Severity
         ml_severity = ml_finding.severity.value
         unified_severity = _ML_SEVERITY_MAP.get(
-            ml_severity, FindingSeverity.WARNING
+            ml_severity, Severity.HIGH
         )
 
         # Extract code context

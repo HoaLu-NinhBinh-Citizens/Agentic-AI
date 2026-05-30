@@ -11,11 +11,14 @@ import pytest
 from src.infrastructure.reporting.markdown_report import (
     MarkdownReportGenerator,
     Finding,
-    Severity,
     PipelineStats,
 )
 from src.infrastructure.reporting.cli_report import CLIReportGenerator
 from src.infrastructure.reporting.json_report import JSONReportGenerator, JSONFinding
+from src.shared.enums.severity import Severity
+
+# Backward compatibility alias for tests
+ReportSeverity = Severity
 
 
 # =============================================================================

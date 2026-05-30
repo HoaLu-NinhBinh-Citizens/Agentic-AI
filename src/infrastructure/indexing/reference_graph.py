@@ -27,6 +27,7 @@ from typing import TYPE_CHECKING, Any, Optional
 
 from src.infrastructure.analysis.type_resolver import TypeResolver, TypeInfo
 from src.infrastructure.analysis.import_tracker import ImportTracker
+from src.infrastructure.analysis.alias_resolver import AliasResolver
 from src.infrastructure.analysis.semantic_resolver import SemanticResolver, ResolvedSymbol
 from src.infrastructure.analysis.call_graph_builder import CallGraphBuilder, CallGraph
 
@@ -237,6 +238,7 @@ class ReferenceGraph:
         self._max_file_size = max_file_size_bytes
         self._type_resolver = TypeResolver()
         self._import_tracker: Optional[ImportTracker] = None
+        self._alias_resolver = AliasResolver()  # NEW: Alias resolution support
 
         # Semantic resolution
         self._semantic_resolver = SemanticResolver()
@@ -269,6 +271,69 @@ class ReferenceGraph:
     @property
     def stats(self) -> ReferenceGraphStats:
         return self._stats
+
+    # ─── Import Alias Tracking ───────────────────────────────────────────────────
+
+    def add_import_alias(
+        self,
+        file_path: str,
+        alias: str,
+        original: str,
+        module: str,
+    ) -> None:
+        """Track import alias relationship.
+        
+        Args:
+            file_path: Path to the file with the import.
+            alias: The alias used in the file (e.g., 'pd').
+            original: The original symbol name (e.g., 'pandas').
+            module: The source module (e.g., 'pandas').
+        """
+        if file_path not in self._import_aliases:
+            self._import_aliases[file_path] = {}
+        self._import_aliases[file_path][alias] = (original, module)
+
+    def resolve_reference(
+        self,
+        file_path: str,
+        symbol_name: str,
+    ) -> Optional[SymbolLocation]:
+        """Resolve reference considering aliases.
+        
+        Args:
+            file_path: Path to the file containing the reference.
+            symbol_name: The symbol/alias to resolve.
+            
+        Returns:
+            SymbolLocation if found, None otherwise.
+        """
+        # Check import aliases first
+        aliases = self._import_aliases.get(file_path, {})
+        if symbol_name in aliases:
+            original, module = aliases[symbol_name]
+            # Try to find in definitions
+            defn = self._defs.get(original)
+            if defn:
+                return SymbolLocation(
+                    name=symbol_name,
+                    file_path=Path(defn.file_path),
+                    line=defn.line,
+                    kind=defn.symbol_type,
+                    resolved_from=f"{module}.{original}",
+                )
+            # Try with module prefix
+            for key, d in self._defs.items():
+                if key.endswith(f".{original}") or key == original:
+                    return SymbolLocation(
+                        name=symbol_name,
+                        file_path=Path(d.file_path),
+                        line=d.line,
+                        kind=d.symbol_type,
+                        resolved_from=f"{module}.{original}",
+                    )
+
+        # Fall back to normal lookup
+        return self._find_symbol_in_project(symbol_name)
 
     # ─── Indexing ─────────────────────────────────────────────────────────────
 

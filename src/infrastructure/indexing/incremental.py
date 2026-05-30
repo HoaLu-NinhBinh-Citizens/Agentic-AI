@@ -12,13 +12,14 @@ then a background task re-indexes lazily without blocking startup.
 from __future__ import annotations
 
 import asyncio
-import hashlib
 import logging
 import sqlite3
 import time
 from dataclasses import dataclass
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Callable, Coroutine, Sequence
+
+from src.infrastructure.indexing.hash_utils import compute_content_hash, compute_short_hash
 
 if TYPE_CHECKING:
     from src.domain.knowledge.kb import KnowledgeBase
@@ -131,13 +132,13 @@ class IndexStateDB:
     @staticmethod
     def content_hash_from_path(file_path: Path) -> str:
         try:
-            return hashlib.sha256(file_path.read_bytes()).hexdigest()[:24]
+            return compute_short_hash(file_path.read_text(encoding="utf-8", errors="replace"))
         except OSError:
             return ""
 
     @staticmethod
     def content_hash_from_str(content: str) -> str:
-        return hashlib.sha256(content.encode()).hexdigest()[:24]
+        return compute_short_hash(content)
 
 
 # =============================================================================

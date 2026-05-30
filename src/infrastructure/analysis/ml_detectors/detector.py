@@ -25,25 +25,21 @@ from __future__ import annotations
 
 import logging
 from dataclasses import dataclass, field
-from enum import Enum
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Optional
 
 if TYPE_CHECKING:
     from src.infrastructure.indexing.tree_sitter import SafeTreeSitterIndexer
 
+from src.shared.enums.severity import Severity
+
 from .ast_based import MLDetectorAST
 from .data_flow import DataFlowAnalyzer
 
 logger = logging.getLogger(__name__)
 
-
-class MLSeverity(Enum):
-    """ML rule severity levels."""
-    CRITICAL = "CRITICAL"  # Data leakage, wrong loss
-    HIGH = "HIGH"           # Device mismatch, missing no_grad
-    MEDIUM = "MEDIUM"       # Missing seeds
-
+# Backward compatibility alias
+MLSeverity = Severity
 
 # Confidence boost values for different detection contexts
 AST_CONFIDENCE_BOOST = 0.15  # AST detection is more accurate
@@ -106,42 +102,42 @@ class MLFinding:
 RULE_CONFIGS: dict[str, dict[str, Any]] = {
     "ML001": {
         "name": "data-leakage-scaler",
-        "severity": MLSeverity.CRITICAL,
+        "severity": Severity.CRITICAL,
         "base_confidence": 0.85,
         "confidence_boost": 0.10,
         "description": "Scaler fit before train_test_split leaks information",
     },
     "ML002": {
         "name": "cross-entropy-multi-label",
-        "severity": MLSeverity.CRITICAL,
+        "severity": Severity.CRITICAL,
         "base_confidence": 0.88,
         "confidence_boost": 0.05,
         "description": "CrossEntropyLoss used for multi-label classification",
     },
     "ML003": {
         "name": "device-mismatch",
-        "severity": MLSeverity.HIGH,
+        "severity": Severity.HIGH,
         "base_confidence": 0.85,
         "confidence_boost": 0.15,
         "description": "Model and data on different devices causes runtime error",
     },
     "ML004": {
         "name": "missing-no-grad",
-        "severity": MLSeverity.HIGH,
+        "severity": Severity.HIGH,
         "base_confidence": 0.80,
         "confidence_boost": 0.10,
         "description": "Inference code missing torch.no_grad() causes memory leak",
     },
     "ML005": {
         "name": "missing-seed",
-        "severity": MLSeverity.MEDIUM,
+        "severity": Severity.MEDIUM,
         "base_confidence": 0.75,
         "confidence_boost": 0.05,
         "description": "No random seed set - training is not reproducible",
     },
     "ML006": {
         "name": "hardcoded-config",
-        "severity": MLSeverity.MEDIUM,
+        "severity": Severity.MEDIUM,
         "base_confidence": 0.80,
         "confidence_boost": 0.05,
         "description": "Hardcoded ML hyperparameters should be configurable",
@@ -149,7 +145,7 @@ RULE_CONFIGS: dict[str, dict[str, Any]] = {
     # ML007: Gradient accumulation errors
     "ML007": {
         "name": "gradient-accumulation-error",
-        "severity": MLSeverity.HIGH,
+        "severity": Severity.HIGH,
         "base_confidence": 0.82,
         "confidence_boost": 0.08,
         "description": "optimizer.step() called every iteration instead of accumulation_steps",
@@ -157,7 +153,7 @@ RULE_CONFIGS: dict[str, dict[str, Any]] = {
     # ML008: Wrong optimizer usage
     "ML008": {
         "name": "wrong-optimizer-usage",
-        "severity": MLSeverity.MEDIUM,
+        "severity": Severity.MEDIUM,
         "base_confidence": 0.78,
         "confidence_boost": 0.07,
         "description": "AdamW vs SGD specificity issues with weight_decay",
@@ -165,7 +161,7 @@ RULE_CONFIGS: dict[str, dict[str, Any]] = {
     # ML009: Data augmentation during evaluation
     "ML009": {
         "name": "augmentation-in-eval",
-        "severity": MLSeverity.HIGH,
+        "severity": Severity.HIGH,
         "base_confidence": 0.85,
         "confidence_boost": 0.05,
         "description": "Data augmentation applied in eval mode leaks information",
@@ -173,7 +169,7 @@ RULE_CONFIGS: dict[str, dict[str, Any]] = {
     # ML010: NaN/Inf propagation detection
     "ML010": {
         "name": "nan-inf-propagation",
-        "severity": MLSeverity.CRITICAL,
+        "severity": Severity.CRITICAL,
         "base_confidence": 0.80,
         "confidence_boost": 0.10,
         "description": "Patterns that can cause NaN/Inf values",
@@ -181,7 +177,7 @@ RULE_CONFIGS: dict[str, dict[str, Any]] = {
     # ML011: Learning rate scheduling errors
     "ML011": {
         "name": "lr-scheduler-error",
-        "severity": MLSeverity.HIGH,
+        "severity": Severity.HIGH,
         "base_confidence": 0.82,
         "confidence_boost": 0.08,
         "description": "LR scheduler called in wrong order or wrong place",
@@ -189,7 +185,7 @@ RULE_CONFIGS: dict[str, dict[str, Any]] = {
     # ML012: Batch size impact on batch normalization
     "ML012": {
         "name": "batch-norm-small-batch",
-        "severity": MLSeverity.HIGH,
+        "severity": Severity.HIGH,
         "base_confidence": 0.80,
         "confidence_boost": 0.10,
         "description": "Batch normalization with batch_size=1 or too small",
@@ -197,7 +193,7 @@ RULE_CONFIGS: dict[str, dict[str, Any]] = {
     # ML013: Multi-GPU sync issues
     "ML013": {
         "name": "multi-gpu-sync-issues",
-        "severity": MLSeverity.CRITICAL,
+        "severity": Severity.CRITICAL,
         "base_confidence": 0.78,
         "confidence_boost": 0.12,
         "description": "DistributedDataParallel model not wrapped correctly",
@@ -205,7 +201,7 @@ RULE_CONFIGS: dict[str, dict[str, Any]] = {
     # ML014: Mixed precision training errors
     "ML014": {
         "name": "mixed-precision-error",
-        "severity": MLSeverity.HIGH,
+        "severity": Severity.HIGH,
         "base_confidence": 0.82,
         "confidence_boost": 0.08,
         "description": "Missing loss scaling or overflow detection in fp16/bf16",
@@ -213,7 +209,7 @@ RULE_CONFIGS: dict[str, dict[str, Any]] = {
     # ML015: Early stopping logic bugs
     "ML015": {
         "name": "early-stopping-bug",
-        "severity": MLSeverity.MEDIUM,
+        "severity": Severity.MEDIUM,
         "base_confidence": 0.80,
         "confidence_boost": 0.05,
         "description": "Early stopping monitors wrong metric or has incorrect patience logic",
@@ -797,7 +793,7 @@ class MLDetector:
         self,
         findings: list[MLFinding],
         min_confidence: float = 0.0,
-        min_severity: Optional[MLSeverity] = None,
+        min_severity: Optional[Severity] = None,
         rule_ids: Optional[list[str]] = None,
     ) -> list[MLFinding]:
         """Filter findings by various criteria.
@@ -813,18 +809,13 @@ class MLDetector:
         """
         filtered = []
 
-        severity_order = {
-            MLSeverity.MEDIUM: 0,
-            MLSeverity.HIGH: 1,
-            MLSeverity.CRITICAL: 2,
-        }
-
+        # Use Severity comparison directly
         for f in findings:
             if f.confidence < min_confidence:
                 continue
 
             if min_severity is not None:
-                if severity_order.get(f.severity, 0) < severity_order.get(min_severity, 0):
+                if f.severity.weight < min_severity.weight:
                     continue
 
             if rule_ids is not None and f.rule_id not in rule_ids:

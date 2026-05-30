@@ -12,6 +12,8 @@ Exports:
 
 from __future__ import annotations
 
+from src.shared.enums.severity import Severity
+
 from .detector import MLDetector, MLFinding, MLSeverity
 from .ast_based import MLDetectorAST
 from .data_flow import DataFlowAnalyzer
@@ -19,7 +21,8 @@ from .data_flow import DataFlowAnalyzer
 __all__ = [
     "MLDetector",
     "MLFinding",
-    "MLSeverity",
+    "MLSeverity",  # Backward compatibility alias
+    "Severity",    # Unified severity
     "MLDetectorAST",
     "DataFlowAnalyzer",
 ]

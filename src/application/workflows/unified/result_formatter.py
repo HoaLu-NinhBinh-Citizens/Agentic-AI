@@ -1,10 +1,16 @@
-"""Result Formatter — output formatting for code review results.
+"""Unified Result Formatter — output formatting for code review results using ReviewIssue.
 
 Provides multiple output formats:
-- MarkdownFormatter: Cursor-style markdown output
-- JsonFormatter: Structured JSON output
+- UnifiedMarkdownFormatter: Cursor-style markdown output using ReviewIssue
+- UnifiedJsonFormatter: Structured JSON output using ReviewIssue
 
-Each formatter implements ResultFormatter interface.
+Each formatter implements UnifiedFormatter interface and consumes ReviewIssue objects.
+
+Usage:
+    from src.application.workflows.unified.result_formatter import UnifiedMarkdownFormatter
+    
+    formatter = UnifiedMarkdownFormatter()
+    report = formatter.format(issues, stats)
 """
 
 from __future__ import annotations
@@ -14,401 +20,410 @@ from abc import ABC, abstractmethod
 from dataclasses import dataclass, field
 from datetime import datetime
 from pathlib import Path
-from typing import Any
+from typing import Any, Optional
 
+from src.domain.models.review_issue import ReviewIssue, Severity, FixOption
+
+# Backward compatibility aliases for old code that imports from result_formatter
 from src.application.workflows.unified.detector_base import Finding, FindingSeverity
+from src.infrastructure.reporting.markdown_report import PipelineStats as LegacyPipelineStats
 
-# ─── Pipeline Stats ─────────────────────────────────────────────────────────────
+# Aliases for backward compatibility
+PipelineStats = LegacyPipelineStats
+
+# Alias old formatter classes to the new unified ones
+UnifiedMarkdownFormatter = UnifiedMarkdownFormatter
+UnifiedJsonFormatter = UnifiedJsonFormatter
+UnifiedConsoleFormatter = UnifiedConsoleFormatter
+UnifiedFormatter = UnifiedFormatter
+MarkdownFormatter = UnifiedMarkdownFormatter  # Old name
+JsonFormatter = UnifiedJsonFormatter
+ConsoleFormatter = UnifiedConsoleFormatter
+ResultFormatter = UnifiedFormatter
 
 
 @dataclass
-class PipelineStats:
-    """Statistics for a pipeline run."""
+class UnifiedPipelineStats:
+    """Statistics for a pipeline run using unified ReviewIssue."""
+    
     files_scanned: int = 0
-    findings_count: int = 0
-    errors_count: int = 0
-    warnings_count: int = 0
+    total_issues: int = 0
+    critical_count: int = 0
+    high_count: int = 0
+    medium_count: int = 0
+    low_count: int = 0
     info_count: int = 0
-    hints_count: int = 0
+    
     execution_time_ms: float = 0.0
     detectors_used: list[str] = field(default_factory=list)
+    issues_by_file: dict[str, int] = field(default_factory=dict)
+    
     timestamp: str = ""
-
+    
     def __post_init__(self) -> None:
         if not self.timestamp:
             self.timestamp = datetime.now().isoformat()
-
+    
     def to_dict(self) -> dict[str, Any]:
         """Convert to dictionary."""
         return {
             "files_scanned": self.files_scanned,
-            "findings_count": self.findings_count,
-            "errors_count": self.errors_count,
-            "warnings_count": self.warnings_count,
+            "total_issues": self.total_issues,
+            "critical_count": self.critical_count,
+            "high_count": self.high_count,
+            "medium_count": self.medium_count,
+            "low_count": self.low_count,
             "info_count": self.info_count,
-            "hints_count": self.hints_count,
             "execution_time_ms": self.execution_time_ms,
             "detectors_used": self.detectors_used,
+            "issues_by_file": self.issues_by_file,
             "timestamp": self.timestamp,
         }
-
+    
     @classmethod
-    def from_findings(
+    def from_issues(
         cls,
-        findings: list[Finding],
+        issues: list[ReviewIssue],
         execution_time_ms: float = 0.0,
-        detectors_used: list[str] | None = None,
-        files_scanned: int | None = None,
-    ) -> PipelineStats:
-        """Create stats from findings list.
-
+        detectors_used: Optional[list[str]] = None,
+        files_scanned: int = 0,
+    ) -> UnifiedPipelineStats:
+        """Create stats from ReviewIssue list.
+        
         Args:
-            findings: List of findings
+            issues: List of ReviewIssue objects
             execution_time_ms: Execution time in milliseconds
             detectors_used: List of detector names used
-            files_scanned: Number of files actually scanned.
-                          If provided, this takes precedence (recommended).
-                          A clean file (no findings) still counts as scanned.
+            files_scanned: Number of files scanned
         """
-        stats = cls(execution_time_ms=execution_time_ms)
-        # FIX: Use passed files_scanned value if available
-        # This ensures clean files are counted (not just files with findings)
-        if files_scanned is not None:
-            stats.files_scanned = files_scanned
-        else:
-            # Fallback: count unique files with findings (misses clean files!)
-            # Prefer passing files_scanned explicitly from the engine
-            stats.files_scanned = len(set(f.file for f in findings)) if findings else 0
-        stats.findings_count = len(findings)
-        stats.errors_count = sum(1 for f in findings if f.severity == FindingSeverity.ERROR)
-        stats.warnings_count = sum(1 for f in findings if f.severity == FindingSeverity.WARNING)
-        stats.info_count = sum(1 for f in findings if f.severity == FindingSeverity.INFO)
-        stats.hints_count = sum(1 for f in findings if f.severity == FindingSeverity.HINT)
-        stats.detectors_used = detectors_used or []
+        stats = cls(
+            execution_time_ms=execution_time_ms,
+            detectors_used=detectors_used or [],
+            files_scanned=files_scanned,
+        )
+        
+        stats.total_issues = len(issues)
+        
+        # Count by severity
+        severity_counts = {
+            Severity.CRITICAL: 0,
+            Severity.HIGH: 0,
+            Severity.MEDIUM: 0,
+            Severity.LOW: 0,
+            Severity.INFO: 0,
+        }
+        
+        for issue in issues:
+            severity_counts[issue.severity] = severity_counts.get(issue.severity, 0) + 1
+            
+            # Count by file
+            stats.issues_by_file[issue.file] = stats.issues_by_file.get(issue.file, 0) + 1
+        
+        stats.critical_count = severity_counts[Severity.CRITICAL]
+        stats.high_count = severity_counts[Severity.HIGH]
+        stats.medium_count = severity_counts[Severity.MEDIUM]
+        stats.low_count = severity_counts[Severity.LOW]
+        stats.info_count = severity_counts[Severity.INFO]
+        
         return stats
 
 
-# ─── Result Formatter Interface ─────────────────────────────────────────────────
-
-
-class ResultFormatter(ABC):
-    """Abstract base class for result formatters.
-
+class UnifiedFormatter(ABC):
+    """Abstract base class for unified result formatters.
+    
     Implement this interface to add new output formats.
     """
-
+    
     @abstractmethod
     def format(
         self,
-        findings: list[Finding],
-        stats: PipelineStats,
-        suggestions: list[dict[str, Any]] | None = None,
+        issues: list[ReviewIssue],
+        stats: Optional[UnifiedPipelineStats] = None,
     ) -> str:
-        """Format findings into output string.
-
+        """Format issues into output string.
+        
         Args:
-            findings: List of findings to format
-            stats: Pipeline statistics
-            suggestions: Optional fix suggestions
-
+            issues: List of ReviewIssue to format
+            stats: Optional pipeline statistics
+            
         Returns:
             Formatted output string
         """
         pass
-
+    
     def _group_by_severity(
         self,
-        findings: list[Finding],
-    ) -> dict[FindingSeverity, list[Finding]]:
-        """Group findings by severity."""
-        groups: dict[FindingSeverity, list[Finding]] = {
-            FindingSeverity.ERROR: [],
-            FindingSeverity.WARNING: [],
-            FindingSeverity.INFO: [],
-            FindingSeverity.HINT: [],
+        issues: list[ReviewIssue],
+    ) -> dict[Severity, list[ReviewIssue]]:
+        """Group issues by severity."""
+        groups: dict[Severity, list[ReviewIssue]] = {
+            Severity.CRITICAL: [],
+            Severity.HIGH: [],
+            Severity.MEDIUM: [],
+            Severity.LOW: [],
+            Severity.INFO: [],
         }
-        for finding in findings:
-            groups[finding.severity].append(finding)
+        for issue in issues:
+            groups[issue.severity].append(issue)
         return groups
-
+    
     def _group_by_file(
         self,
-        findings: list[Finding],
-    ) -> dict[str, list[Finding]]:
-        """Group findings by file."""
-        groups: dict[str, list[Finding]] = {}
-        for finding in findings:
-            if finding.file not in groups:
-                groups[finding.file] = []
-            groups[finding.file].append(finding)
+        issues: list[ReviewIssue],
+    ) -> dict[str, list[ReviewIssue]]:
+        """Group issues by file."""
+        groups: dict[str, list[ReviewIssue]] = {}
+        for issue in issues:
+            if issue.file not in groups:
+                groups[issue.file] = []
+            groups[issue.file].append(issue)
         return groups
-
-    def _format_severity_badge(self, severity: FindingSeverity) -> str:
+    
+    def _format_severity_badge(self, severity: Severity) -> str:
         """Format severity as markdown badge."""
         badges = {
-            FindingSeverity.ERROR: "🔴 ERROR",
-            FindingSeverity.WARNING: "🟡 WARNING",
-            FindingSeverity.INFO: "🔵 INFO",
-            FindingSeverity.HINT: "⚪ HINT",
+            Severity.CRITICAL: "🔴 CRITICAL",
+            Severity.HIGH: "🟠 HIGH",
+            Severity.MEDIUM: "🟡 MEDIUM",
+            Severity.LOW: "🔵 LOW",
+            Severity.INFO: "⚪ INFO",
         }
-        return badges.get(severity, str(severity.value))
+        return badges.get(severity, str(severity.label))
 
 
-# ─── Markdown Formatter ─────────────────────────────────────────────────────────
-
-
-class MarkdownFormatter(ResultFormatter):
-    """Cursor-style markdown output formatter.
-
+class UnifiedMarkdownFormatter(UnifiedFormatter):
+    """Cursor-style markdown output formatter using ReviewIssue.
+    
     Produces a well-structured markdown report with:
     - Summary section
     - Top actionable fixes (sorted by severity)
-    - Before/after code blocks where applicable
+    - Before/after code blocks with diffs
     - File-by-file breakdown
+    
+    Usage:
+        formatter = UnifiedMarkdownFormatter()
+        report = formatter.format(issues, stats)
     """
-
-    def __init__(self, include_stats: bool = True, max_findings_per_file: int = 20) -> None:
+    
+    def __init__(
+        self,
+        include_stats: bool = True,
+        max_issues_per_file: int = 20,
+        max_top_issues: int = 10,
+    ) -> None:
         """Initialize formatter.
-
+        
         Args:
             include_stats: Include statistics section
-            max_findings_per_file: Limit findings per file
+            max_issues_per_file: Limit issues per file in breakdown
+            max_top_issues: Maximum number of top issues to show
         """
         self.include_stats = include_stats
-        self.max_findings_per_file = max_findings_per_file
-
+        self.max_issues_per_file = max_issues_per_file
+        self.max_top_issues = max_top_issues
+    
     def format(
         self,
-        findings: list[Finding],
-        stats: PipelineStats,
-        suggestions: list[dict[str, Any]] | None = None,
+        issues: list[ReviewIssue],
+        stats: Optional[UnifiedPipelineStats] = None,
     ) -> str:
-        """Format findings as markdown.
-
+        """Format issues as markdown.
+        
         Args:
-            findings: Findings to format
-            stats: Pipeline statistics
-            suggestions: Optional fix suggestions
-
+            issues: Issues to format
+            stats: Optional pipeline statistics
+            
         Returns:
             Markdown formatted string
         """
         lines: list[str] = []
-
+        
+        # Generate stats if not provided
+        if stats is None:
+            stats = UnifiedPipelineStats.from_issues(issues)
+        
         # Header
         lines.append("# Code Review Report")
         lines.append("")
         lines.append(f"Generated: {stats.timestamp}")
         lines.append("")
-
+        
         # Summary
         if self.include_stats:
             lines.extend(self._format_summary(stats))
             lines.append("")
-
-        # Top actionable fixes (errors and warnings, sorted by confidence)
-        top_findings = self._get_top_findings(findings)
-        if top_findings:
-            lines.extend(self._format_top_fixes(top_findings))
+        
+        # Top actionable issues
+        top_issues = self._get_top_issues(issues)
+        if top_issues:
+            lines.extend(self._format_top_issues(top_issues))
             lines.append("")
-
+        
         # Group by file for detailed breakdown
-        by_file = self._group_by_file(findings)
+        by_file = self._group_by_file(issues)
         if by_file:
             lines.extend(self._format_file_breakdown(by_file))
             lines.append("")
-
-        # Fix suggestions if available
-        if suggestions:
-            lines.extend(self._format_suggestions(suggestions))
-
+        
         return "\n".join(lines)
-
-    def _format_summary(self, stats: PipelineStats) -> list[str]:
+    
+    def _format_summary(self, stats: UnifiedPipelineStats) -> list[str]:
         """Format summary statistics."""
         lines: list[str] = []
-
+        
         lines.append("## Summary")
         lines.append("")
         lines.append("| Metric | Value |")
         lines.append("|--------|-------|")
         lines.append(f"| Files Scanned | {stats.files_scanned} |")
-        lines.append(f"| Total Findings | {stats.findings_count} |")
-        lines.append(f"| 🔴 Errors | {stats.errors_count} |")
-        lines.append(f"| 🟡 Warnings | {stats.warnings_count} |")
-        lines.append(f"| 🔵 Info | {stats.info_count} |")
-        lines.append(f"| ⚪ Hints | {stats.hints_count} |")
+        lines.append(f"| Total Issues | {stats.total_issues} |")
+        lines.append(f"| 🔴 Critical | {stats.critical_count} |")
+        lines.append(f"| 🟠 High | {stats.high_count} |")
+        lines.append(f"| 🟡 Medium | {stats.medium_count} |")
+        lines.append(f"| 🔵 Low | {stats.low_count} |")
+        lines.append(f"| ⚪ Info | {stats.info_count} |")
         lines.append(f"| Execution Time | {stats.execution_time_ms:.0f}ms |")
-
+        
         if stats.detectors_used:
             lines.append(f"| Detectors | {', '.join(stats.detectors_used)} |")
-
+        
         return lines
-
-    def _get_top_findings(self, findings: list[Finding]) -> list[Finding]:
-        """Get top actionable findings (errors and warnings, high confidence)."""
+    
+    def _get_top_issues(self, issues: list[ReviewIssue]) -> list[ReviewIssue]:
+        """Get top actionable issues (critical and high severity, high confidence)."""
         actionable = [
-            f for f in findings
-            if f.severity in (FindingSeverity.ERROR, FindingSeverity.WARNING)
-            and f.confidence >= 0.7
+            i for i in issues
+            if i.severity in (Severity.CRITICAL, Severity.HIGH)
+            and i.confidence >= 0.7
         ]
         # Sort by severity, then confidence, then line number
         actionable.sort(
-            key=lambda f: (
-                -f.severity.to_numeric(),
-                -f.confidence,
-                f.line,
+            key=lambda i: (
+                -i.severity.weight,
+                -i.confidence,
+                i.line,
             )
         )
-        return actionable[:10]  # Top 10
-
-    def _format_top_fixes(self, findings: list[Finding]) -> list[str]:
-        """Format top actionable fixes section."""
+        return actionable[:self.max_top_issues]
+    
+    def _format_top_issues(self, issues: list[ReviewIssue]) -> list[str]:
+        """Format top actionable issues section."""
         lines: list[str] = []
-
-        lines.append("## Top Actionable Fixes")
+        
+        lines.append("## Top Actionable Issues")
         lines.append("")
         lines.append("These issues should be addressed first:")
         lines.append("")
-
-        for i, finding in enumerate(findings, 1):
-            lines.append(f"### {i}. {self._format_severity_badge(finding.severity)} {finding.rule_name}")
+        
+        for i, issue in enumerate(issues, 1):
+            lines.append(f"### {i}. {self._format_severity_badge(issue.severity)} {issue.title or issue.rule_id}")
             lines.append("")
-            lines.append(f"**File:** `{finding.file}:{finding.line}`")
+            lines.append(f"**File:** `{issue.location}`")
+            lines.append(f"**Rule:** `{issue.rule_id}`")
+            lines.append(f"**Confidence:** {issue.confidence:.0%}")
             lines.append("")
-
-            # Get old_code and new_code from metadata (for ML detector)
-            old_code = finding.metadata.get("old_code", "")
-            new_code = finding.metadata.get("new_code", "")
-
-            # Show code with before/after if available
-            if old_code or new_code:
-                if old_code:
+            
+            # Show message
+            if issue.message:
+                lines.append(f"**Message:** {issue.message}")
+                lines.append("")
+            
+            # Show code evidence with before/after
+            if issue.evidence:
+                if issue.evidence.old_code:
                     lines.append("**Before (problematic code):**")
                     lines.append("```python")
-                    lines.append(f"")
-                    lines.append(old_code)
+                    lines.append(issue.evidence.old_code)
                     lines.append("```")
                     lines.append("")
-                if new_code:
+                
+                if issue.evidence.new_code:
                     lines.append("**After (suggested fix):**")
                     lines.append("```python")
-                    lines.append("")
-                    lines.append(new_code)
+                    lines.append(issue.evidence.new_code)
                     lines.append("```")
                     lines.append("")
-            elif finding.context:
-                # Fallback to context
-                lines.append("**Code:**")
-                lines.append("```")
-                lines.append(finding.context)
-                lines.append("```")
+            
+            # Show explanation
+            if issue.explanation:
+                lines.append(f"**Explanation:** {issue.explanation}")
                 lines.append("")
-
-            lines.append(f"**Message:** {finding.message}")
-            lines.append("")
-
-            if finding.fix:
-                lines.append(f"**Suggested Fix:** {finding.fix}")
+            
+            # Show fix options
+            if issue.fixes:
+                lines.append("**Fix Options:**")
+                for j, fix in enumerate(issue.fixes, 1):
+                    risk_icon = "✅" if fix.is_safe else "⚠️"
+                    lines.append(f"{j}. {risk_icon} **{fix.title}**")
+                    if fix.description:
+                        lines.append(f"   - {fix.description}")
                 lines.append("")
-
-            # Show explanation if available (for ML detector)
-            if finding.metadata.get("explanation"):
-                lines.append(f"**Explanation:** {finding.metadata['explanation']}")
+            
+            # Show CWE reference
+            if issue.cwe_id:
+                cwe_num = issue.cwe_id.replace("CWE-", "")
+                lines.append(f"**CWE:** [{issue.cwe_id}](https://cwe.mitre.org/data/definitions/{cwe_num}.html)")
                 lines.append("")
-
-            if finding.metadata.get("cwe"):
-                lines.append(f"**CWE:** [{finding.metadata['cwe']}](https://cwe.mitre.org/data/definitions/{finding.metadata['cwe'].replace('CWE-', '')}.html)")
-                lines.append("")
-
+            
             lines.append("---")
             lines.append("")
-
+        
         return lines
-
+    
     def _format_file_breakdown(
         self,
-        by_file: dict[str, list[Finding]],
+        by_file: dict[str, list[ReviewIssue]],
     ) -> list[str]:
         """Format file-by-file breakdown."""
         lines: list[str] = []
-
-        lines.append("## Detailed Findings by File")
+        
+        lines.append("## Detailed Issues by File")
         lines.append("")
-
-        for file_path, file_findings in sorted(by_file.items()):
+        
+        for file_path, file_issues in sorted(by_file.items()):
             # Format file header
             rel_path = self._get_relative_path(file_path)
             lines.append(f"### 📄 `{rel_path}`")
             lines.append("")
-
+            
             # Group by severity
-            by_severity = self._group_by_severity(file_findings)
-
-            # Show errors first, then warnings, etc.
+            by_severity = self._group_by_severity(file_issues)
+            
+            # Show critical first, then high, etc.
             severity_order = [
-                FindingSeverity.ERROR,
-                FindingSeverity.WARNING,
-                FindingSeverity.INFO,
-                FindingSeverity.HINT,
+                Severity.CRITICAL,
+                Severity.HIGH,
+                Severity.MEDIUM,
+                Severity.LOW,
+                Severity.INFO,
             ]
-
+            
             shown = 0
             for severity in severity_order:
-                severity_findings = by_severity.get(severity, [])
-                for finding in severity_findings:
-                    if shown >= self.max_findings_per_file:
-                        remaining = len(file_findings) - shown
+                severity_issues = by_severity.get(severity, [])
+                for issue in severity_issues:
+                    if shown >= self.max_issues_per_file:
+                        remaining = len(file_issues) - shown
                         if remaining > 0:
-                            lines.append(f"_... and {remaining} more findings_")
+                            lines.append(f"_... and {remaining} more issues_")
                         break
-
-                    lines.append(f"- {self._format_severity_badge(finding.severity)} ")
-                    lines.append(f"  Line {finding.line}: [{finding.rule_name}] {finding.message[:80]}")
-
-                    if finding.fix:
-                        lines.append(f"  - Fix: {finding.fix[:60]}")
-
+                    
+                    # Get primary fix if available
+                    fix_hint = ""
+                    if issue.is_auto_fixable:
+                        fix_hint = " [auto-fixable]"
+                    elif issue.is_fixable:
+                        fix_hint = " [has fix]"
+                    
+                    lines.append(f"- {self._format_severity_badge(issue.severity)} ")
+                    lines.append(f"  Line {issue.line}: [{issue.rule_id}] {issue.message[:80]}{fix_hint}")
+                    
                     shown += 1
-
+            
             lines.append("")
-
+        
         return lines
-
-    def _format_suggestions(self, suggestions: list[dict[str, Any]]) -> list[str]:
-        """Format fix suggestions."""
-        lines: list[str] = []
-
-        lines.append("## Fix Suggestions")
-        lines.append("")
-
-        for i, suggestion in enumerate(suggestions[:10], 1):
-            lines.append(f"### {i}. {suggestion.get('title', 'Suggestion')}")
-            lines.append("")
-            lines.append(f"{suggestion.get('description', '')}")
-            lines.append("")
-
-            if suggestion.get("code_before") or suggestion.get("code_after"):
-                lines.append("**Before:**")
-                lines.append("```")
-                lines.append(suggestion.get("code_before", ""))
-                lines.append("```")
-                lines.append("")
-                lines.append("**After:**")
-                lines.append("```")
-                lines.append(suggestion.get("code_after", ""))
-                lines.append("```")
-                lines.append("")
-
-            if suggestion.get("risk"):
-                lines.append(f"**Risk Level:** {suggestion['risk']}")
-                lines.append("")
-
-            lines.append("---")
-            lines.append("")
-
-        return lines
-
+    
     def _get_relative_path(self, file_path: str) -> str:
         """Convert absolute path to relative for display."""
         try:
@@ -417,141 +432,123 @@ class MarkdownFormatter(ResultFormatter):
             return file_path
 
 
-# ─── JSON Formatter ─────────────────────────────────────────────────────────────
-
-
-class JsonFormatter(ResultFormatter):
-    """Structured JSON output formatter.
-
+class UnifiedJsonFormatter(UnifiedFormatter):
+    """Structured JSON output formatter using ReviewIssue.
+    
     Produces machine-readable JSON output for integration with other tools.
+    
+    Usage:
+        formatter = UnifiedJsonFormatter()
+        json_output = formatter.format(issues, stats)
     """
-
+    
     def __init__(self, pretty: bool = True) -> None:
         """Initialize formatter.
-
+        
         Args:
             pretty: Use pretty printing (indent=2)
         """
         self.pretty = pretty
-
+    
     def format(
         self,
-        findings: list[Finding],
-        stats: PipelineStats,
-        suggestions: list[dict[str, Any]] | None = None,
+        issues: list[ReviewIssue],
+        stats: Optional[UnifiedPipelineStats] = None,
     ) -> str:
-        """Format findings as JSON.
-
+        """Format issues as JSON.
+        
         Args:
-            findings: Findings to format
-            stats: Pipeline statistics
-            suggestions: Optional fix suggestions
-
+            issues: Issues to format
+            stats: Optional pipeline statistics
+            
         Returns:
             JSON formatted string
         """
-        output = {
+        output: dict[str, Any] = {
             "report": {
-                "generated_at": stats.timestamp,
-                "stats": stats.to_dict(),
+                "generated_at": datetime.now().isoformat(),
+                "stats": stats.to_dict() if stats else {},
             },
-            "findings": [
-                {
-                    "rule_id": f.rule_id,
-                    "rule_name": f.rule_name,
-                    "severity": f.severity.value,
-                    "file": f.file,
-                    "line": f.line,
-                    "end_line": f.end_line,
-                    "column": f.column,
-                    "message": f.message,
-                    "fix": f.fix,
-                    "confidence": f.confidence,
-                    "detector": f.detector,
-                    "metadata": f.metadata,
-                }
-                for f in findings
-            ],
+            "issues": [issue.to_dict() for issue in issues],
         }
-
-        if suggestions:
-            output["suggestions"] = suggestions
-
+        
         if self.pretty:
-            return json.dumps(output, indent=2)
-        return json.dumps(output)
+            return json.dumps(output, indent=2, ensure_ascii=False)
+        return json.dumps(output, ensure_ascii=False)
 
 
-# ─── Console Formatter ─────────────────────────────────────────────────────────
-
-
-class ConsoleFormatter(ResultFormatter):
-    """Simple console output formatter.
-
+class UnifiedConsoleFormatter(UnifiedFormatter):
+    """Simple console output formatter using ReviewIssue.
+    
     Produces colored, compact console output.
+    
+    Usage:
+        formatter = UnifiedConsoleFormatter()
+        console_output = formatter.format(issues, stats)
     """
-
+    
     SEVERITY_COLORS = {
-        FindingSeverity.ERROR: "\033[91m",    # Red
-        FindingSeverity.WARNING: "\033[93m",  # Yellow
-        FindingSeverity.INFO: "\033[94m",     # Blue
-        FindingSeverity.HINT: "\033[90m",    # Gray
+        Severity.CRITICAL: "\033[91m",    # Red
+        Severity.HIGH: "\033[93m",         # Orange/Yellow
+        Severity.MEDIUM: "\033[93m",       # Yellow
+        Severity.LOW: "\033[94m",          # Blue
+        Severity.INFO: "\033[90m",         # Gray
     }
     RESET = "\033[0m"
-
+    
     def __init__(self, use_colors: bool = True) -> None:
         """Initialize formatter.
-
+        
         Args:
             use_colors: Use ANSI color codes
         """
         self.use_colors = use_colors
-
+    
     def format(
         self,
-        findings: list[Finding],
-        stats: PipelineStats,
-        suggestions: list[dict[str, Any]] | None = None,
+        issues: list[ReviewIssue],
+        stats: Optional[UnifiedPipelineStats] = None,
     ) -> str:
-        """Format findings for console.
-
+        """Format issues for console.
+        
         Args:
-            findings: Findings to format
-            stats: Pipeline statistics
-            suggestions: Optional fix suggestions
-
+            issues: Issues to format
+            stats: Optional pipeline statistics
+            
         Returns:
             Console formatted string
         """
         lines: list[str] = []
-
+        
         # Summary
-        lines.append(self._color("=== Code Review Summary ===", FindingSeverity.INFO))
-        lines.append(f"Files: {stats.files_scanned}, ")
-        lines.append(f"Findings: {stats.findings_count} ")
-        lines.append(f"(🔴 {stats.errors_count} errors, ")
-        lines.append(f"🟡 {stats.warnings_count} warnings)")
+        if stats is None:
+            stats = UnifiedPipelineStats.from_issues(issues)
+        
+        lines.append(self._color("=== Code Review Summary ===", Severity.INFO))
+        lines.append(f"Files: {stats.files_scanned}, Issues: {stats.total_issues}")
+        lines.append(f"🔴 {stats.critical_count} critical, 🟠 {stats.high_count} high, 🟡 {stats.medium_count} medium")
         lines.append("")
-
+        
         # Group by severity
-        by_severity = self._group_by_severity(findings)
-
-        # Show errors first
-        for severity in [FindingSeverity.ERROR, FindingSeverity.WARNING]:
-            findings_list = by_severity.get(severity, [])
-            if not findings_list:
+        by_severity = self._group_by_severity(issues)
+        
+        # Show critical first, then high
+        for severity in [Severity.CRITICAL, Severity.HIGH]:
+            severity_issues = by_severity.get(severity, [])
+            if not severity_issues:
                 continue
-
-            lines.append(self._color(f"--- {severity.value.upper()}S ---", severity))
-            for f in findings_list[:15]:
-                lines.append(f"  {self._color('●', severity)} {f.file}:{f.line} [{f.rule_name}]")
-            if len(findings_list) > 15:
-                lines.append(f"  ... and {len(findings_list) - 15} more")
+            
+            lines.append(self._color(f"--- {severity.label}S ---", severity))
+            for issue in severity_issues[:15]:
+                fix_indicator = " [FIX]" if issue.is_fixable else ""
+                lines.append(f"  {self._color('●', severity)} {issue.file}:{issue.line} [{issue.rule_id}]{fix_indicator}")
+            if len(severity_issues) > 15:
+                lines.append(f"  ... and {len(severity_issues) - 15} more")
             lines.append("")
-
+        
         return "\n".join(lines)
-
-    def _color(self, text: str, severity: FindingSeverity) -> str:
+    
+    def _color(self, text: str, severity: Severity) -> str:
         """Apply color to text if colors enabled."""
         if not self.use_colors:
             return text
@@ -562,20 +559,20 @@ class ConsoleFormatter(ResultFormatter):
 # ─── Factory ────────────────────────────────────────────────────────────────────
 
 
-def get_formatter(format_type: str) -> ResultFormatter:
+def get_formatter(format_type: str) -> UnifiedFormatter:
     """Get formatter by name.
-
+    
     Args:
         format_type: Formatter type ("markdown", "json", "console")
-
+    
     Returns:
         Formatter instance
     """
-    formatters = {
-        "markdown": MarkdownFormatter,
-        "json": JsonFormatter,
-        "console": ConsoleFormatter,
+    formatters: dict[str, type[UnifiedFormatter]] = {
+        "markdown": UnifiedMarkdownFormatter,
+        "json": UnifiedJsonFormatter,
+        "console": UnifiedConsoleFormatter,
     }
-
-    formatter_class = formatters.get(format_type.lower(), MarkdownFormatter)
+    
+    formatter_class = formatters.get(format_type.lower(), UnifiedMarkdownFormatter)
     return formatter_class()

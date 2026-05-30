@@ -4,6 +4,7 @@ These tests verify cross-file intelligence capabilities including:
 - Import alias resolution
 - Multi-file call chain tracking
 - Cross-file symbol resolution
+- Alias-aware call graph building
 """
 
 from __future__ import annotations
@@ -16,7 +17,8 @@ import pytest
 
 from src.infrastructure.indexing.tree_sitter import SafeTreeSitterIndexer
 from src.infrastructure.indexing.reference_graph import ReferenceGraph
-from src.infrastructure.analysis.semantic_resolver import SemanticResolver
+from src.infrastructure.analysis.alias_resolver import AliasResolver, AliasEntry, ImportStatement
+from src.infrastructure.analysis.semantic_resolver import SemanticResolver, SymbolInfo
 from src.infrastructure.analysis.call_graph_builder import CallGraphBuilder
 
 
@@ -1109,3 +1111,485 @@ c = ExportClass()
         assert resolved_func is not None
         assert resolved_class is not None
         assert "mylib" in str(resolved_func.file_path) or "core.py" in str(resolved_func.file_path)
+
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# NEW: Import Alias Resolution Tests
+# ═══════════════════════════════════════════════════════════════════════════════
+
+class TestAliasResolver:
+    """Tests for AliasResolver standalone functionality."""
+
+    def test_import_as_alias_resolution(self):
+        """Test 'import X as Y' alias resolution."""
+        resolver = AliasResolver()
+        content = "import numpy as np\nimport pandas as pd"
+        aliases = resolver.parse_import("test.py", content)
+
+        assert "np" in aliases
+        assert aliases["np"].original == "numpy"
+        assert aliases["np"].module == "numpy"
+
+        assert "pd" in aliases
+        assert aliases["pd"].original == "pandas"
+        assert aliases["pd"].module == "pandas"
+
+    def test_from_import_as_alias_resolution(self):
+        """Test 'from X import Y as Z' alias resolution."""
+        resolver = AliasResolver()
+        content = "from collections import OrderedDict as OD, namedtuple as NT"
+        aliases = resolver.parse_import("test.py", content)
+
+        assert "OD" in aliases
+        assert aliases["OD"].original == "OrderedDict"
+        assert aliases["OD"].module == "collections"
+
+        assert "NT" in aliases
+        assert aliases["NT"].original == "namedtuple"
+        assert aliases["NT"].module == "collections"
+
+    def test_simple_import_resolution(self):
+        """Test 'import X' without alias."""
+        resolver = AliasResolver()
+        content = "import os\nimport sys"
+        aliases = resolver.parse_import("test.py", content)
+
+        assert "os" in aliases
+        assert aliases["os"].original == "os"
+        assert aliases["os"].alias == "os"
+
+        assert "sys" in aliases
+        assert aliases["sys"].original == "sys"
+        assert aliases["sys"].alias == "sys"
+
+    def test_from_import_without_alias(self):
+        """Test 'from X import Y' without alias."""
+        resolver = AliasResolver()
+        content = "from typing import List, Dict\nfrom os import path"
+        aliases = resolver.parse_import("test.py", content)
+
+        assert "List" in aliases
+        assert aliases["List"].original == "List"
+        assert aliases["List"].module == "typing"
+
+        assert "Dict" in aliases
+        assert aliases["Dict"].original == "Dict"
+
+        assert "path" in aliases
+        assert aliases["path"].original == "path"
+
+    def test_relative_import_resolution(self):
+        """Test relative imports (from .module import X)."""
+        resolver = AliasResolver()
+        content = "from . import utils\nfrom ..parent import func"
+        aliases = resolver.parse_import("pkg/sub/module.py", content)
+
+        # . import creates an alias for the module name
+        assert "utils" in aliases
+        assert aliases["utils"].is_relative is True
+        assert aliases["utils"].relative_level == 1
+
+        assert "func" in aliases
+        assert aliases["func"].is_relative is True
+        assert aliases["func"].relative_level == 2
+
+    def test_multiline_import_resolution(self):
+        """Test multiline imports with parentheses."""
+        resolver = AliasResolver()
+        content = """
+from collections import (
+    OrderedDict as OD,
+    namedtuple as NT,
+    defaultdict as DD
+)
+"""
+        aliases = resolver.parse_import("test.py", content)
+
+        assert "OD" in aliases
+        assert aliases["OD"].original == "OrderedDict"
+
+        assert "NT" in aliases
+        assert aliases["NT"].original == "namedtuple"
+
+        assert "DD" in aliases
+        assert aliases["DD"].original == "defaultdict"
+
+    def test_resolve_symbol_method(self):
+        """Test resolve_symbol() method."""
+        resolver = AliasResolver()
+        content = "import numpy as np\nfrom pandas import DataFrame as DF"
+        resolver.parse_import("test.py", content)
+
+        assert resolver.resolve_symbol("test.py", "np") == "numpy"
+        assert resolver.resolve_symbol("test.py", "DF") == "DataFrame"
+        assert resolver.resolve_symbol("test.py", "unknown") is None
+
+    def test_get_original_module_method(self):
+        """Test get_original_module() method."""
+        resolver = AliasResolver()
+        content = "import numpy as np\nimport pandas as pd"
+        resolver.parse_import("test.py", content)
+
+        assert resolver.get_original_module("test.py", "np") == "numpy"
+        assert resolver.get_original_module("test.py", "pd") == "pandas"
+        assert resolver.get_original_module("test.py", "unknown") is None
+
+    def test_get_alias_entry_method(self):
+        """Test get_alias_entry() method."""
+        resolver = AliasResolver()
+        content = "import numpy as np"
+        resolver.parse_import("test.py", content)
+
+        entry = resolver.get_alias_entry("test.py", "np")
+        assert entry is not None
+        assert entry.original == "numpy"
+        assert entry.alias == "np"
+        assert entry.module == "numpy"
+
+        assert resolver.get_alias_entry("test.py", "unknown") is None
+
+    def test_get_all_aliases_method(self):
+        """Test get_all_aliases() method."""
+        resolver = AliasResolver()
+        content = "import numpy as np\nimport pandas as pd"
+        resolver.parse_import("test.py", content)
+
+        all_aliases = resolver.get_all_aliases("test.py")
+        assert len(all_aliases) == 2
+        assert "np" in all_aliases
+        assert "pd" in all_aliases
+
+    def test_clear_method(self):
+        """Test clear() method."""
+        resolver = AliasResolver()
+        resolver.parse_import("file1.py", "import os as operating_system")
+        resolver.parse_import("file2.py", "import sys")
+
+        resolver.clear("file1.py")
+        assert resolver.get_all_aliases("file1.py") == {}
+        assert "sys" in resolver.get_all_aliases("file2.py")
+
+        resolver.clear()
+        assert resolver.get_all_aliases("file1.py") == {}
+        assert resolver.get_all_aliases("file2.py") == {}
+
+    def test_merge_method(self):
+        """Test merge() method."""
+        resolver1 = AliasResolver()
+        resolver1.parse_import("file1.py", "import os as operating_system")
+
+        resolver2 = AliasResolver()
+        resolver2.parse_import("file2.py", "import sys")
+
+        resolver1.merge(resolver2)
+
+        aliases = resolver1.get_all_aliases("file1.py")
+        assert "operating_system" in aliases
+
+        aliases = resolver1.get_all_aliases("file2.py")
+        assert "sys" in aliases
+
+
+class TestDiamondImportPattern:
+    """Tests for diamond import patterns."""
+
+    def test_diamond_import_resolution(self):
+        """Test diamond import: A -> B -> D, A -> C -> D."""
+        files = {
+            Path("d.py"): "value = 42",
+            Path("b.py"): "from d import value",
+            Path("c.py"): "from d import value",
+            Path("a.py"): """
+from b import value
+from c import value
+result = value
+""",
+        }
+
+        resolver = SemanticResolver()
+        resolver.index_project(list(files.keys()), files)
+
+        resolved = resolver.resolve_symbol(
+            "value",
+            Path("a.py"),
+            files[Path("a.py")],
+            3,
+        )
+        assert resolved is not None
+        assert "d.py" in str(resolved.file_path)
+
+    def test_chained_alias_resolution(self):
+        """Test chained alias: A -> B -> C (each with alias)."""
+        files = {
+            Path("c.py"): "data = {'key': 'value'}",
+            Path("b.py"): "from c import data as d",
+            Path("a.py"): "from b import d as data",
+        }
+
+        alias_resolver = AliasResolver()
+        alias_resolver.parse_import("a.py", files[Path("a.py")])
+        alias_resolver.parse_import("b.py", files[Path("b.py")])
+
+        # a.py has alias d -> data
+        assert alias_resolver.resolve_symbol("a.py", "d") == "data"
+
+        # b.py has alias d -> data (from c)
+        assert alias_resolver.resolve_symbol("b.py", "d") == "data"
+
+    def test_alias_impact_on_call_graph(self):
+        """Test that aliases affect call graph edges correctly."""
+        files = {
+            Path("target.py"): "def original_function(): return 42",
+            Path("user.py"): """
+from target import original_function as aliased_func
+def caller():
+    return aliased_func()
+""",
+        }
+
+        builder = CallGraphBuilder(SemanticResolver())
+        graph = builder.build(list(files.keys()), files)
+
+        # The call should resolve to original_function
+        callees = graph.get_callees("caller")
+        assert len(callees) >= 1
+        callee_names = {c.callee for c in callees}
+        assert "aliased_func" in callee_names or "original_function" in callee_names
+
+
+class TestImportAliasInCallGraph:
+    """Tests for alias tracking in call graphs."""
+
+    def test_call_through_alias(self):
+        """Test that calls through aliases resolve correctly."""
+        files = {
+            Path("lib.py"): "def process_data(x): return x * 2",
+            Path("main.py"): """
+from lib import process_data as transform
+result = transform(5)
+""",
+        }
+
+        builder = CallGraphBuilder(SemanticResolver())
+        graph = builder.build(list(files.keys()), files)
+
+        # Check that transform() call is tracked
+        assert len(graph.edges) >= 1
+
+    def test_method_call_with_alias(self):
+        """Test method calls on aliased instances."""
+        files = {
+            Path("service.py"): """
+class DataService:
+    def fetch(self, query):
+        return query
+""",
+            Path("client.py"): """
+from service import DataService as Service
+s = Service()
+result = s.fetch('select *')
+""",
+        }
+
+        builder = CallGraphBuilder(SemanticResolver())
+        graph = builder.build(list(files.keys()), files)
+
+        # Should track the method call
+        assert len(graph.classes) >= 1
+        if "DataService" in graph.classes:
+            methods = graph.get_class_methods("DataService")
+            method_names = {m.name for m in methods}
+            assert "fetch" in method_names
+
+
+class TestSymbolResolutionWithAliases:
+    """Tests for SymbolInfo with alias support."""
+
+    def test_resolve_symbol_reference_basic(self):
+        """Test resolve_symbol_reference basic functionality."""
+        files = {
+            Path("module.py"): "class MyClass: pass",
+            Path("main.py"): "from module import MyClass",
+        }
+
+        resolver = SemanticResolver()
+        resolver.index_project(list(files.keys()), files)
+
+        result = resolver.resolve_symbol_reference(
+            Path("main.py"),
+            "MyClass",
+            1,
+        )
+
+        assert result is not None
+        assert result.name == "MyClass"
+        assert "module" in str(result.file_path)
+
+    def test_resolve_symbol_reference_with_alias(self):
+        """Test resolve_symbol_reference with aliased symbol."""
+        files = {
+            Path("utils.py"): "def helper(): pass",
+            Path("main.py"): "from utils import helper as assist",
+        }
+
+        resolver = SemanticResolver()
+        resolver.index_project(list(files.keys()), files)
+
+        result = resolver.resolve_symbol_reference(
+            Path("main.py"),
+            "assist",
+            1,
+        )
+
+        assert result is not None
+        assert result.name == "assist"
+        assert result.is_alias is True
+
+    def test_resolve_symbol_reference_builtin(self):
+        """Test resolve_symbol_reference with builtin."""
+        resolver = SemanticResolver()
+
+        result = resolver.resolve_symbol_reference(
+            Path("test.py"),
+            "print",
+            1,
+            "x = print('hello')",
+        )
+
+        assert result is not None
+        assert result.name == "print"
+        assert result.kind == "builtin"
+
+
+class TestReferenceGraphAliasTracking:
+    """Tests for ReferenceGraph alias tracking."""
+
+    def test_add_import_alias(self, ref_graph: ReferenceGraph):
+        """Test add_import_alias method."""
+        ref_graph.add_import_alias(
+            "test.py",
+            "np",
+            "numpy",
+            "numpy",
+        )
+
+        assert "test.py" in ref_graph._import_aliases
+        assert "np" in ref_graph._import_aliases["test.py"]
+        assert ref_graph._import_aliases["test.py"]["np"] == ("numpy", "numpy")
+
+    def test_resolve_reference_with_alias(self, ref_graph: ReferenceGraph):
+        """Test resolve_reference considers aliases."""
+        # Add a definition
+        ref_graph._defs["numpy"] = type("Def", (), {
+            "file_path": "numpy/core.py",
+            "line": 1,
+            "symbol_type": "module",
+        })()
+
+        ref_graph.add_import_alias(
+            "user.py",
+            "np",
+            "numpy",
+            "numpy",
+        )
+
+        result = ref_graph.resolve_reference("user.py", "np")
+        assert result is not None
+
+    def test_resolve_reference_without_alias(self, ref_graph: ReferenceGraph):
+        """Test resolve_reference falls back to normal lookup."""
+        ref_graph._defs["my_func"] = type("Def", (), {
+            "file_path": "utils.py",
+            "line": 5,
+            "symbol_type": "function",
+        })()
+
+        result = ref_graph.resolve_reference("any.py", "my_func")
+        assert result is not None
+
+
+class TestRenameImpactAnalysis:
+    """Tests for rename impact analysis (using alias tracking)."""
+
+    def test_find_alias_sources(self):
+        """Test finding all places where a symbol is aliased."""
+        resolver = AliasResolver()
+
+        resolver.parse_import("file1.py", "from shared import value as v1")
+        resolver.parse_import("file2.py", "from shared import value as v2")
+        resolver.parse_import("file3.py", "from shared import value")
+
+        sources = resolver.find_alias_sources("value", "shared")
+        assert len(sources) >= 2  # At least file1 and file2 have aliases
+
+    def test_aliased_vs_original_tracking(self):
+        """Test tracking between aliased and original names."""
+        files = {
+            Path("lib.py"): "def compute(x): return x**2",
+            Path("main.py"): "from lib import compute as calc",
+        }
+
+        alias_resolver = AliasResolver()
+        alias_resolver.parse_import("main.py", files[Path("main.py")])
+
+        # The alias maps to original
+        assert alias_resolver.resolve_symbol("main.py", "calc") == "compute"
+
+        # Get original module
+        module = alias_resolver.get_original_module("main.py", "calc")
+        assert module == "lib"
+
+        # Find all files using this as alias
+        sources = alias_resolver.find_alias_sources("compute", "lib")
+        assert len(sources) >= 1
+        assert any("main.py" in f for f, _ in sources)
+
+
+class TestEdgeCases:
+    """Additional edge case tests for alias resolution."""
+
+    def test_empty_import(self):
+        """Test handling of empty or malformed imports."""
+        resolver = AliasResolver()
+        aliases = resolver.parse_import("test.py", "")
+        assert aliases == {}
+
+    def test_comment_in_import(self):
+        """Test imports with inline comments."""
+        resolver = AliasResolver()
+        content = "import os  # standard lib"
+        aliases = resolver.parse_import("test.py", content)
+        assert "os" in aliases
+
+    def test_dotted_module_alias(self):
+        """Test 'import a.b.c as d' pattern."""
+        resolver = AliasResolver()
+        content = "import os.path as path_ops"
+        aliases = resolver.parse_import("test.py", content)
+
+        assert "path_ops" in aliases
+        assert aliases["path_ops"].original == "path"
+        assert aliases["path_ops"].module == "os.path"
+
+    def test_multiple_aliases_same_original(self):
+        """Test same original with multiple aliases in one import."""
+        resolver = AliasResolver()
+        content = "from os.path import join as j, split as s, dirname as d"
+        aliases = resolver.parse_import("test.py", content)
+
+        assert "j" in aliases
+        assert aliases["j"].original == "join"
+        assert "s" in aliases
+        assert aliases["s"].original == "split"
+        assert "d" in aliases
+        assert aliases["d"].original == "dirname"
+
+    def test_wildcard_import(self):
+        """Test wildcard import handling."""
+        resolver = AliasResolver()
+        content = "from collections import *"
+        aliases = resolver.parse_import("test.py", content)
+
+        # Wildcard doesn't create explicit aliases
+        assert aliases == {}
+

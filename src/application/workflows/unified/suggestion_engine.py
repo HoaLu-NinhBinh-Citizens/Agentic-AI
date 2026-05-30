@@ -20,7 +20,11 @@ from dataclasses import dataclass
 from typing import Any, Optional
 
 from src.application.workflows.unified.code_context import CodeContext
-from src.application.workflows.unified.detector_base import Finding, FindingSeverity
+from src.application.workflows.unified.detector_base import Finding
+from src.shared.enums.severity import Severity, risk_to_unified
+
+# Backward compatibility alias
+FindingSeverity = Severity
 
 # ─── Fix Option ─────────────────────────────────────────────────────────────────
 
@@ -223,9 +227,9 @@ class SuggestionEngine:
         Returns:
             Risk level string
         """
-        if finding.severity == FindingSeverity.ERROR:
+        if finding.severity == Severity.CRITICAL:
             return "low"  # High priority fixes are safe
-        if finding.severity == FindingSeverity.WARNING:
+        if finding.severity == Severity.HIGH:
             return "medium"
         return "high"  # Low severity, conservative approach
 

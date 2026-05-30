@@ -32,6 +32,9 @@ from src.infrastructure.patching import (
     create_patch_engine,
 )
 
+# Import Color for formatter
+from src.interfaces.conversation.formatters import Color
+
 
 # ─── Command types ──────────────────────────────────────────────────────────
 
@@ -786,6 +789,158 @@ async def cmd_fix_interactive(ctx: CommandContext) -> CommandResult:
         )
 
 
+async def cmd_fix_interactive_enhanced(ctx: CommandContext) -> CommandResult:
+    """Enhanced interactive fix with conversation, tradeoff analysis, and risk explanations.
+
+    Args:
+        ctx: Command context with files, lines, and flags
+
+    Returns:
+        CommandResult with conversational fix results
+    """
+    from pathlib import Path
+
+    # Parse conversational flags
+    auto_critical = "--auto-critical" in ctx.raw_flags or "auto_critical" in ctx.raw_flags
+    explain_all = "--explain" in ctx.raw_flags or "explain" in ctx.raw_flags
+    tradeoff_analysis = (
+        "--tradeoff" in ctx.raw_flags
+        or "-t" in ctx.raw_flags
+        or "tradeoff" in ctx.raw_flags
+    )
+
+    if not ctx.primary_file:
+        return CommandResult(
+            success=False,
+            output="Usage: /fix-chat @filename[:line] [--auto-critical] [--tradeoff]\n"
+                   "  /fix-chat @src/main.py:42 --auto-critical\n"
+                   "  /fix-chat @src/utils.py -t\n"
+                   "  /fix-chat @src/main.py --tradeoff",
+        )
+
+    try:
+        from src.application.workflows.unified.review_engine import (
+            UnifiedReviewEngine,
+            ReviewEngineConfig,
+        )
+        from src.interfaces.conversation.conversational_fix_engine import (
+            ConversationalFixEngine,
+            ConsoleConversationFormatter,
+        )
+        from src.core.fix_engine.llm_suggester import LLMSuggester, create_llm_suggester
+    except ImportError as e:
+        return CommandResult(
+            success=False,
+            output=f"Conversational fix mode unavailable: {e}",
+        )
+
+    files = [ctx.primary_file]
+
+    config = ReviewEngineConfig(
+        focus_areas=["security", "quality", "ml", "embedded"],
+        output_format="markdown",
+        confidence_threshold=0.5,
+    )
+
+    # Initialize formatter
+    formatter = ConsoleConversationFormatter(use_colors=True)
+
+    try:
+        engine = UnifiedReviewEngine(config)
+        result = await engine.review([Path(f) for f in files], incremental=False)
+
+        findings = result.findings
+        if ctx.primary_line:
+            findings = [f for f in findings if f.line == ctx.primary_line]
+
+        if not findings:
+            return CommandResult(
+                success=True,
+                output="No findings found for the specified file/line.",
+            )
+
+        # Build output header
+        output_lines = [
+            formatter._bold(f"{'=' * 60}"),
+            formatter._bold("Conversational Fix Mode"),
+            formatter._bold(f"{'=' * 60}"),
+            "",
+            f"Found {len(findings)} finding(s) to review.",
+            "",
+        ]
+
+        if auto_critical:
+            output_lines.append(formatter._color(
+                "[Auto] Will apply critical/error fixes automatically", Color.GREEN
+            ))
+            output_lines.append("")
+
+        if tradeoff_analysis:
+            output_lines.append(formatter._color(
+                "[Analysis] Will show tradeoff comparisons", Color.CYAN
+            ))
+            output_lines.append("")
+
+        output_lines.extend([
+            "Commands:",
+            "  [a] Apply - Apply the suggested fix",
+            "  [s] Skip - Skip this finding",
+            "  [t] Tradeoff - Compare fix options",
+            "  [r] Risk - Explain the risks",
+            "  [p] Preview - Show the diff",
+            "  [c] Critical - Apply all critical fixes",
+            "  [q] Quit - Exit session",
+            "  [h] Help - Show all commands",
+            "",
+            formatter._bold(f"{'=' * 60}"),
+            "",
+        ])
+
+        # Create conversational engine
+        llm_suggester = None
+        try:
+            llm_suggester = create_llm_suggester()
+        except Exception:
+            pass  # LLM not required, will use fallback
+
+        fix_engine = ConversationalFixEngine(
+            fixer=None,  # Will be set if actual application needed
+            llm_suggester=llm_suggester,
+            formatter=formatter,
+        )
+
+        # Run conversational session
+        session_result = await fix_engine.run_session(
+            findings=findings,
+            workspace_root=ctx.workspace_root,
+            auto_critical=auto_critical,
+        )
+
+        # Add session results
+        output_lines.append("")
+        output_lines.append(formatter.format_summary(session_result))
+
+        return CommandResult(
+            success=True,
+            output="\n".join(output_lines),
+            data={
+                "total_findings": len(findings),
+                "applied_count": session_result.applied_count,
+                "skipped_count": session_result.skipped_count,
+                "auto_critical": auto_critical,
+                "tradeoff_analysis": tradeoff_analysis,
+            },
+        )
+
+    except Exception as e:
+        import logging
+        logging.warning("Conversational fix failed: %s", e)
+        return CommandResult(
+            success=False,
+            output=f"Conversational fix failed: {e}",
+        )
+
+
 def _format_unified_fixes_list(fixes: list) -> str:
     """Format unified findings as fixes."""
     if not fixes:
@@ -948,6 +1103,21 @@ _BUILTIN_COMMANDS: dict[str, Command] = {
             "/fix @src/main.py --apply",
             "/fix @src/main.py --interactive",
             "/fix @src/main.py -i",
+            "/fix @src/main.py --interactive --auto-critical",
+            "/fix @src/main.py -i -t",
+        ],
+    ),
+    "fix-chat": Command(
+        name="fix-chat",
+        description="Conversational fix with tradeoff analysis and risk explanations",
+        category=CommandCategory.FIX,
+        aliases=["fc", "fixc"],
+        handler=cmd_fix_interactive_enhanced,
+        examples=[
+            "/fix-chat @src/main.py",
+            "/fix-chat @src/utils.py:42 --auto-critical",
+            "/fix-chat @src/main.py --tradeoff",
+            "/fix-chat @src/main.py -t",
         ],
     ),
     "explain": Command(

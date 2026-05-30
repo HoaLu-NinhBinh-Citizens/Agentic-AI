@@ -3,7 +3,7 @@
 This module provides semantic call graph construction that understands:
 - Direct function calls
 - Method calls on objects
-- Imported function calls
+- Imported function calls (with alias support)
 - Dynamic dispatch
 - Callback patterns
 """
@@ -16,6 +16,8 @@ from collections import defaultdict
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Optional
+
+from src.infrastructure.analysis.alias_resolver import AliasResolver
 
 
 @dataclass
@@ -171,17 +173,21 @@ class CallGraphBuilder:
     
     This builder uses Python AST parsing for accurate call graph construction,
     understanding method calls, imports, and class hierarchies.
+    Enhanced with alias resolution support.
     """
 
-    def __init__(self, semantic_resolver) -> None:
+    def __init__(self, semantic_resolver, alias_resolver: Optional[AliasResolver] = None) -> None:
         """Initialize the builder.
         
         Args:
             semantic_resolver: SemanticResolver instance for symbol resolution.
+            alias_resolver: Optional AliasResolver for import alias tracking.
         """
         self.resolver = semantic_resolver
+        self.alias_resolver = alias_resolver or AliasResolver()
         self._current_class: Optional[str] = None
         self._current_function: Optional[str] = None
+        self._file_aliases: dict[Path, dict[str, str]] = {}  # file -> {alias: original}
 
     def build(
         self,
@@ -202,6 +208,10 @@ class CallGraphBuilder:
         # Index project first for import resolution
         self.resolver.index_project(files, contents)
 
+        # Track aliases for each file (for alias-aware call graph building)
+        for path, content in contents.items():
+            self._track_file_aliases(path, content)
+
         # Extract class info first (needed for method resolution)
         for path, content in contents.items():
             self._extract_classes(path, content, graph)
@@ -210,6 +220,10 @@ class CallGraphBuilder:
         for path, content in contents.items():
             calls = self._find_calls(path, content, graph)
             for call in calls:
+                # Apply alias resolution for callee
+                resolved_callee = self._resolve_callee_alias(path, call.callee)
+                call.callee = resolved_callee
+                
                 graph.edges.append(call)
 
                 if call.callee not in graph.callers:
@@ -221,6 +235,35 @@ class CallGraphBuilder:
                 graph.callees[call.caller].append(call)
 
         return graph
+
+    def _track_file_aliases(self, path: Path, content: str) -> None:
+        """Track import aliases for a file.
+        
+        Args:
+            path: File path.
+            content: File content.
+        """
+        aliases = self.alias_resolver.parse_import(str(path), content)
+        self._file_aliases[path] = {
+            alias: entry.original 
+            for alias, entry in aliases.items()
+        }
+
+    def _resolve_callee_alias(self, path: Path, callee_name: str) -> str:
+        """Resolve callee name through aliases.
+        
+        Args:
+            path: Path to the file containing the call.
+            callee_name: The callee function name.
+            
+        Returns:
+            Resolved function name (may be the same if not aliased).
+        """
+        aliases = self._file_aliases.get(path, {})
+        # Check if callee is an alias
+        if callee_name in aliases:
+            return aliases[callee_name]
+        return callee_name
 
     def _extract_classes(self, path: Path, content: str, graph: CallGraph) -> None:
         """Extract class definitions and their methods."""

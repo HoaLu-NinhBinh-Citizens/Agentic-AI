@@ -12,10 +12,13 @@ from unittest.mock import MagicMock
 from src.infrastructure.analysis.ml_detectors import (
     MLDetector,
     MLFinding,
-    MLSeverity,
 )
 from src.infrastructure.analysis.ml_detectors.ast_based import MLDetectorAST
 from src.infrastructure.analysis.ml_detectors.data_flow import DataFlowAnalyzer
+from src.shared.enums.severity import Severity
+
+# Backward compatibility alias
+MLSeverity = Severity
 
 
 class TestMLDetectorAST:
@@ -393,11 +396,10 @@ X_train, X_test = train_test_split(X, y)
         code = "scaler.fit(X)"
         findings = detector.detect_file(Path("test.py"), code, "python")
         
-        filtered = detector.filter_findings(findings, min_severity=MLSeverity.CRITICAL)
-        
-        severity_order = {MLSeverity.MEDIUM: 0, MLSeverity.HIGH: 1, MLSeverity.CRITICAL: 2}
+        filtered = detector.filter_findings(findings, min_severity=Severity.CRITICAL)
+
         for f in filtered:
-            assert severity_order.get(f.severity, 0) >= severity_order[MLSeverity.CRITICAL]
+            assert f.severity >= Severity.CRITICAL
     
     def test_filter_findings_by_rule_ids(self) -> None:
         """Test filtering findings by rule IDs."""
@@ -439,9 +441,10 @@ class TestMLFinding:
         )
         
         result = finding.to_dict()
-        
+
         assert result["rule_id"] == "ML001"
-        assert result["severity"] == "CRITICAL"
+        # Now uses unified Severity, so value is lowercase
+        assert result["severity"] == "critical"
         assert result["confidence"] == 0.92
         assert "ast" in result["detection_method"]
     
@@ -474,18 +477,26 @@ class TestMLFinding:
 
 
 class TestMLSeverity:
-    """Unit tests for MLSeverity enum."""
-    
+    """Unit tests for MLSeverity enum (backward compatibility)."""
+
     def test_severity_values(self) -> None:
-        """Test MLSeverity enum values."""
-        assert MLSeverity.CRITICAL.value == "CRITICAL"
-        assert MLSeverity.HIGH.value == "HIGH"
-        assert MLSeverity.MEDIUM.value == "MEDIUM"
-    
+        """Test MLSeverity enum values (now unified with Severity)."""
+        # MLSeverity is now an alias for Severity
+        assert Severity.CRITICAL.value == "critical"
+        assert Severity.HIGH.value == "high"
+        assert Severity.MEDIUM.value == "medium"
+
     def test_severity_comparison(self) -> None:
         """Test severity ordering."""
-        assert MLSeverity.CRITICAL != MLSeverity.HIGH
-        assert MLSeverity.HIGH != MLSeverity.MEDIUM
+        assert Severity.CRITICAL > Severity.HIGH
+        assert Severity.HIGH > Severity.MEDIUM
+
+    def test_backward_compatibility(self) -> None:
+        """Test backward compatibility alias works."""
+        # MLSeverity should equal Severity
+        assert MLSeverity.CRITICAL == Severity.CRITICAL
+        assert MLSeverity.HIGH == Severity.HIGH
+        assert MLSeverity.MEDIUM == Severity.MEDIUM
 
 
 class TestML007GradientAccumulation:
