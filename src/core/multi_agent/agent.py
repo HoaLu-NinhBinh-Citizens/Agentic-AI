@@ -152,9 +152,17 @@ Only generate code that is well-structured and production-ready."""
 # =============================================================================
 
 class ReviewAgent(BaseAgent):
-    """Code review agent with static analysis"""
+    """Code review agent with static analysis.
 
-    def __init__(self, model_router=None):
+    Integrates with RuleEngine for comprehensive static analysis covering:
+    - Security: hardcoded secrets, SQL injection, command injection
+    - Type Safety: untyped functions, Any usage, missing return types
+    - Import Analysis: unused imports, circular imports, wildcard imports
+    - Naming Conventions: snake_case, PascalCase, UPPER_CASE constants
+    - Code Quality: long functions, broad except, TODO/FIXME, magic numbers
+    """
+
+    def __init__(self, model_router=None, indexer=None):
         super().__init__(AgentType.REVIEW, model_router)
         self.review_criteria = {
             "code_quality": ["readability", "complexity", "naming"],
@@ -163,6 +171,21 @@ class ReviewAgent(BaseAgent):
             "security": ["vulnerabilities", "injection", "authentication"],
             "testing": ["coverage", "edge_cases", "mocking"],
         }
+        # Initialize the RuleEngine with optional tree-sitter indexer
+        self._rule_engine = None
+        self._indexer = indexer
+
+    @property
+    def rule_engine(self):
+        """Lazy-load RuleEngine on first access."""
+        if self._rule_engine is None:
+            try:
+                from src.infrastructure.analysis.rule_engine import RuleEngine
+                self._rule_engine = RuleEngine(indexer=self._indexer)
+            except ImportError:
+                logger.warning("RuleEngine not available, using fallback static analysis")
+                self._rule_engine = None
+        return self._rule_engine
 
     async def can_handle(self, task: Task) -> bool:
         task_type = task.type.lower()
@@ -226,9 +249,69 @@ Return JSON with:
         return self._static_review(file_path, focus_areas)
 
     def _static_review(self, file_path: str, focus_areas: List[str]) -> Dict[str, Any]:
+        """Perform static analysis on a file using RuleEngine.
+
+        Uses the extensible rule engine for comprehensive analysis when available,
+        with fallback to basic pattern matching for firmware-specific checks.
+        """
         issues: List[str] = []
         recommendations: List[str] = []
-        score = 10
+        score = 10.0
+
+        # Detect language from file extension
+        language = self._detect_language(file_path)
+
+        # Try to use RuleEngine for comprehensive analysis
+        if self.rule_engine:
+            try:
+                findings = self.rule_engine.detect(file_path, language)
+                if findings:
+                    # Convert RuleEngine findings to existing format
+                    for finding in findings:
+                        issue_msg = f"Line {finding.line}: [{finding.rule_id}] {finding.rule_name}"
+                        if finding.message and finding.severity.value in ["error", "warning"]:
+                            issue_msg += f" - {finding.message[:100]}"
+
+                        issues.append(issue_msg)
+
+                        # Generate recommendations based on rule
+                        if finding.fix:
+                            recommendations.append(f"Fix for {finding.rule_name}: {finding.fix}")
+                        elif finding.rule_id.startswith("SEC"):
+                            recommendations.append(f"Security: Review {finding.rule_name} immediately")
+                        elif finding.rule_id.startswith("QUAL"):
+                            recommendations.append(f"Quality: Consider addressing {finding.rule_name}")
+
+                        # Adjust score based on severity
+                        if finding.severity.value == "error":
+                            score -= 1.5
+                        elif finding.severity.value == "warning":
+                            score -= 0.7
+                        elif finding.severity.value == "info":
+                            score -= 0.3
+                        # hint doesn't affect score
+
+                    # Early return if RuleEngine found issues
+                    if findings:
+                        return self._finalize_review(
+                            file_path, issues, recommendations, score
+                        )
+            except Exception as exc:
+                logger.warning(f"RuleEngine analysis failed: {exc}, falling back to basic checks")
+                pass
+
+        # Fallback: Basic pattern matching for embedded/firmware-specific checks
+        return self._basic_static_review(file_path)
+
+    def _basic_static_review(self, file_path: str) -> Dict[str, Any]:
+        """Fallback static analysis using basic regex patterns.
+
+        Performs simple pattern matching for common firmware issues
+        when RuleEngine is not available.
+        """
+        issues: List[str] = []
+        recommendations: List[str] = []
+        score = 10.0
 
         try:
             with open(file_path, encoding="utf-8", errors="replace") as f:
@@ -267,8 +350,18 @@ Return JSON with:
                 issues.append(f"Line {i}: Unresolved TODO/FIXME")
                 score -= 0.3
 
+        return self._finalize_review(file_path, issues, recommendations, score)
+
+    def _finalize_review(
+        self,
+        file_path: str,
+        issues: List[str],
+        recommendations: List[str],
+        score: float,
+    ) -> Dict[str, Any]:
+        """Finalize review result with normalized score and approval status."""
         score = max(1, min(10, round(score, 1)))
-        approved = score >= 7 and len(issues) <= 3
+        approved = score >= 7 and len([i for i in issues if "error" in i.lower()]) <= 1
 
         if not issues:
             issues.append("Static analysis complete - no obvious issues detected")
@@ -280,6 +373,24 @@ Return JSON with:
             "recommendations": recommendations[:10],
             "approved": approved,
         }
+
+    def _detect_language(self, file_path: str) -> str:
+        """Detect programming language from file extension."""
+        ext = Path(file_path).suffix.lower()
+        mapping = {
+            ".py": "python",
+            ".js": "javascript",
+            ".ts": "typescript",
+            ".jsx": "javascript",
+            ".tsx": "typescript",
+            ".c": "c",
+            ".cpp": "cpp",
+            ".h": "c",
+            ".rs": "rust",
+            ".go": "go",
+            ".java": "java",
+        }
+        return mapping.get(ext, "text")
 
     def _parse_review_response(self, response: str, file_path: str) -> Dict[str, Any]:
         try:

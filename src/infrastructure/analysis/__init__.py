@@ -17,6 +17,12 @@ from .error_patterns import (
     CrashCluster,
     get_error_pattern_library,
 )
+from .rule_engine import (
+    RuleEngine,
+    Rule,
+    Finding,
+    RuleSeverity,
+)
 
 __all__ = [
     "ProjectIndexer",
@@ -32,4 +38,8 @@ __all__ = [
     "Severity",
     "CrashCluster",
     "get_error_pattern_library",
+    "RuleEngine",
+    "Rule",
+    "Finding",
+    "RuleSeverity",
 ]
