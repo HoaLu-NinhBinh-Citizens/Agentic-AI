@@ -50,6 +50,22 @@ jobs:
         run: |
           python -m pytest tests/e2e/ -v --tb=short
       
+      - name: Run Precision/Recall Benchmark
+        run: |
+          python -m pytest tests/benchmark/test_precision_recall.py -v --tb=short --strict-markers
+          python -c "
+          from tests.benchmark.test_precision_recall import calculate_metrics
+          metrics = calculate_metrics()
+          precision = metrics['precision']
+          recall = metrics['recall']
+          min_precision = 0.70
+          min_recall = 0.70
+          if precision < min_precision or recall < min_recall:
+              print(f'FAIL: Precision={precision:.2%} (min={min_precision:.2%}), Recall={recall:.2%} (min={min_recall:.2%})')
+              exit(1)
+          print(f'PASS: Precision={precision:.2%}, Recall={recall:.2%}')
+          "
+      
       - name: Upload coverage
         uses: codecov/codecov-action@v4
         with:

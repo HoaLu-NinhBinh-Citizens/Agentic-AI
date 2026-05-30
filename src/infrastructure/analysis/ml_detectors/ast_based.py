@@ -547,9 +547,22 @@ class MLDetectorAST:
         # String literal - check for hardcoded paths
         if value_node.type == "string":
             value_text = self._get_node_text(value_node)
-            # Flag absolute paths and common data paths
+            # Flag paths that look like ML/model paths
             if "/" in value_text or "\\" in value_text:
-                if any(p in value_text.lower() for p in ["/data/", "/model", "c:", "data/"]):
+                # Expanded patterns for model/checkpoint/output paths
+                path_indicators = [
+                    "/data/", "/model", "/checkpoint", "/output",
+                    "c:", ".pt", ".pth", ".ckpt",
+                ]
+                # Check for trailing slash paths like "checkpoints/", "models/"
+                trailing_slash_patterns = [
+                    "checkpoints/", "models/", "outputs/", "data/",
+                ]
+                value_lower = value_text.lower().strip("'\"").strip("\"'")
+                if any(p in value_lower for p in path_indicators):
+                    return True
+                # Also detect trailing slash directory paths
+                if any(value_lower.startswith(p) for p in trailing_slash_patterns):
                     return True
             return False
 
@@ -659,8 +672,10 @@ class MLDetectorAST:
             (r"hidden_dim(?:sion)?\s*=\s*(\d+)", "hidden_dim"),
             # dropout = 0.5
             (r"dropout\s*=\s*(0?\.\d+)", "dropout"),
-            # path strings
-            (r"(?:data_path|model_path|train_path)\s*=\s*['\"]([^'\"]+)['\"]", "path"),
+            # path strings - expanded patterns
+            (r"(?:data_path|model_path|train_path|val_path|checkpoint_path|save_path|output_dir|log_dir)\s*=\s*['\"]([^'\"]+)['\"]", "path"),
+            # model file extensions
+            (r"model_path\s*=\s*['\"]([^'\"]+\.(?:pt|pth|ckpt|pt'|pth'|ckpt'))", "model_path"),
         ]
 
         lines = content.split("\n")

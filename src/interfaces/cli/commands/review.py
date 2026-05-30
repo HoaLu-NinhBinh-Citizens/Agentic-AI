@@ -1,10 +1,6 @@
 """Review CLI command — code review with fix application.
 
-This command supports two modes:
-1. Legacy mode: Uses CodeReviewWorkflow's built-in analysis
-2. Unified mode: Uses UnifiedReviewEngine via unified-review command
-
-For the unified ML-powered analysis, use the `unified-review` command instead.
+This command uses the UnifiedReviewEngine for ML-powered analysis.
 """
 
 from __future__ import annotations
@@ -13,27 +9,24 @@ import argparse
 import asyncio
 import json
 import sys
-import warnings
 from pathlib import Path
 from typing import Optional
 
-from src.application.workflows.code_review.workflow import CodeReviewWorkflow
-
-# Try to import new reporters for enhanced output
+# Try to import UnifiedReviewEngine
 try:
-    from src.infrastructure.reporting import (
-        MarkdownReportGenerator,
-        JSONReportGenerator,
-        CLIReportGenerator,
+    from src.application.workflows.unified.review_engine import (
+        UnifiedReviewEngine,
+        ReviewEngineConfig,
     )
-    from src.infrastructure.reporting.markdown_report import (
-        Finding as ReporterFinding,
+    from src.application.workflows.unified.result_formatter import (
+        MarkdownFormatter,
+        JsonFormatter,
+        ConsoleFormatter,
         PipelineStats,
-        Severity,
     )
-    REPORTERS_AVAILABLE = True
+    UNIFIED_AVAILABLE = True
 except ImportError:
-    REPORTERS_AVAILABLE = False
+    UNIFIED_AVAILABLE = False
 
 
 def register(subparsers: argparse._SubParsersAction[argparse.ArgumentParser]) -> None:
@@ -41,8 +34,7 @@ def register(subparsers: argparse._SubParsersAction[argparse.ArgumentParser]) ->
     parser = subparsers.add_parser(
         "review",
         help="Review code files and apply fixes",
-        description="Run code review on files, collect findings, and apply fixes. "
-                    "For ML-powered analysis, use 'unified-review' instead.",
+        description="Run code review on files using UnifiedReviewEngine.",
     )
     parser.add_argument(
         "files",
@@ -51,46 +43,21 @@ def register(subparsers: argparse._SubParsersAction[argparse.ArgumentParser]) ->
     )
     parser.add_argument(
         "--area", "-a",
-        choices=["security", "quality", "all"],
+        choices=["security", "quality", "ml", "embedded", "all"],
         default="all",
         help="Review focus area (default: all)",
     )
     parser.add_argument(
-        "--fix", "-f",
-        action="store_true",
-        help="Suggest fixes for issues found",
+        "--format", "-f",
+        choices=["markdown", "json", "console"],
+        default="console",
+        help="Output format (default: console)",
     )
     parser.add_argument(
-        "--apply",
-        action="store_true",
-        help="Apply fixes interactively after review",
-    )
-    parser.add_argument(
-        "--auto",
-        action="store_true",
-        help="Automatically apply safe fixes (INFO level, high confidence)",
-    )
-    parser.add_argument(
-        "--dry-run",
-        action="store_true",
-        default=True,
-        help="Validate fixes without applying (default: True)",
-    )
-    parser.add_argument(
-        "--no-dry-run",
-        action="store_true",
-        help="Actually apply fixes (overrides --dry-run)",
-    )
-    parser.add_argument(
-        "--json",
-        action="store_true",
-        help="Output results as JSON",
-    )
-    parser.add_argument(
-        "--report",
-        choices=["markdown", "cli", "json"],
-        default=None,
-        help="Generate report in specified format (uses new reporters if available)",
+        "--confidence",
+        type=float,
+        default=0.5,
+        help="Minimum confidence threshold (0.0-1.0, default: 0.5)",
     )
     parser.add_argument(
         "--workspace",
@@ -105,16 +72,15 @@ def register(subparsers: argparse._SubParsersAction[argparse.ArgumentParser]) ->
         default=[],
         help="Patterns to exclude from review",
     )
-    parser.add_argument(
-        "--legacy",
-        action="store_true",
-        help="Force use of legacy regex-based analysis (deprecated)",
-    )
     parser.set_defaults(handler=run_review)
 
 
 async def run_review(args: argparse.Namespace) -> int:
-    """Execute the review command."""
+    """Execute the review command using UnifiedReviewEngine."""
+    if not UNIFIED_AVAILABLE:
+        print("Error: UnifiedReviewEngine not available. Please ensure dependencies are installed.", file=sys.stderr)
+        return 1
+
     workspace_root = args.workspace or str(Path.cwd())
 
     files = await _resolve_files(args.files, args.exclude)
@@ -123,87 +89,49 @@ async def run_review(args: argparse.Namespace) -> int:
         print("No files found to review", file=sys.stderr)
         return 1
 
-    focus_areas = _parse_focus_areas(args.area)
-
-    dry_run = not args.no_dry_run
-    if args.apply:
-        dry_run = False
-
-    # Create workflow - use legacy if explicitly requested
-    use_unified = not args.legacy
-    workflow = CodeReviewWorkflow(workspace_root, use_unified=use_unified)
-
-    result = await workflow.review_and_fix(
-        files=files,
-        focus_areas=focus_areas,
-        auto_apply=args.auto,
-        dry_run=dry_run,
-        interactive=args.apply,
-    )
-
-    # Use new reporters if requested and available
-    if args.report and REPORTERS_AVAILABLE:
-        _print_with_reporters(result, args)
-    elif args.json:
-        _print_json_result(result)
+    # Parse focus areas
+    if args.area == "all":
+        focus_areas = ["security", "quality", "ml", "embedded"]
     else:
-        _print_human_result(result, args)
+        focus_areas = [args.area]
 
-    return 0 if result.errors == 0 else 1
+    # Create config and engine
+    config = ReviewEngineConfig(
+        focus_areas=focus_areas,
+        output_format=args.format,
+        confidence_threshold=args.confidence,
+    )
+    engine = UnifiedReviewEngine(config)
 
+    # Run review
+    try:
+        file_paths = [Path(f) for f in files]
+        result = await engine.review(file_paths, incremental=False)
 
-def _print_with_reporters(result, args) -> None:
-    """Print results using new reporters."""
-    if args.report == "markdown":
-        reporter = MarkdownReportGenerator("Code Review")
-        # Convert FixBatch findings to reporter format
-        findings = _convert_to_reporter_findings(result)
-        stats = PipelineStats(
-            files_analyzed=result.files_reviewed,
-            duration_seconds=result.duration_seconds,
-            total_findings=result.total_findings,
-        )
-        print(reporter.generate(findings, stats))
-    elif args.report == "cli":
-        reporter = CLIReportGenerator()
-        findings = _convert_to_reporter_findings(result)
-        stats = PipelineStats(
-            files_analyzed=result.files_reviewed,
-            duration_seconds=result.duration_seconds,
-            total_findings=result.total_findings,
-        )
-        print(reporter.generate(findings, stats))
-    elif args.report == "json":
-        reporter = JSONReportGenerator("Code Review")
-        findings = _convert_to_reporter_findings(result)
-        stats = PipelineStats(
-            files_analyzed=result.files_reviewed,
-            duration_seconds=result.duration_seconds,
-            total_findings=result.total_findings,
-        )
-        print(json.dumps(reporter.generate(findings, stats), indent=2))
+        # Format output
+        formatter = _get_formatter(args.format, result.stats)
+        output = formatter.format(result.findings, result.stats, result.suggestions)
+        print(output)
+
+        # Return exit code based on findings
+        return 0 if result.stats.errors_count == 0 else 1
+
+    except Exception as e:
+        print(f"Error during review: {e}", file=sys.stderr)
+        import traceback
+        traceback.print_exc()
+        return 1
 
 
-def _convert_to_reporter_findings(result) -> list[ReporterFinding]:
-    """Convert FixBatch to reporter Finding format."""
-    findings = []
-    for fix in result.fix_batch.fixes:
-        severity_map = {
-            "error": Severity.CRITICAL,
-            "warning": Severity.MEDIUM,
-            "info": Severity.INFO,
-        }
-        severity = severity_map.get(fix.severity.value, Severity.MEDIUM)
-        findings.append(ReporterFinding(
-            rule_id=fix.rule_id,
-            title=fix.reason[:50] if fix.reason else "Unknown issue",
-            severity=severity,
-            file_path=fix.file_path,
-            line=fix.line_start,
-            message=fix.reason,
-            confidence=fix.confidence,
-        ))
-    return findings
+def _get_formatter(format_type: str, stats) -> MarkdownFormatter | JsonFormatter | ConsoleFormatter:
+    """Get formatter by type."""
+    formatters = {
+        "markdown": MarkdownFormatter,
+        "json": JsonFormatter,
+        "console": ConsoleFormatter,
+    }
+    formatter_class = formatters.get(format_type, ConsoleFormatter)
+    return formatter_class()
 
 
 async def _resolve_files(
@@ -234,85 +162,3 @@ def _should_exclude(file_path: str, patterns: set[str]) -> bool:
         if pattern in file_path:
             return True
     return False
-
-
-def _parse_focus_areas(area: str) -> list[str]:
-    """Parse focus area string to list."""
-    mapping = {
-        "security": ["security"],
-        "quality": ["code_quality", "best_practices"],
-        "all": ["code_quality", "security", "best_practices", "performance"],
-    }
-    return mapping.get(area, mapping["all"])
-
-
-def _print_human_result(result, args) -> None:
-    """Print human-readable result."""
-    print("\n" + "=" * 60)
-    print("CODE REVIEW RESULTS")
-    print("=" * 60)
-    print(f"Files reviewed:    {result.files_reviewed}")
-    print(f"Total findings:    {result.total_findings}")
-    print(f"  Errors:          {result.errors}")
-    print(f"  Warnings:        {result.warnings}")
-    print(f"  Info:            {result.info}")
-    print("-" * 60)
-    print(f"Duration:          {result.duration_seconds:.2f}s")
-    print("-" * 60)
-
-    batch = result.fix_batch
-    print(f"Fixes:")
-    print(f"  Applied:         {batch.applied}")
-    print(f"  Rejected:        {batch.rejected}")
-    print(f"  Failed:          {batch.failed}")
-    print(f"  Pending:         {batch.pending}")
-    print(f"  Success rate:    {batch.success_rate:.0%}")
-
-    if args.apply or args.fix:
-        if batch.fixes:
-            print("\n" + "-" * 60)
-            print("FIX DETAILS:")
-            for fix in batch.fixes[:10]:
-                status_icon = {
-                    "applied": "✓",
-                    "rejected": "✗",
-                    "failed": "✗",
-                    "skipped": "−",
-                    "pending": "○",
-                }.get(fix.status.value, "?")
-                print(f"  [{status_icon}] {fix.file_path}:{fix.line_start}")
-                print(f"       {fix.reason[:60]}")
-            if len(batch.fixes) > 10:
-                print(f"  ... and {len(batch.fixes) - 10} more")
-
-
-def _print_json_result(result) -> None:
-    """Print JSON result."""
-    output = {
-        "files_reviewed": result.files_reviewed,
-        "total_findings": result.total_findings,
-        "errors": result.errors,
-        "warnings": result.warnings,
-        "info": result.info,
-        "duration_seconds": round(result.duration_seconds, 2),
-        "fixes": {
-            "applied": result.fix_batch.applied,
-            "rejected": result.fix_batch.rejected,
-            "failed": result.fix_batch.failed,
-            "pending": result.fix_batch.pending,
-            "success_rate": round(result.fix_batch.success_rate, 2),
-        },
-        "details": [
-            {
-                "id": fix.id,
-                "file": fix.file_path,
-                "line": fix.line_start,
-                "severity": fix.severity.value,
-                "status": fix.status.value,
-                "rule": fix.rule_id,
-                "reason": fix.reason,
-            }
-            for fix in result.fix_batch.fixes
-        ],
-    }
-    print(json.dumps(output, indent=2))

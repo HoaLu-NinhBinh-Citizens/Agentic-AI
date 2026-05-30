@@ -16,12 +16,6 @@ Unified Pipeline:
 
 from src.application.workflows.base import BaseWorkflow, WorkflowStep, WorkflowResult
 
-# Import CodeReviewWorkflow for backward compatibility
-from src.application.workflows.code_review.workflow import (
-    CodeReviewWorkflow,
-    ReviewWorkflowResult,
-)
-
 # Unified pipeline exports
 try:
     from src.application.workflows.unified import (
@@ -42,9 +36,6 @@ __all__ = [
     "BaseWorkflow",
     "WorkflowStep",
     "WorkflowResult",
-    # Code Review
-    "CodeReviewWorkflow",
-    "ReviewWorkflowResult",
     # Unified Pipeline
     "UnifiedReviewEngine",
     "ReviewEngineConfig",

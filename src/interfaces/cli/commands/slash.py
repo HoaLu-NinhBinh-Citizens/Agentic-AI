@@ -362,41 +362,11 @@ async def cmd_review(ctx: CommandContext) -> CommandResult:
 async def _fallback_to_legacy_review(
     ctx: CommandContext, error_msg: str | None = None
 ) -> CommandResult:
-    """Fallback to legacy CodeReviewWorkflow if unified pipeline fails."""
-    try:
-        from src.application.workflows.code_review.workflow import CodeReviewWorkflow
-    except ImportError:
-        return CommandResult(
-            success=False,
-            output=f"Code review unavailable. {error_msg or 'Both unified and legacy pipelines failed.'}",
-        )
-
-    files = ctx.files if ctx.files else ["."]
-    focus = ctx.raw_flags.get("focus", "all").split(",")
-
-    try:
-        workflow = CodeReviewWorkflow(ctx.workspace_root)
-        result = await workflow.review_and_fix(
-            files=files,
-            focus_areas=focus,
-            auto_apply=False,
-            dry_run=True,
-            interactive=False,
-        )
-
-        output = _format_review_summary(result)
-        return CommandResult(success=True, output=output, data={
-            "files_reviewed": result.files_reviewed,
-            "total_findings": result.total_findings,
-            "errors": result.errors,
-            "warnings": result.warnings,
-        })
-    except Exception as e:
-        return CommandResult(
-            success=False,
-            output=f"Code review failed. {error_msg or str(e)}",
-            errors=[str(e)],
-        )
+    """Fallback when unified pipeline is unavailable."""
+    return CommandResult(
+        success=False,
+        output=f"Code review unavailable. Unified pipeline failed: {error_msg or 'Unknown error'}",
+    )
 
 
 async def cmd_fix(ctx: CommandContext) -> CommandResult:
@@ -524,53 +494,11 @@ async def cmd_fix(ctx: CommandContext) -> CommandResult:
 async def _fallback_to_legacy_fix(
     ctx: CommandContext, error_msg: str | None = None
 ) -> CommandResult:
-    """Fallback to legacy CodeReviewWorkflow if unified pipeline fails."""
-    try:
-        from src.application.workflows.code_review.workflow import CodeReviewWorkflow
-    except ImportError:
-        return CommandResult(
-            success=False,
-            output=f"Fix command unavailable. {error_msg or 'Both unified and legacy pipelines failed.'}",
-        )
-
-    files = [ctx.primary_file]
-
-    try:
-        workflow = CodeReviewWorkflow(ctx.workspace_root)
-        result = await workflow.review_and_fix(
-            files=files,
-            focus_areas=["code_quality", "security"],
-            auto_apply=False,
-            dry_run=True,
-            interactive=False,
-        )
-
-        # Filter to specific line if given
-        fixes = result.fix_batch.fixes
-        if ctx.primary_line:
-            fixes = [f for f in fixes if f.line_start == ctx.primary_line]
-
-        output = _format_fixes_list(fixes)
-        return CommandResult(success=True, output=output, data={
-            "fix_count": len(fixes),
-            "fixes": [
-                {
-                    "id": f.id,
-                    "file": f.file_path,
-                    "line": f.line_start,
-                    "rule": f.rule_id,
-                    "reason": f.reason[:80],
-                    "severity": f.severity.value,
-                }
-                for f in fixes
-            ],
-        })
-    except Exception as e:
-        return CommandResult(
-            success=False,
-            output=f"Fix command failed. {error_msg or str(e)}",
-            errors=[str(e)],
-        )
+    """Fallback when unified pipeline is unavailable."""
+    return CommandResult(
+        success=False,
+        output=f"Fix command unavailable. Unified pipeline failed: {error_msg or 'Unknown error'}",
+    )
 
 
 def _format_unified_fixes_list(fixes: list) -> str:
@@ -901,40 +829,6 @@ async def parse_and_execute(
 
 # ─── Output formatters ──────────────────────────────────────────────────────
 
-def _format_review_summary(result) -> str:
-    errors = result.errors
-    warnings = result.warnings
-    info = result.info
-    total = result.total_findings
-
-    emoji = {"error": "[X]", "warning": "[!]", "info": "[i]"}
-    color = {"error": "red", "warning": "yellow", "info": "blue"}
-
-    output = f"""## Code Review Summary
-
-| Metric | Value |
-|--------|-------|
-| Files reviewed | {result.files_reviewed} |
-| Total findings | {total} |
-| Duration | {result.duration_seconds:.2f}s |
-
-### By Severity
-
-- **[X] Errors:** {errors}
-- **[!] Warnings:** {warnings}
-- **[i] Info:** {info}
-
-### Fixes Applied
-
-- Applied: {result.fix_batch.applied}
-- Rejected: {result.fix_batch.rejected}
-- Failed: {result.fix_batch.failed}
-- Pending: {result.fix_batch.pending}
-- Success rate: {result.fix_batch.success_rate:.0%}
-"""
-    return output
-
-
 def _format_unified_review_summary(result) -> str:
     """Format unified review result for slash command output."""
     errors = result.stats.errors_count
@@ -976,25 +870,6 @@ def _format_unified_review_summary(result) -> str:
         for sug in result.suggestions[:3]:
             output += f"- {sug.get('title', 'Fix')}: {sug.get('description', '')[:50]}...\n"
 
-    return output
-
-
-def _format_fixes_list(fixes: list) -> str:
-    if not fixes:
-        return "No fixes found for the specified file/line."
-
-    output = f"## Found {len(fixes)} Fixes\n\n"
-    for fix in fixes:
-        sev_icon = {
-            "error": "[X]",
-            "warning": "[!]",
-            "info": "[i]",
-        }.get(fix.severity.value, "?")
-        output += f"{sev_icon} `{fix.file_path}:{fix.line_start}` "
-        output += f"**[{fix.rule_id}]** {fix.reason[:60]}\n"
-        if fix.new_text:
-            output += f"```\n{fix.new_text[:100]}\n```\n"
-        output += "\n"
     return output
 
 

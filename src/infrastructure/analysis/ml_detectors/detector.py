@@ -139,6 +139,13 @@ RULE_CONFIGS: dict[str, dict[str, Any]] = {
         "confidence_boost": 0.05,
         "description": "No random seed set - training is not reproducible",
     },
+    "ML006": {
+        "name": "hardcoded-config",
+        "severity": MLSeverity.MEDIUM,
+        "base_confidence": 0.80,
+        "confidence_boost": 0.05,
+        "description": "Hardcoded ML hyperparameters should be configurable",
+    },
 }
 
 
@@ -197,6 +204,7 @@ class MLDetector:
         findings.extend(self._detect_ml003(content, language))
         findings.extend(self._detect_ml004(content, language))
         findings.extend(self._detect_ml005(content, language))
+        findings.extend(self._detect_ml006(file_path, content, language))
 
         # Apply confidence boosts based on context
         findings = self._boost_confidence(findings, content, language)
@@ -336,6 +344,35 @@ class MLDetector:
                 line=raw["line"],
                 message=raw["message"],
                 confidence=raw.get("confidence", 0.75),
+                old_code=raw.get("old_code", ""),
+                new_code=raw.get("new_code", ""),
+                explanation=raw.get("explanation", ""),
+                detection_method=raw.get("detection_method", "ast"),
+            )
+            findings.append(finding)
+
+        return findings
+
+    def _detect_ml006(
+        self,
+        file_path: Path,
+        content: str,
+        language: str,
+    ) -> list[MLFinding]:
+        """Detect hardcoded ML hyperparameters and paths."""
+        findings: list[MLFinding] = []
+
+        raw_findings = self.ast_detector.detect_ml006_hardcoded_config(
+            content, language
+        )
+
+        for raw in raw_findings:
+            finding = MLFinding(
+                rule_id="ML006",
+                severity=MLSeverity.MEDIUM,
+                line=raw["line"],
+                message=raw["message"],
+                confidence=raw.get("confidence", 0.80),
                 old_code=raw.get("old_code", ""),
                 new_code=raw.get("new_code", ""),
                 explanation=raw.get("explanation", ""),

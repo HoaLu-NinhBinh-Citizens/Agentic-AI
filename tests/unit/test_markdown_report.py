@@ -189,10 +189,16 @@ class TestMarkdownReportGenerator:
     
     def test_emoji_severity_icons(self) -> None:
         """Test severity class attribute structure."""
-        # Verify the class has severity-related attributes
-        assert hasattr(MarkdownReportGenerator, '_severity_emoji')
-        # The class attribute should be a dict at class level
-        assert isinstance(MarkdownReportGenerator._severity_emoji, dict)
+        # Code uses _EMOJI_MAP as class attribute dict
+        assert hasattr(MarkdownReportGenerator, '_EMOJI_MAP')
+        assert isinstance(MarkdownReportGenerator._EMOJI_MAP, dict)
+        # Verify the map contains expected severity keys
+        assert Severity.CRITICAL in MarkdownReportGenerator._EMOJI_MAP
+        assert Severity.HIGH in MarkdownReportGenerator._EMOJI_MAP
+
+        # Also verify the method works
+        gen = MarkdownReportGenerator("Test")
+        assert gen._severity_emoji(Severity.CRITICAL) == MarkdownReportGenerator._EMOJI_MAP[Severity.CRITICAL]
     
     def test_header_timestamp(self) -> None:
         """Test header contains timestamp."""

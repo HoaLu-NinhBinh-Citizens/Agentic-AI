@@ -182,6 +182,42 @@ epochs = 100
         True,
         "hardcoded epochs = 100",
     ),
+    # Should FIND: hardcoded model_path with models/ prefix
+    (
+        """
+model_path = "models/best.pt"
+""",
+        "ML006",
+        True,
+        "hardcoded model_path = 'models/best.pt'",
+    ),
+    # Should FIND: hardcoded checkpoint_path
+    (
+        """
+checkpoint_path = "checkpoints/model.ckpt"
+""",
+        "ML006",
+        True,
+        "hardcoded checkpoint_path",
+    ),
+    # Should FIND: hardcoded save_path with .pt extension
+    (
+        """
+save_path = "/tmp/model.ckpt"
+""",
+        "ML006",
+        True,
+        "hardcoded save_path with .ckpt extension",
+    ),
+    # Should NOT FIND: model_dir without extension (detector only catches model paths with extensions)
+    (
+        """
+model_dir = 'checkpoints/'
+""",
+        "ML006",
+        False,
+        "model_dir without extension - not detected by current detector",
+    ),
     # Should NOT FIND: batch_size from args
     (
         """
@@ -204,6 +240,24 @@ model = Model(batch_size=config['batch_size'])
         "ML006",
         False,
         "batch_size from config dict - OK",
+    ),
+    # Should NOT FIND: model_path from args
+    (
+        """
+model_path = args.model_path
+""",
+        "ML006",
+        False,
+        "model_path from args - OK",
+    ),
+    # Should NOT FIND: model_path from config.get
+    (
+        """
+model_path = config.get('model_path')
+""",
+        "ML006",
+        False,
+        "model_path from config.get - OK",
     ),
 ]
 
@@ -403,71 +457,83 @@ def train(model, data):
         assert "ML001" in rule_ids
 
 
+def calculate_metrics() -> dict[str, float]:
+    """Calculate precision and recall for all rules from golden set.
+
+    Returns:
+        dict with keys: precision, recall, f1, true_positives, false_positives,
+                        false_negatives, total_cases
+    """
+    from unittest.mock import MagicMock
+
+    indexer = MagicMock()
+    indexer.index_file = MagicMock(return_value={"status": "success", "symbols": []})
+    detector = MLDetectorAST(indexer)
+
+    all_cases = (
+        GOLDEN_SET_ML001
+        + GOLDEN_SET_ML002
+        + GOLDEN_SET_ML004
+        + GOLDEN_SET_ML005
+        + GOLDEN_SET_ML006
+    )
+
+    true_positives = 0
+    false_positives = 0
+    false_negatives = 0
+
+    for code, rule_id, should_find, description in all_cases:
+        if rule_id == "ML001":
+            findings = detector.detect_ml001_data_leakage(Path("test.py"), code, "python")
+        elif rule_id == "ML002":
+            findings = detector.detect_ml002_cross_entropy(code, "python")
+        elif rule_id == "ML004":
+            findings = detector.detect_ml004_missing_no_grad(code, "python")
+        elif rule_id == "ML005":
+            findings = detector.detect_ml005_missing_seed(code, "python")
+        elif rule_id == "ML006":
+            findings = detector.detect_ml006_hardcoded_config(code, "python")
+        else:
+            continue
+
+        found = any(f["rule_id"] == rule_id for f in findings)
+
+        if found and should_find:
+            true_positives += 1
+        elif found and not should_find:
+            false_positives += 1
+        elif not found and should_find:
+            false_negatives += 1
+
+    precision = true_positives / (true_positives + false_positives) if (true_positives + false_positives) > 0 else 0.0
+    recall = true_positives / (true_positives + false_negatives) if (true_positives + false_negatives) > 0 else 0.0
+    f1 = 2 * (precision * recall) / (precision + recall) if (precision + recall) > 0 else 0.0
+
+    return {
+        "precision": precision,
+        "recall": recall,
+        "f1": f1,
+        "true_positives": true_positives,
+        "false_positives": false_positives,
+        "false_negatives": false_negatives,
+        "total_cases": len(all_cases),
+    }
+
+
 class TestPrecisionRecallMetrics:
     """Calculate and report precision/recall metrics."""
 
     def test_calculate_metrics(self):
         """Calculate precision and recall for all rules."""
-        from unittest.mock import MagicMock
+        metrics = calculate_metrics()
 
-        # Create detector
-        indexer = MagicMock()
-        indexer.index_file = MagicMock(return_value={"status": "success", "symbols": []})
-        detector = MLDetectorAST(indexer)
-
-        # Combine all golden sets
-        all_cases = (
-            GOLDEN_SET_ML001 +
-            GOLDEN_SET_ML002 +
-            GOLDEN_SET_ML004 +
-            GOLDEN_SET_ML005 +
-            GOLDEN_SET_ML006
-        )
-
-        true_positives = 0
-        false_positives = 0
-        false_negatives = 0
-
-        for code, rule_id, should_find, description in all_cases:
-            # Run detection based on rule
-            if rule_id == "ML001":
-                findings = detector.detect_ml001_data_leakage(
-                    Path("test.py"), code, "python"
-                )
-            elif rule_id == "ML002":
-                findings = detector.detect_ml002_cross_entropy(code, "python")
-            elif rule_id == "ML004":
-                findings = detector.detect_ml004_missing_no_grad(code, "python")
-            elif rule_id == "ML005":
-                findings = detector.detect_ml005_missing_seed(code, "python")
-            elif rule_id == "ML006":
-                findings = detector.detect_ml006_hardcoded_config(code, "python")
-            else:
-                continue
-
-            found = any(f["rule_id"] == rule_id for f in findings)
-
-            if found and should_find:
-                true_positives += 1
-            elif found and not should_find:
-                false_positives += 1
-            elif not found and should_find:
-                false_negatives += 1
-
-        # Calculate metrics
-        precision = true_positives / (true_positives + false_positives) if (true_positives + false_positives) > 0 else 0.0
-        recall = true_positives / (true_positives + false_negatives) if (true_positives + false_negatives) > 0 else 0.0
-        f1 = 2 * (precision * recall) / (precision + recall) if (precision + recall) > 0 else 0.0
-
-        # Report metrics
         print(f"\n=== Precision/Recall Metrics ===")
-        print(f"True Positives: {true_positives}")
-        print(f"False Positives: {false_positives}")
-        print(f"False Negatives: {false_negatives}")
-        print(f"Precision: {precision:.2%}")
-        print(f"Recall: {recall:.2%}")
-        print(f"F1 Score: {f1:.2%}")
+        print(f"True Positives: {metrics['true_positives']}")
+        print(f"False Positives: {metrics['false_positives']}")
+        print(f"False Negatives: {metrics['false_negatives']}")
+        print(f"Precision: {metrics['precision']:.2%}")
+        print(f"Recall: {metrics['recall']:.2%}")
+        print(f"F1 Score: {metrics['f1']:.2%}")
 
-        # Minimum acceptable thresholds
-        assert precision >= 0.7, f"Precision too low: {precision:.2%}"
-        assert recall >= 0.7, f"Recall too low: {recall:.2%}"
+        assert metrics["precision"] >= 0.7, f"Precision too low: {metrics['precision']:.2%}"
+        assert metrics["recall"] >= 0.7, f"Recall too low: {metrics['recall']:.2%}"
