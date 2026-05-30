@@ -15,6 +15,8 @@ Architecture:
     generate_multi_file_diff() → combine multiple EditPlans into one diff
 """
 
+from __future__ import annotations
+
 import difflib
 import logging
 import re
@@ -126,6 +128,27 @@ class EditPlan:
         if self.is_deletion:
             return f"-{len(self.old_lines)} lines removed"
         return f"~{len(self.old_lines)} → {len(self.new_lines)} lines"
+
+    def with_options(self, options: list[str]) -> list[EditPlan]:
+        """Generate multiple EditPlan alternatives from this fix.
+
+        Creates one plan per option plus the default, each with a different new_text.
+        """
+        plans = []
+        for i, opt in enumerate(options):
+            plan = EditPlan(
+                file_path=self.file_path,
+                old_lines=self.old_lines,
+                new_lines=opt.split("\n"),
+                line_range=self.line_range,
+                reason=self.reason,
+                severity=self.severity,
+                confidence=Confidence.MEDIUM,
+                old_label=self.old_label,
+                new_label=self.new_label,
+            )
+            plans.append(plan)
+        return plans
 
 
 # ─── Diff Engine ───────────────────────────────────────────────────────────────

@@ -263,6 +263,7 @@ class SymbolGraph:
             for node in self._nodes_by_file[path]:
                 self._nodes.pop(node.name, None)
             del self._nodes_by_file[path]
+            self._stats.files_indexed = max(0, self._stats.files_indexed - 1)
 
         # Remove edges
         old_edges = [e for e in self._call_edges if e.caller_file == path or e.callee_file == path]
@@ -310,7 +311,7 @@ class SymbolGraph:
             # C / C++
             ("function", "c",
              re.compile(r"^\s*(?:static\s+|inline\s+)?"
-                       r"(?:void|int|char|float|double|bool|long|short|unsigned|[A-Z_]\w*)\s*"
+                       r"(?:void|int|char|float|double|bool|long|short|unsigned|[A-Z_][\w]*)\s*"
                        r"([a-z_][a-z0-9_]*)\s*\([^;{]*\{")),
             ("struct", "c",
              re.compile(r"^\s*struct\s+([A-Za-z_][\w]*)\s*\{")),
@@ -334,7 +335,7 @@ class SymbolGraph:
              re.compile(r"^\s*enum\s+([A-Za-z_][\w]*)\s*(?:<[^>]*>)?")),
             # Go
             ("function", "go",
-             re.compile(r"^\s*func\s+(?:(?:\([^)]+\)\s*)?([A-Za-z_][\w]*)\s*\(")),
+             re.compile(r"^\s*func\s+(?:\([^)]*\)\s*)?([A-Za-z_][\w]*)\s*\(")),
         ]
 
         # Map extension to language key
@@ -343,6 +344,42 @@ class SymbolGraph:
                    ".rs": "rs", ".go": "go", ".java": "c"}
 
         lang = ext_map.get(ext, "text")
+
+        def _get_indent(line: str) -> int:
+            """Get indentation level of a line (spaces / tab equivalent)."""
+            stripped = line.lstrip()
+            return len(line) - len(stripped)
+
+        def _compute_end_line(
+            def_line: int,
+            def_indent: int,
+            lines: list[str],
+            language: str,
+        ) -> int:
+            """Compute end line for a symbol using indentation / brace tracking."""
+            if language in ("py", "rs", "go"):
+                # Skip blank lines and find dedent
+                for j in range(def_line + 1, len(lines)):
+                    ln = lines[j]
+                    if ln.strip() == "":
+                        continue
+                    # End of scope when we see a line with <= def_indent that's not whitespace
+                    if _get_indent(ln) <= def_indent:
+                        return j
+                return def_line
+            elif language == "c":
+                # Check if opening brace is on the def line
+                def_text = lines[def_line - 1]
+                if "{" not in def_text:
+                    return def_line
+                # Track brace depth
+                brace_depth = def_text.count("{") - def_text.count("}")
+                for j in range(def_line, len(lines)):
+                    brace_depth += lines[j].count("{") - lines[j].count("}")
+                    if brace_depth <= 0 and j > def_line - 1:
+                        return j
+                return def_line
+            return def_line
 
         for kind, p_lang, pattern in patterns:
             if p_lang not in ("text", lang):
@@ -357,11 +394,15 @@ class SymbolGraph:
                         if dec_line.startswith("@"):
                             decorators.append(dec_line[1:])
 
+                    # Compute end_line using indentation
+                    def_indent = _get_indent(line)
+                    end_ln = _compute_end_line(i, def_indent, lines, lang)
+
                     symbols.append({
                         "name": m.group(1),
                         "kind": kind,
                         "line": i,
-                        "end_line": i,
+                        "end_line": end_ln,
                         "decorators": decorators,
                         "signature": line.strip(),
                     })
@@ -392,14 +433,18 @@ class SymbolGraph:
 
         # Find all function calls using regex
         # Pattern: identifier followed by ( — handles most languages
-        call_pattern = re.compile(r"\b([a-zA-Z_][\w]{1,64})\s*\(")
+        # Use ^|\s instead of \b so it matches both start-of-line and after whitespace
+        call_pattern = re.compile(r"(?:^|\s)([a-zA-Z_][\w]{0,64})\s*\(")
 
         for func_name, start_line, end_line in functions:
             body_lines = lines[start_line - 1:end_line]
 
             for i, line in enumerate(body_lines):
-                # Skip comments and strings
-                stripped = self._strip_comments_and_strings(line)
+                # Skip comments and strings; strip leading indentation for regex matching
+                stripped = self._strip_comments_and_strings(line.lstrip())
+                # Skip definition lines (def, class, async def, etc.)
+                if stripped.startswith(("def ", "class ", "async ", "fn ", "func ", "struct ", "enum ")):
+                    continue
                 for m in call_pattern.finditer(stripped):
                     called = m.group(1)
                     # Skip built-in / keywords
@@ -461,16 +506,28 @@ class SymbolGraph:
             if not in_string and c == "#":
                 break
 
-            # Handle strings
-            if c in ('"', "'") and (i == 0 or line[i-1] != "\\"):
-                if not in_string:
-                    in_string = True
-                    string_char = c
-                elif c == string_char:
-                    in_string = False
-                result.append(" ")
-                i += 1
-                continue
+            # Handle strings — only trigger on unescaped quotes
+            if c in ('"', "'"):
+                # Check for escaped quote: preceded by backslash with even count
+                escaped = False
+                j = i - 1
+                backslash_count = 0
+                while j >= 0 and line[j] == "\\":
+                    backslash_count += 1
+                    j -= 1
+                if backslash_count % 2 == 1:
+                    escaped = True
+
+                if not escaped:
+                    if not in_string:
+                        in_string = True
+                        string_char = c
+                        result.append(" ")  # Replace opening quote with space
+                    elif c == string_char:
+                        in_string = False
+                        result.append(" ")  # Replace closing quote with space
+                    i += 1
+                    continue
 
             if not in_string:
                 result.append(c)

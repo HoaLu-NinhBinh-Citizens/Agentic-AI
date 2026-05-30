@@ -1,5 +1,5 @@
 """CLI command modules."""
 
-from . import debug, flash, health, review, trace
+from . import debug, flash, health, review, slash, trace
 
-__all__ = ["debug", "flash", "health", "review", "trace"]
+__all__ = ["debug", "flash", "health", "review", "slash", "trace"]

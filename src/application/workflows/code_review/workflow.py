@@ -14,6 +14,8 @@ from src.core.fix_engine.models import (
     FixSeverity,
     FixStatus,
     ReviewFinding,
+    build_old_text,
+    build_new_text,
 )
 from src.core.fix_engine.apply_fix import ApplyFixTool
 from src.interfaces.tui.fix_panel import FixPanel
@@ -224,17 +226,25 @@ class CodeReviewWorkflow:
         return findings
 
     def _convert_findings_to_fixes(self, findings: list[ReviewFinding]) -> list[Fix]:
-        """Convert ReviewAgent findings to Fix objects."""
+        """Convert ReviewAgent findings to Fix objects with actual old_text/new_text."""
         fixes: list[Fix] = []
 
         for finding in findings:
+            # Extract actual code from file
+            old_text = build_old_text(finding.file_path, finding.line, finding.rule_id)
+            new_text = (
+                finding.suggested_fix
+                if finding.suggested_fix
+                else build_new_text(finding.rule_id, old_text)
+            )
+
             fix = Fix(
                 id=str(uuid.uuid4())[:8],
                 file_path=finding.file_path,
                 line_start=finding.line,
                 line_end=finding.line,
-                old_text="",  # Static analysis doesn't provide exact fix
-                new_text=finding.suggested_fix or "",
+                old_text=old_text,
+                new_text=new_text,
                 reason=finding.message,
                 rule_id=finding.rule_id,
                 severity=finding.severity,

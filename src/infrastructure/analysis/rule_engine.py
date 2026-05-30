@@ -208,7 +208,7 @@ class RuleEngine:
         if rule.id in self._rules:
             raise ValueError(f"Rule {rule.id} already registered")
         self._rules[rule.id] = rule
-        logger.info("Registered custom rule", rule_id=rule.id, name=rule.name)
+        logger.info("Registered custom rule", extra={"rule_id": rule.id, "name": rule.name})
 
     def unregister(self, rule_id: str) -> bool:
         """Unregister a rule by ID.
@@ -250,14 +250,14 @@ class RuleEngine:
             List of findings from all triggered rules
         """
         if language not in SUPPORTED_LANGUAGES:
-            logger.debug("Unsupported language", language=language)
+            logger.debug("Unsupported language", extra={"language": language})
             return []
 
         try:
             with open(file_path, encoding="utf-8", errors="replace") as f:
                 content = f.read()
         except OSError as exc:
-            logger.warning("Cannot read file", file=file_path, error=str(exc))
+            logger.warning("Cannot read file", extra={"file": file_path, "error": str(exc)})
             return []
 
         findings: list[Finding] = []
@@ -290,7 +290,7 @@ class RuleEngine:
         root_path = Path(root)
 
         if not root_path.exists():
-            logger.warning("Root directory does not exist", root=root)
+            logger.warning("Root directory does not exist", extra={"root": root})
             return findings
 
         for ext in extensions:
@@ -400,7 +400,7 @@ class RuleEngine:
                     )
                     findings.append(finding)
         except Exception as exc:
-            logger.debug("AST query failed", rule=rule.id, error=str(exc))
+            logger.debug("AST query failed", extra={"rule": rule.id, "error": str(exc)})
 
         return findings
 
@@ -458,7 +458,7 @@ class RuleEngine:
 
         cmd = linter_commands.get(linter.lower())
         if not cmd:
-            logger.warning("Unknown linter", linter=linter)
+            logger.warning("Unknown linter", extra={"linter": linter})
             return []
 
         try:
@@ -470,10 +470,10 @@ class RuleEngine:
             )
             return self._parse_linter_output(linter, result.stdout + result.stderr)
         except FileNotFoundError:
-            logger.warning("Linter not found", linter=linter)
+            logger.warning("Linter not found", extra={"linter": linter})
             return []
         except subprocess.TimeoutExpired:
-            logger.warning("Linter timeout", linter=linter, path=path)
+            logger.warning("Linter timeout", extra={"linter": linter, "path": path})
             return []
 
     def _parse_linter_output(

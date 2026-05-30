@@ -23,6 +23,12 @@ from .rule_engine import (
     Finding,
     RuleSeverity,
 )
+from .ml_rules import (
+    MLRuleEngine,
+    MLRule,
+    MLFinding,
+    MLSeverity,
+)
 
 __all__ = [
     "ProjectIndexer",
@@ -42,4 +48,8 @@ __all__ = [
     "Rule",
     "Finding",
     "RuleSeverity",
+    "MLRuleEngine",
+    "MLRule",
+    "MLFinding",
+    "MLSeverity",
 ]

@@ -7,7 +7,7 @@ import asyncio
 import sys
 from typing import Any, Callable, Coroutine
 
-from src.interfaces.cli.commands import debug, flash, health, review, trace
+from src.interfaces.cli.commands import debug, flash, health, review, slash, trace
 
 Handler = Callable[[argparse.Namespace], Coroutine[Any, Any, int]]
 
@@ -24,6 +24,7 @@ def build_parser() -> argparse.ArgumentParser:
     flash.register(sub)
     trace.register(sub)
     review.register(sub)
+    slash.register_commands(sub)
     return parser
 
 
