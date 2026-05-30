@@ -142,16 +142,21 @@ class MarkdownReportGenerator:
             lines.append(f"**Confidence:** {int(finding.confidence * 100)}%")
             lines.append(f"\n{finding.description}\n")
 
-            if finding.old_code:
+            # Extract old_code/new_code from metadata first (unified Finding),
+            # then fall back to direct attributes (legacy Finding)
+            old_code = getattr(finding, 'metadata', {}).get('old_code') or getattr(finding, 'old_code', '')
+            new_code = getattr(finding, 'metadata', {}).get('new_code') or getattr(finding, 'new_code', '')
+
+            if old_code:
                 lines.append("```python")
                 lines.append("# ❌ BEFORE")
-                lines.append(finding.old_code)
+                lines.append(old_code)
                 lines.append("```\n")
 
-            if finding.new_code:
+            if new_code:
                 lines.append("```python")
                 lines.append("# ✅ AFTER")
-                lines.append(finding.new_code)
+                lines.append(new_code)
                 lines.append("```\n")
 
             lines.append(f"**Risk Level:** {finding.risk_level}")
@@ -185,15 +190,18 @@ class MarkdownReportGenerator:
             for f in findings:
                 lines.append(f"#### [{f.rule_id}] {f.title}")
                 lines.append(f"{f.description}\n")
-                if f.old_code:
+                # Extract old_code/new_code from metadata first
+                old_code = getattr(f, 'metadata', {}).get('old_code') or getattr(f, 'old_code', '')
+                new_code = getattr(f, 'metadata', {}).get('new_code') or getattr(f, 'new_code', '')
+                if old_code:
                     lines.append("```python")
                     lines.append("# ❌ BEFORE")
-                    lines.append(f.old_code)
+                    lines.append(old_code)
                     lines.append("```")
-                if f.new_code:
+                if new_code:
                     lines.append("```python")
                     lines.append("# ✅ AFTER")
-                    lines.append(f.new_code)
+                    lines.append(new_code)
                     lines.append("```")
                 lines.append("")
 

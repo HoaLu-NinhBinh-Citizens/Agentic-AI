@@ -1,6 +1,17 @@
-"""ML/AI-specific static analysis rules for code review."""
+"""ML/AI-specific static analysis rules for code review.
+
+DEPRECATED: Use src.infrastructure.analysis.ml_detectors instead.
+This module will be removed in v2.0.
+"""
 
 from __future__ import annotations
+import warnings
+
+warnings.warn(
+    "ml_rules.py is deprecated. Use ml_detectors instead.",
+    DeprecationWarning,
+    stacklevel=2
+)
 from dataclasses import dataclass, field
 from enum import Enum
 from typing import Any, Optional

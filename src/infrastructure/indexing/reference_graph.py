@@ -259,6 +259,10 @@ class ReferenceGraph:
         # function_name → list of RefLocation (outgoing calls)
         self._callees: dict[str, list[RefLocation]] = {}
 
+        # IMPROVED: Track import aliases per file for better cross-file resolution
+        # file_path → {alias_name: (original_name, source_module)}
+        self._import_aliases: dict[str, dict[str, tuple[str, str]]] = {}
+
         self._stats = ReferenceGraphStats()
         self._lock = asyncio.Lock()
 
@@ -267,6 +271,96 @@ class ReferenceGraph:
         return self._stats
 
     # ─── Indexing ─────────────────────────────────────────────────────────────
+
+    def _track_import_aliases(self, file_path: str, content: str) -> None:
+        """Track import aliases in a file for better cross-file resolution.
+
+        Handles:
+        - import X as Y
+        - from X import Y as Z
+        - from X import Y
+        """
+        aliases: dict[str, tuple[str, str]] = {}
+
+        for match in re.finditer(r"^import\s+(\S+)(?:\s+as\s+(\w+))?", content, re.MULTILINE):
+            module = match.group(1)
+            alias = match.group(2) or module.split(".")[-1]
+            aliases[alias] = (module, module)
+
+        for match in re.finditer(
+            r"^from\s+(\S+)\s+import\s+(.+?)$",
+            content,
+            re.MULTILINE
+        ):
+            module = match.group(1)
+            names_str = match.group(2)
+            for name_match in re.finditer(r"(\w+)(?:\s+as\s+(\w+))?", names_str):
+                original = name_match.group(1)
+                alias = name_match.group(2) or original
+                aliases[alias] = (original, module)
+
+        self._import_aliases[file_path] = aliases
+
+    def _resolve_alias(
+        self,
+        name: str,
+        file_path: str,
+    ) -> tuple[str, str] | None:
+        """Resolve an alias to its original name and module.
+
+        Returns:
+            Tuple of (original_name, module) if found, None otherwise.
+        """
+        aliases = self._import_aliases.get(file_path, {})
+        return aliases.get(name)
+
+    def _resolve_symbol_with_alias_tracking(
+        self,
+        name: str,
+        file_path: str,
+        content: str,
+        line: int,
+    ) -> Optional[SymbolLocation]:
+        """Resolve a symbol considering import aliases.
+
+        This improves cross-file resolution by tracking:
+        - import os → alias: os
+        - import pandas as pd → alias: pd → maps to pandas
+        - from collections import OrderedDict as OD → alias: OD
+        """
+        # First check import aliases
+        alias_info = self._resolve_alias(name, file_path)
+        if alias_info:
+            original, module = alias_info
+            # Try to find the original symbol in project
+            defn = self._defs.get(original)
+            if defn:
+                return SymbolLocation(
+                    name=name,
+                    file_path=Path(defn.file_path),
+                    line=defn.line,
+                    kind=defn.symbol_type,
+                    resolved_from=f"{module}.{original}",
+                )
+
+        # Fall back to type resolution
+        type_info = self._type_resolver.resolve_name(name, content, line)
+        if type_info and type_info.module:
+            if self._import_tracker:
+                symbol_export = self._import_tracker.resolve_import(
+                    Path(file_path), name, type_info.module
+                )
+                if symbol_export:
+                    return SymbolLocation(
+                        name=name,
+                        file_path=symbol_export.file_path,
+                        line=symbol_export.line,
+                        kind=symbol_export.kind,
+                        resolved_from=type_info.full_name,
+                    )
+
+        # Fall back to normal lookup
+        return self._find_symbol_in_project(name)
 
     async def index_file(self, path: str) -> dict[str, Any]:
         """Index a single file for symbol definitions and references.
@@ -297,6 +391,9 @@ class ReferenceGraph:
 
         lines = content.split("\n")
         language = _detect_language(path)
+
+        # Track import aliases for better cross-file resolution
+        self._track_import_aliases(path, content)
 
         # Use indexer if available, otherwise parse manually
         if self._indexer is not None:
@@ -908,6 +1005,7 @@ class ReferenceGraph:
         self._file_symbols.clear()
         self._callers.clear()
         self._callees.clear()
+        self._import_aliases.clear()  # Clear import aliases
         self._stats = ReferenceGraphStats()
         self._semantic_resolver = SemanticResolver()
         self._call_graph_builder = CallGraphBuilder(self._semantic_resolver)
@@ -935,6 +1033,8 @@ class ReferenceGraph:
                 self._callees[name] = [
                     r for r in self._callees[name] if r.file_path != path
                 ]
+        # Remove import aliases for this file
+        self._import_aliases.pop(path, None)
 
     def get_stats(self) -> dict[str, Any]:
         """Get reference graph statistics."""

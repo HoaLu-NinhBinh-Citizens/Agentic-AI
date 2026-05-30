@@ -1,5 +1,8 @@
 """Code review workflow — review, suggest fixes, apply interactively, report.
 
+DEPRECATED: This module is being replaced by src.application.workflows.unified.
+Use UnifiedReviewEngine for new code.
+
 This module provides end-to-end code review with fix application.
 It supports two modes:
 1. Unified mode: Uses UnifiedReviewEngine for ML-powered analysis
@@ -16,6 +19,13 @@ import warnings
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Optional
+
+# Warn when imported directly
+warnings.warn(
+    "code_review.workflow is deprecated. Use unified.UnifiedReviewEngine instead.",
+    DeprecationWarning,
+    stacklevel=2
+)
 
 from src.core.fix_engine.models import (
     Fix,

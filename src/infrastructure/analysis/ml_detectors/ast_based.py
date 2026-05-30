@@ -35,6 +35,33 @@ SCALER_CLASSES = frozenset({
     "Normalizer", "PowerTransformer", "QuantileTransformer",
 })
 
+# Common ML hyperparameter names to flag when hardcoded
+ML_HYPERPARAM_NAMES = frozenset({
+    "batch_size", "lr", "learning_rate", "epochs", "n_estimators",
+    "hidden_dim", "hidden_size", "embed_dim", "num_layers", "num_heads",
+    "dropout", "weight_decay", "momentum", "beta_1", "beta_2",
+    "gamma", "reg_alpha", "reg_lambda", "min_child_weight",
+    "max_depth", "min_samples_split", "min_samples_leaf",
+    "num_leaves", "feature_fraction", "bagging_fraction",
+    "threshold", "temperature", "top_k", "beam_size",
+})
+
+# Common hardcoded path patterns
+HARDCODE_PATH_PATTERNS = frozenset({
+    "data_dir", "model_path", "save_path", "checkpoint_path",
+    "log_dir", "output_dir", "cache_dir", "train_path", "val_path",
+    "test_path", "data_path",
+})
+
+# Literal value patterns that indicate hardcoding
+MAGIC_NUMBER_PATTERNS = {
+    "hidden_dim": [64, 128, 256, 512],
+    "batch_size": [8, 16, 32, 64, 128],
+    "epochs": [10, 20, 50, 100],
+    "lr": [0.001, 0.0001, 1e-4, 1e-3],
+    "dropout": [0.1, 0.2, 0.3, 0.5],
+}
+
 # Encoder classes
 ENCODER_CLASSES = frozenset({
     "LabelEncoder", "OneHotEncoder", "OrdinalEncoder",
@@ -377,6 +404,291 @@ class MLDetectorAST:
         except Exception as e:
             logger.warning("AST analysis failed for ML005", error=str(e))
             return self._detect_ml005_regex_fallback(content)
+
+        return findings
+
+    def detect_ml006_hardcoded_config(
+        self,
+        content: str,
+        language: str,
+    ) -> list[dict[str, Any]]:
+        """Detect hardcoded ML hyperparameters and paths using AST analysis.
+
+        AST-based approach:
+        1. Find assignment nodes with common ML config names
+        2. Check if value is a literal (not from config/env/argparse)
+        3. Flag: batch_size, lr, learning_rate, epochs, hidden_dim, etc.
+        4. Also flag: path="/data/...", data_dir="...", model_path="..."
+
+        Distinguishes OK cases:
+        - batch_size = args.batch_size (OK - from argparse)
+        - lr = config.get("learning_rate") (OK - from config)
+        - batch_size = 32 (HARDCODE - flagged)
+        """
+        findings = []
+
+        if language != "python":
+            return self._detect_ml006_regex_fallback(content)
+
+        try:
+            import tree_sitter
+            import tree_sitter_languages
+
+            parser = tree_sitter_languages.get_parser("python")
+            source_bytes = content.encode("utf-8")
+            tree = parser.parse(source_bytes)
+            root = tree.root_node
+
+            # Find all assignments
+            assignments = self._find_ml_config_assignments(root)
+
+            for var_name, value_node, line_no in assignments:
+                if self._is_hardcoded_value(value_node, content):
+                    # Get the actual value for the finding
+                    old_code = self._get_code_snippet(content, line_no)
+                    new_code = self._generate_config_fix(var_name, value_node)
+
+                    findings.append({
+                        "rule_id": "ML006",
+                        "severity": "MEDIUM",
+                        "line": line_no,
+                        "message": f"Hardcoded ML config: {var_name} = {self._get_node_text(value_node)}",
+                        "confidence": 0.82,
+                        "old_code": old_code,
+                        "new_code": new_code,
+                        "explanation": (
+                            f"'{var_name}' is hardcoded instead of being loaded from "
+                            "config, environment variables, or command-line arguments. "
+                            "This makes the code less flexible and harder to reproduce."
+                        ),
+                        "detection_method": "ast",
+                    })
+
+        except ImportError:
+            return self._detect_ml006_regex_fallback(content)
+        except Exception as e:
+            logger.warning("AST analysis failed for ML006", error=str(e))
+            return self._detect_ml006_regex_fallback(content)
+
+        return findings
+
+    def _find_ml_config_assignments(
+        self,
+        root: Any,
+    ) -> list[tuple[str, Any, int]]:
+        """Find assignments to ML config variables.
+
+        Returns:
+            List of (variable_name, value_node, line_number) tuples.
+        """
+        assignments = []
+
+        def traverse(node: Any) -> None:
+            # Handle regular assignment: var = value
+            if node.type == "assignment":
+                left = node.child_by_field_name("left")
+                right = node.child_by_field_name("right")
+                if left and right and left.type == "identifier":
+                    var_name = left.text.decode("utf-8")
+                    if self._is_ml_config_name(var_name):
+                        line_no = node.start_point[0] + 1
+                        assignments.append((var_name, right, line_no))
+
+            # Handle annotated assignment: var: Type = value
+            elif node.type == "annotated_assignment":
+                left = node.child_by_field_name("left")
+                right = node.child_by_field_name("right")
+                if left and right and left.type == "identifier":
+                    var_name = left.text.decode("utf-8")
+                    if self._is_ml_config_name(var_name):
+                        line_no = node.start_point[0] + 1
+                        assignments.append((var_name, right, line_no))
+
+            # Handle for loop target: for var in ...
+            elif node.type == "for_statement":
+                target = node.child_by_field_name("target")
+                if target and target.type == "identifier":
+                    var_name = target.text.decode("utf-8")
+                    if self._is_ml_config_name(var_name):
+                        line_no = node.start_point[0] + 1
+                        # Get the iterable as the "value"
+                        iterable = node.child_by_field_name("iterator")
+                        if iterable:
+                            assignments.append((var_name, iterable, line_no))
+
+            for child in node.children:
+                traverse(child)
+
+        traverse(root)
+        return assignments
+
+    def _is_ml_config_name(self, name: str) -> bool:
+        """Check if a variable name is a known ML config parameter."""
+        # Check exact match
+        if name in ML_HYPERPARAM_NAMES:
+            return True
+        # Check common suffixes/prefixes
+        name_lower = name.lower()
+        for pattern in ML_HYPERPARAM_NAMES:
+            if pattern in name_lower or name_lower in pattern:
+                return True
+        # Check path patterns
+        for path_pattern in HARDCODE_PATH_PATTERNS:
+            if path_pattern in name_lower:
+                return True
+        return False
+
+    def _is_hardcoded_value(self, value_node: Any, content: str) -> bool:
+        """Check if a value is hardcoded (literal) vs external (config/args/env).
+
+        Returns True if the value is a literal that should be externalized.
+        Returns False if the value comes from config, args, env, or function calls.
+        """
+        # String literal - check for hardcoded paths
+        if value_node.type == "string":
+            value_text = self._get_node_text(value_node)
+            # Flag absolute paths and common data paths
+            if "/" in value_text or "\\" in value_text:
+                if any(p in value_text.lower() for p in ["/data/", "/model", "c:", "data/"]):
+                    return True
+            return False
+
+        # Number literal - likely hardcoded hyperparam
+        if value_node.type in ("integer", "float"):
+            return True
+
+        # Boolean literal
+        if value_node.type in ("true", "false", "none"):
+            return False
+
+        # List literal - check if contains hardcoded values
+        if value_node.type == "list":
+            return self._list_has_hardcoded_values(value_node)
+
+        # Dictionary literal - check values
+        if value_node.type == "dictionary":
+            return self._dict_has_hardcoded_values(value_node)
+
+        # Call expression - likely from config/argparse (OK)
+        if value_node.type == "call":
+            return False
+
+        # Attribute access - likely from config/namespace (OK)
+        if value_node.type == "attribute":
+            return False
+
+        # Subscript - likely from config dict (OK)
+        if value_node.type == "subscript":
+            return False
+
+        # Identifier - variable reference (might be OK or hardcoded)
+        if value_node.type == "identifier":
+            return False  # Assume OK unless we can trace it
+
+        # Binary operation - likely expression (OK)
+        if value_node.type == "binary_operator":
+            return False
+
+        return False
+
+    def _list_has_hardcoded_values(self, node: Any) -> bool:
+        """Check if a list literal contains hardcoded values."""
+        for child in node.children:
+            if child.type in ("integer", "float", "string"):
+                return True
+            if child.type == "list":
+                if self._list_has_hardcoded_values(child):
+                    return True
+        return False
+
+    def _dict_has_hardcoded_values(self, node: Any) -> bool:
+        """Check if a dict literal contains hardcoded values."""
+        for child in node.children:
+            if child.type == "pair":
+                value = child.child_by_field_name("value")
+                if value and self._is_hardcoded_value(value, ""):
+                    return True
+        return False
+
+    def _generate_config_fix(self, var_name: str, value_node: Any) -> str:
+        """Generate suggested config-based fix for a hardcoded value."""
+        value_text = self._get_node_text(value_node)
+
+        if any(p in var_name.lower() for p in ["path", "dir"]):
+            return (
+                f"{var_name} = os.getenv('{var_name.upper()}', "
+                f"'./default_{var_name}')"
+            )
+
+        if var_name.lower() in ["lr", "learning_rate"]:
+            return (
+                f"{var_name} = config.get('learning_rate', "
+                f"{value_text})  # or: args.{var_name}"
+            )
+
+        if var_name.lower() == "batch_size":
+            return (
+                f"{var_name} = args.batch_size if args.batch_size else "
+                f"{value_text}  # or: config['batch_size']"
+            )
+
+        if var_name.lower() == "epochs":
+            return (
+                f"{var_name} = args.epochs if args.epochs else "
+                f"{value_text}  # or: config['epochs']"
+            )
+
+        return (
+            f"{var_name} = config.get('{var_name}', "
+            f"{value_text})  # or: args.{var_name}"
+        )
+
+    def _detect_ml006_regex_fallback(self, content: str) -> list[dict[str, Any]]:
+        """Regex fallback for ML006 hardcoded config detection."""
+        findings = []
+
+        # Patterns for hardcoded hyperparameters
+        patterns = [
+            # batch_size = 32 (not from config/args)
+            (r"batch_size\s*=\s*(\d+)", "batch_size"),
+            # lr = 0.001 or learning_rate = 0.001
+            (r"(?:lr|learning_rate)\s*=\s*(0\.\d+)", "learning_rate"),
+            # epochs = 100
+            (r"epochs?\s*=\s*(\d+)", "epochs"),
+            # hidden_dim = 256
+            (r"hidden_dim(?:sion)?\s*=\s*(\d+)", "hidden_dim"),
+            # dropout = 0.5
+            (r"dropout\s*=\s*(0?\.\d+)", "dropout"),
+            # path strings
+            (r"(?:data_path|model_path|train_path)\s*=\s*['\"]([^'\"]+)['\"]", "path"),
+        ]
+
+        lines = content.split("\n")
+        for i, line in enumerate(lines, 1):
+            # Skip if line references config, args, or env
+            if any(x in line for x in ["config.get", "args.", "argparse", "os.getenv", "env["]):
+                continue
+
+            for pattern, param_name in patterns:
+                import re
+                match = re.search(pattern, line, re.IGNORECASE)
+                if match:
+                    value = match.group(1) if match.groups() else ""
+                    findings.append({
+                        "rule_id": "ML006",
+                        "severity": "MEDIUM",
+                        "line": i,
+                        "message": f"Hardcoded ML config: {param_name} = {value}",
+                        "confidence": 0.72,
+                        "old_code": line.strip(),
+                        "new_code": self._generate_config_fix(param_name, None),
+                        "explanation": (
+                            f"'{param_name}' should be loaded from config, "
+                            "args, or environment variables."
+                        ),
+                        "detection_method": "regex_fallback",
+                    })
+                    break  # One finding per line
 
         return findings
 
