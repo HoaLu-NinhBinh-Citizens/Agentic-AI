@@ -29,6 +29,12 @@ from .ml_rules import (
     MLFinding,
     MLSeverity,
 )
+from .ml_detectors import (
+    MLDetector,
+    MLFinding as MLDetectorFinding,
+    MLDetectorAST,
+    DataFlowAnalyzer,
+)
 
 __all__ = [
     "ProjectIndexer",
@@ -52,4 +58,8 @@ __all__ = [
     "MLRule",
     "MLFinding",
     "MLSeverity",
+    "MLDetector",
+    "MLDetectorFinding",
+    "MLDetectorAST",
+    "DataFlowAnalyzer",
 ]

@@ -207,7 +207,10 @@ class SymbolGraph:
                 signature=sym.get("signature", ""),
                 decorators=sym.get("decorators", []),
             )
-            self._nodes[sym["name"]] = node
+            # Use composite key (file_path:name) to prevent collision when
+            # same symbol name exists in different files (e.g. 'main' in a.py vs b.py)
+            node_key = f"{path}:{sym['name']}"
+            self._nodes[node_key] = node
             file_nodes.append(node)
 
         self._nodes_by_file[path] = file_nodes

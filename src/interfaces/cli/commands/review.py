@@ -1,4 +1,11 @@
-"""Review CLI command — code review with fix application."""
+"""Review CLI command — code review with fix application.
+
+This command supports two modes:
+1. Legacy mode: Uses CodeReviewWorkflow's built-in analysis
+2. Unified mode: Uses UnifiedReviewEngine via unified-review command
+
+For the unified ML-powered analysis, use the `unified-review` command instead.
+"""
 
 from __future__ import annotations
 
@@ -6,10 +13,27 @@ import argparse
 import asyncio
 import json
 import sys
+import warnings
 from pathlib import Path
 from typing import Optional
 
 from src.application.workflows.code_review.workflow import CodeReviewWorkflow
+
+# Try to import new reporters for enhanced output
+try:
+    from src.infrastructure.reporting import (
+        MarkdownReportGenerator,
+        JSONReportGenerator,
+        CLIReportGenerator,
+    )
+    from src.infrastructure.reporting.markdown_report import (
+        Finding as ReporterFinding,
+        PipelineStats,
+        Severity,
+    )
+    REPORTERS_AVAILABLE = True
+except ImportError:
+    REPORTERS_AVAILABLE = False
 
 
 def register(subparsers: argparse._SubParsersAction[argparse.ArgumentParser]) -> None:
@@ -17,7 +41,8 @@ def register(subparsers: argparse._SubParsersAction[argparse.ArgumentParser]) ->
     parser = subparsers.add_parser(
         "review",
         help="Review code files and apply fixes",
-        description="Run code review on files, collect findings, and apply fixes",
+        description="Run code review on files, collect findings, and apply fixes. "
+                    "For ML-powered analysis, use 'unified-review' instead.",
     )
     parser.add_argument(
         "files",
@@ -62,6 +87,12 @@ def register(subparsers: argparse._SubParsersAction[argparse.ArgumentParser]) ->
         help="Output results as JSON",
     )
     parser.add_argument(
+        "--report",
+        choices=["markdown", "cli", "json"],
+        default=None,
+        help="Generate report in specified format (uses new reporters if available)",
+    )
+    parser.add_argument(
         "--workspace",
         "-w",
         default=None,
@@ -73,6 +104,11 @@ def register(subparsers: argparse._SubParsersAction[argparse.ArgumentParser]) ->
         nargs="*",
         default=[],
         help="Patterns to exclude from review",
+    )
+    parser.add_argument(
+        "--legacy",
+        action="store_true",
+        help="Force use of legacy regex-based analysis (deprecated)",
     )
     parser.set_defaults(handler=run_review)
 
@@ -93,7 +129,9 @@ async def run_review(args: argparse.Namespace) -> int:
     if args.apply:
         dry_run = False
 
-    workflow = CodeReviewWorkflow(workspace_root)
+    # Create workflow - use legacy if explicitly requested
+    use_unified = not args.legacy
+    workflow = CodeReviewWorkflow(workspace_root, use_unified=use_unified)
 
     result = await workflow.review_and_fix(
         files=files,
@@ -103,12 +141,69 @@ async def run_review(args: argparse.Namespace) -> int:
         interactive=args.apply,
     )
 
-    if args.json:
+    # Use new reporters if requested and available
+    if args.report and REPORTERS_AVAILABLE:
+        _print_with_reporters(result, args)
+    elif args.json:
         _print_json_result(result)
     else:
         _print_human_result(result, args)
 
     return 0 if result.errors == 0 else 1
+
+
+def _print_with_reporters(result, args) -> None:
+    """Print results using new reporters."""
+    if args.report == "markdown":
+        reporter = MarkdownReportGenerator("Code Review")
+        # Convert FixBatch findings to reporter format
+        findings = _convert_to_reporter_findings(result)
+        stats = PipelineStats(
+            files_analyzed=result.files_reviewed,
+            duration_seconds=result.duration_seconds,
+            total_findings=result.total_findings,
+        )
+        print(reporter.generate(findings, stats))
+    elif args.report == "cli":
+        reporter = CLIReportGenerator()
+        findings = _convert_to_reporter_findings(result)
+        stats = PipelineStats(
+            files_analyzed=result.files_reviewed,
+            duration_seconds=result.duration_seconds,
+            total_findings=result.total_findings,
+        )
+        print(reporter.generate(findings, stats))
+    elif args.report == "json":
+        reporter = JSONReportGenerator("Code Review")
+        findings = _convert_to_reporter_findings(result)
+        stats = PipelineStats(
+            files_analyzed=result.files_reviewed,
+            duration_seconds=result.duration_seconds,
+            total_findings=result.total_findings,
+        )
+        print(json.dumps(reporter.generate(findings, stats), indent=2))
+
+
+def _convert_to_reporter_findings(result) -> list[ReporterFinding]:
+    """Convert FixBatch to reporter Finding format."""
+    findings = []
+    for fix in result.fix_batch.fixes:
+        severity_map = {
+            "error": Severity.CRITICAL,
+            "warning": Severity.MEDIUM,
+            "info": Severity.INFO,
+        }
+        severity = severity_map.get(fix.severity.value, Severity.MEDIUM)
+        findings.append(ReporterFinding(
+            rule_id=fix.rule_id,
+            title=fix.reason[:50] if fix.reason else "Unknown issue",
+            severity=severity,
+            file_path=fix.file_path,
+            line=fix.line_start,
+            message=fix.reason,
+            confidence=fix.confidence,
+        ))
+    return findings
 
 
 async def _resolve_files(

@@ -1,9 +1,18 @@
-"""Code review workflow — review, suggest fixes, apply interactively, report."""
+"""Code review workflow — review, suggest fixes, apply interactively, report.
+
+This module provides end-to-end code review with fix application.
+It supports two modes:
+1. Unified mode: Uses UnifiedReviewEngine for ML-powered analysis
+2. Legacy mode: Uses local regex patterns (backward compatibility)
+
+The unified mode is preferred but falls back to legacy mode if unavailable.
+"""
 
 from __future__ import annotations
 
 import logging
 import uuid
+import warnings
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Optional
@@ -22,6 +31,19 @@ from src.interfaces.tui.fix_panel import FixPanel
 
 logger = logging.getLogger(__name__)
 
+# Try to import unified pipeline (graceful degradation)
+try:
+    from src.application.workflows.unified import (
+        UnifiedReviewEngine,
+        ReviewEngineConfig,
+        Finding,
+        FindingSeverity,
+    )
+    UNIFIED_AVAILABLE = True
+except ImportError:
+    UNIFIED_AVAILABLE = False
+    logger.warning("UnifiedReviewEngine not available, using legacy mode")
+
 
 @dataclass
 class ReviewWorkflowResult:
@@ -36,12 +58,43 @@ class ReviewWorkflowResult:
 
 
 class CodeReviewWorkflow:
-    """End-to-end code review with fix application."""
+    """End-to-end code review with fix application.
 
-    def __init__(self, workspace_root: Optional[str] = None):
+    Supports two modes:
+    - Unified mode: Uses UnifiedReviewEngine for comprehensive ML-powered analysis
+    - Legacy mode: Uses local regex patterns for backward compatibility
+
+    Args:
+        workspace_root: Root directory for the workspace
+        use_unified: Force use of unified engine (default: auto-detect)
+    """
+
+    def __init__(
+        self,
+        workspace_root: Optional[str] = None,
+        use_unified: Optional[bool] = None,
+    ):
         self._workspace_root = workspace_root
         self._fix_tool = ApplyFixTool(workspace_root)
         self._panel = FixPanel(workspace_root)
+
+        # Determine mode: use_unified=None means auto-detect
+        if use_unified is None:
+            self._use_unified = UNIFIED_AVAILABLE
+        else:
+            self._use_unified = use_unified and UNIFIED_AVAILABLE
+
+        if not self._use_unified and not UNIFIED_AVAILABLE:
+            warnings.warn(
+                "UnifiedReviewEngine not available. Using legacy regex-based analysis. "
+                "Install required dependencies for ML-powered analysis.",
+                UserWarning,
+                stacklevel=2,
+            )
+        elif self._use_unified:
+            logger.info("Using UnifiedReviewEngine for code review")
+        else:
+            logger.info("Using legacy regex-based analysis")
 
     async def review_and_fix(
         self,
@@ -71,7 +124,12 @@ class CodeReviewWorkflow:
 
         logger.info("Starting review of %d files", len(files))
 
-        findings = await self._collect_findings(files, focus_areas)
+        # Use unified engine if available
+        if self._use_unified and UNIFIED_AVAILABLE:
+            findings = await self._collect_findings_unified(files, focus_areas)
+        else:
+            findings = await self._collect_findings_legacy(files, focus_areas)
+
         fixes = self._convert_findings_to_fixes(findings)
         fixes = self._deduplicate_fixes(fixes)
 
@@ -118,31 +176,159 @@ class CodeReviewWorkflow:
             duration_seconds=duration,
         )
 
-    async def _collect_findings(
+    async def _collect_findings_unified(
+        self,
+        files: list[str],
+        focus_areas: list[str],
+    ) -> list[ReviewFinding]:
+        """Collect findings using UnifiedReviewEngine.
+
+        Args:
+            files: File paths to analyze
+            focus_areas: Focus areas for detection
+
+        Returns:
+            List of ReviewFinding objects
+        """
+        from src.core.fix_engine.models import FixSeverity
+
+        # Map focus areas to unified format
+        unified_areas = self._map_focus_areas(focus_areas)
+
+        try:
+            config = ReviewEngineConfig(
+                focus_areas=unified_areas,
+                output_format="json",
+                confidence_threshold=0.5,
+            )
+            engine = UnifiedReviewEngine(config)
+            result = await engine.review(files)
+
+            # Convert Unified Finding to ReviewFinding
+            findings: list[ReviewFinding] = []
+            for finding in result.findings:
+                severity = self._map_severity(finding.severity)
+                findings.append(ReviewFinding(
+                    file_path=finding.file,
+                    line=finding.line,
+                    rule_id=finding.rule_id,
+                    message=finding.message,
+                    severity=severity,
+                    suggested_fix=finding.fix,
+                    confidence=finding.confidence,
+                ))
+
+            logger.info(
+                "UnifiedReviewEngine found %d findings",
+                len(findings)
+            )
+            return findings
+
+        except Exception as exc:
+            logger.warning(
+                "UnifiedReviewEngine failed: %s. Falling back to legacy mode.",
+                exc
+            )
+            warnings.warn(
+                f"UnifiedReviewEngine failed with: {exc}. "
+                "Using legacy regex-based analysis.",
+                UserWarning,
+                stacklevel=2,
+            )
+            return await self._collect_findings_legacy(files, focus_areas)
+
+    def _map_focus_areas(self, focus_areas: list[str]) -> list[str]:
+        """Map legacy focus areas to unified focus areas.
+
+        Args:
+            focus_areas: Legacy focus areas
+
+        Returns:
+            Unified focus areas
+        """
+        mapping = {
+            "code_quality": ["quality"],
+            "security": ["security"],
+            "best_practices": ["quality"],
+            "performance": ["quality"],
+        }
+        unified: set[str] = set()
+        for area in focus_areas:
+            unified.update(mapping.get(area, [area]))
+        return list(unified) if unified else ["security", "quality"]
+
+    def _map_severity(self, severity: "FindingSeverity") -> FixSeverity:
+        """Map unified severity to legacy severity.
+
+        Args:
+            severity: Unified FindingSeverity
+
+        Returns:
+            Legacy FixSeverity
+        """
+        mapping = {
+            FindingSeverity.ERROR: FixSeverity.ERROR,
+            FindingSeverity.WARNING: FixSeverity.WARNING,
+            FindingSeverity.INFO: FixSeverity.INFO,
+            FindingSeverity.HINT: FixSeverity.INFO,
+        }
+        return mapping.get(severity, FixSeverity.WARNING)
+
+    # ─── Legacy Analysis (Backward Compatibility) ────────────────────────────────
+
+    async def _collect_findings_legacy(
         self, files: list[str], focus_areas: list[str]
     ) -> list[ReviewFinding]:
-        """Collect findings from static analysis of files."""
+        """Collect findings using legacy regex patterns (backward compatibility).
+
+        DEPRECATED: This method is kept for backward compatibility.
+        Use _collect_findings_unified for ML-powered analysis.
+
+        Args:
+            files: File paths to analyze
+            focus_areas: Areas to focus on
+
+        Returns:
+            List of ReviewFinding objects
+        """
+        warnings.warn(
+            "Using legacy regex-based analysis. "
+            "Consider using UnifiedReviewEngine for better results.",
+            DeprecationWarning,
+            stacklevel=2,
+        )
+
         findings: list[ReviewFinding] = []
 
         for file_path in files:
-            file_findings = await self._analyze_file(file_path, focus_areas)
+            file_findings = await self._analyze_file_legacy(file_path, focus_areas)
             findings.extend(file_findings)
 
         return findings
 
-    async def _analyze_file(
+    async def _analyze_file_legacy(
         self, file_path: str, focus_areas: list[str]
     ) -> list[ReviewFinding]:
-        """Analyze a single file for issues."""
+        """Analyze a single file for issues using legacy regex patterns.
+
+        DEPRECATED: Internal legacy method. Use UnifiedReviewEngine instead.
+
+        Args:
+            file_path: Path to file to analyze
+            focus_areas: Areas to focus on
+
+        Returns:
+            List of findings
+        """
         findings: list[ReviewFinding] = []
-        findings.extend(await self._static_analysis(file_path))
+        findings.extend(await self._static_analysis_legacy(file_path))
 
         if "security" in focus_areas:
-            findings.extend(await self._security_scan(file_path))
+            findings.extend(await self._security_scan_legacy(file_path))
 
         return findings
 
-    async def _static_analysis(self, file_path: str) -> list[ReviewFinding]:
+    async def _static_analysis_legacy(self, file_path: str) -> list[ReviewFinding]:
         """Perform static analysis on file."""
         findings: list[ReviewFinding] = []
         import re
@@ -182,7 +368,7 @@ class CodeReviewWorkflow:
 
         return findings
 
-    async def _security_scan(self, file_path: str) -> list[ReviewFinding]:
+    async def _security_scan_legacy(self, file_path: str) -> list[ReviewFinding]:
         """Perform basic security scan on file."""
         findings: list[ReviewFinding] = []
         import re

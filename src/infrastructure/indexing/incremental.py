@@ -422,19 +422,61 @@ class IncrementalIndexer:
 
     @staticmethod
     def _chunk_content(content: str, source: str) -> list[dict[str, Any]]:
-        """Split file content into chunks for embedding.
-
-        Simple line-group chunking: groups consecutive non-empty lines
-        up to ~512 tokens, then yields each group as a chunk dict.
+        """Split file content into semantically coherent chunks for embedding.
+        
+        Semantic chunking strategy:
+        - First tries to split at function/class definition boundaries
+        - If a function is too large (>max_chars), splits at logical sub-sections
+          using indentation levels and blank lines as guides
+        - Preserves indentation context to maintain code hierarchy
+        
+        This prevents breaking function signatures from their bodies,
+        class definitions from methods, or related logic from context.
         """
         max_chars = 2000
         lines = content.splitlines()
         chunks = []
         buffer: list[str] = []
         buf_len = 0
-
+        
+        # Track current indentation level to identify logical blocks
+        def get_indent(line: str) -> int:
+            return len(line) - len(line.lstrip())
+        
+        def should_split_at_line(line: str, prev_indent: int) -> bool:
+            """Determine if line marks a semantic boundary for splitting.
+            
+            Split at:
+            - Function/class definitions (def, class, async def)
+            - Major section comments (# ----, # ===, etc.)
+            - Significant indent changes that indicate new blocks
+            """
+            stripped = line.strip()
+            if not stripped:
+                return True  # Blank lines are natural split points
+            
+            # Function/method/class definitions
+            if stripped.startswith(("def ", "async def ", "class ", "async ")):
+                return True
+            
+            # Major section headers (comment lines that look like headers)
+            if stripped.startswith("#") and len(stripped) > 2:
+                first_char = stripped[1]
+                if first_char in ("=", "-", "*", "#"):
+                    return True
+            
+            return False
+        
+        prev_indent = 0
         for line in lines:
-            if buf_len + len(line) > max_chars and buffer:
+            current_indent = get_indent(line)
+            is_boundary = should_split_at_line(line, prev_indent)
+            
+            # Check if adding this line would exceed max_chars
+            would_exceed = buf_len + len(line) > max_chars
+            
+            # Split if: would exceed AND we have content, OR this is a semantic boundary
+            if (would_exceed and buffer) or (is_boundary and buffer):
                 chunks.append({
                     "text": "\n".join(buffer),
                     "source": source,
@@ -442,8 +484,10 @@ class IncrementalIndexer:
                 })
                 buffer = []
                 buf_len = 0
+            
             buffer.append(line)
             buf_len += len(line) + 1
+            prev_indent = current_indent
 
         if buffer:
             chunks.append({

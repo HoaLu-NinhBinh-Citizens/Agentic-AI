@@ -165,8 +165,34 @@ class ApplyFixTool:
         return restored
 
     def _find_fixes_by_backup(self, fix_id: str) -> list[Fix]:
-        """Find fixes by ID (used for rollback)."""
-        return []
+        """Find fixes by ID from backup directory (used for rollback).
+        
+        Searches the backup directory for fix records matching the given fix_id.
+        Returns empty list if backup dir doesn't exist or no matching fixes found.
+        """
+        fixes: list[Fix] = []
+        backup_dir = self._workspace_root / ".aisupport" / "backups"
+        if not backup_dir.exists():
+            return fixes
+        
+        # Look for fix records matching the fix_id
+        for backup_file in backup_dir.glob(f"*.json"):
+            try:
+                import json
+                data = json.loads(backup_file.read_text(encoding="utf-8"))
+                if isinstance(data, dict) and data.get("fix_id") == fix_id:
+                    fixes.append(Fix(
+                        fix_id=data["fix_id"],
+                        file_path=data["file_path"],
+                        old_text=data.get("old_text", ""),
+                        new_text=data.get("new_text", ""),
+                        line_start=data.get("line_start", 0),
+                        line_end=data.get("line_end", 0),
+                    ))
+            except (json.JSONDecodeError, KeyError, OSError):
+                continue
+        
+        return fixes
 
     def interactive_apply(self, fix: Fix) -> FixResult:
         """Interactive apply: returns result, caller handles prompts."""

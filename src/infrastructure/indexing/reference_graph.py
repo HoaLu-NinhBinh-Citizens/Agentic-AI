@@ -677,8 +677,13 @@ class ReferenceGraph:
 
     @staticmethod
     def _extract_name_from_ref(ref: RefLocation) -> str:
-        """Extract the symbol name from a RefLocation's context."""
-        return ref.context.strip()
+        """Extract the symbol name from a RefLocation.
+        
+        Returns the symbol name (e.g. 'process_data'), not the full context line.
+        The 'name' field contains the actual symbol identifier, while 'context'
+        contains the full line which would incorrectly include surrounding code.
+        """
+        return ref.name
 
     # ─── Maintenance ────────────────────────────────────────────────────────────
 
