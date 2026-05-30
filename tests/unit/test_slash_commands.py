@@ -130,7 +130,7 @@ class TestParseAndExecute:
     def test_review_command_parsed(self):
         import asyncio
         result = asyncio.run(
-            parse_and_execute("/review @src/ --focus=security --auto", "/workspace")
+            parse_and_execute("/review --focus=security --auto", "/workspace")
         )
         # Should either succeed or fail gracefully (no crash)
         assert isinstance(result.success, bool)

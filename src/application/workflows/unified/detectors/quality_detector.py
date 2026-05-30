@@ -98,6 +98,7 @@ class QualityDetector(Detector):
                 id="QUAL002",
                 name="nested-callbacks",
                 description="Callback/Promise nesting exceeds 3 levels",
+                severity=FindingSeverity.WARNING,
                 languages=["javascript", "typescript", "python"],
                 fix_template="Use async/await or extract to named functions",
             ),
@@ -105,6 +106,7 @@ class QualityDetector(Detector):
                 id="QUAL003",
                 name="broad-except",
                 description="Bare except or except Exception catches everything",
+                severity=FindingSeverity.WARNING,
                 languages=["python"],
                 patterns=[
                     r"except\s*:\s*\n",
@@ -116,6 +118,7 @@ class QualityDetector(Detector):
                 id="QUAL004",
                 name="empty-except",
                 description="Empty except block without logging",
+                severity=FindingSeverity.WARNING,
                 languages=["python"],
                 patterns=[
                     r"except\s*:\s*\n\s*pass",
@@ -128,6 +131,7 @@ class QualityDetector(Detector):
                 id="QUAL005",
                 name="todo-fixme",
                 description="Unresolved TODO/FIXME/XXX comment found",
+                severity=FindingSeverity.INFO,
                 patterns=[
                     r"\bTODO\b",
                     r"\bFIXME\b",
@@ -142,6 +146,7 @@ class QualityDetector(Detector):
                 id="QUAL006",
                 name="print-statement",
                 description="Print statement used instead of logging",
+                severity=FindingSeverity.INFO,
                 languages=["python"],
                 patterns=[r"\bprint\s*\("],
                 fix_template="Use logging module: logging.info(), logging.debug()",
@@ -150,6 +155,7 @@ class QualityDetector(Detector):
                 id="QUAL007",
                 name="magic-number",
                 description="Magic number detected (literal number > 1 not in constant)",
+                severity=FindingSeverity.INFO,
                 patterns=[
                     r"(?<![a-zA-Z_])(0x[0-9A-Fa-f]+|(?:[2-9]|[1-9]\d+))\b(?![xXa-zA-Z0-9_.\-%])",
                 ],
@@ -159,6 +165,7 @@ class QualityDetector(Detector):
                 id="QUAL008",
                 name="consecutive-blank-lines",
                 description="Multiple consecutive blank lines detected",
+                severity=FindingSeverity.INFO,
                 patterns=[r"\n\n\n\n+"],
                 fix_template="Use single blank line between sections",
             ),
@@ -166,6 +173,7 @@ class QualityDetector(Detector):
                 id="QUAL009",
                 name="trailing-whitespace",
                 description="Lines with trailing whitespace",
+                severity=FindingSeverity.INFO,
                 patterns=[r"[ \t]+\n"],
                 fix_template="Remove trailing whitespace",
             ),
@@ -173,12 +181,14 @@ class QualityDetector(Detector):
                 id="QUAL010",
                 name="cyclomatic-complexity",
                 description=f"Function cyclomatic complexity exceeds {MAX_CYCLOMATIC_COMPLEXITY}",
+                severity=FindingSeverity.WARNING,
                 fix_template=f"Simplify function (target complexity <{MAX_CYCLOMATIC_COMPLEXITY})",
             ),
             QualityRule(
                 id="QUAL011",
                 name="snake-case-function",
                 description="Function name should use snake_case",
+                severity=FindingSeverity.INFO,
                 languages=["python"],
                 patterns=[
                     r"def\s+[A-Z][a-zA-Z0-9_]*\s*\(",
@@ -190,6 +200,7 @@ class QualityDetector(Detector):
                 id="QUAL012",
                 name="pascal-case-class",
                 description="Class name should use PascalCase",
+                severity=FindingSeverity.INFO,
                 languages=["python"],
                 patterns=[
                     r"class\s+[a-z][a-z0-9_]*\s*[\(:]",
@@ -201,6 +212,7 @@ class QualityDetector(Detector):
                 id="QUAL013",
                 name="single-letter-variable",
                 description="Avoid single-letter variable names (except common loop vars)",
+                severity=FindingSeverity.HINT,
                 patterns=[
                     r"\bfor\s+([a-h]|p|t|q|r|s|u|v|w)\b",
                     r"\b([a-h]|p|t|q|r|s|u|v|w)\s*=\s*",
@@ -211,6 +223,7 @@ class QualityDetector(Detector):
                 id="QUAL014",
                 name="redundant-comment",
                 description="Comment that restates the obvious code",
+                severity=FindingSeverity.HINT,
                 patterns=[
                     r"#\s*(?:increment|incrementing)\s+\w+\s*by\s+1",
                     r"#\s*(?:decrement|decrementing)\s+\w+\s*by\s+1",
@@ -222,6 +235,7 @@ class QualityDetector(Detector):
                 id="QUAL015",
                 name="import-order",
                 description="Imports not in recommended order",
+                severity=FindingSeverity.INFO,
                 languages=["python"],
                 patterns=[
                     r"^import\s+[a-z]",  # standard lib should be before

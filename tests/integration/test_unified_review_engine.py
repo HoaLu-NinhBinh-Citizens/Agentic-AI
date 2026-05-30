@@ -387,7 +387,7 @@ class TestUnifiedReviewEngine:
         )
         engine = UnifiedReviewEngine(config)
         
-        result_high = await engine.review([mock_ml_project / "train.py"])
+        result_high = await engine.review([mock_ml_project / "train.py"], incremental=False)
         
         # Low threshold - should include more findings
         config_low = ReviewEngineConfig(
@@ -395,7 +395,7 @@ class TestUnifiedReviewEngine:
             confidence_threshold=0.3,
         )
         engine_low = UnifiedReviewEngine(config_low)
-        result_low = await engine_low.review([mock_ml_project / "train.py"])
+        result_low = await engine_low.review([mock_ml_project / "train.py"], incremental=False)
         
         # Lower threshold should find same or more issues
         assert result_low.stats.findings_count >= result_high.stats.findings_count
@@ -494,8 +494,8 @@ class TestReviewEngineDeduplication:
         
         # Run review twice on same file
         file_path = mock_ml_project / "train.py"
-        result1 = await engine.review([file_path])
-        result2 = await engine.review([file_path])
+        result1 = await engine.review([file_path], incremental=False)
+        result2 = await engine.review([file_path], incremental=False)
         
         # Should not double count if deduplication works
         # Note: This test verifies the engine can handle repeated runs

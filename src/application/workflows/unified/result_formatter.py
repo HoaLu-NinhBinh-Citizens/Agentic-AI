@@ -58,10 +58,28 @@ class PipelineStats:
         findings: list[Finding],
         execution_time_ms: float = 0.0,
         detectors_used: list[str] | None = None,
+        files_scanned: int | None = None,
     ) -> PipelineStats:
-        """Create stats from findings list."""
+        """Create stats from findings list.
+
+        Args:
+            findings: List of findings
+            execution_time_ms: Execution time in milliseconds
+            detectors_used: List of detector names used
+            files_scanned: Number of files actually scanned (optional).
+                          If provided, this takes precedence over counting from findings.
+                          A clean file (no findings) still counts as scanned.
+        """
         stats = cls(execution_time_ms=execution_time_ms)
-        stats.files_scanned = len(set(f.file for f in findings))
+        # Use provided files_scanned if available, otherwise count from findings
+        # (for backwards compatibility when files_scanned is not provided)
+        if files_scanned is not None:
+            stats.files_scanned = files_scanned
+        else:
+            # Fallback: count unique files with findings
+            # Note: This means clean files won't be counted!
+            # Prefer passing files_scanned explicitly from the engine.
+            stats.files_scanned = len(set(f.file for f in findings)) if findings else 0
         stats.findings_count = len(findings)
         stats.errors_count = sum(1 for f in findings if f.severity == FindingSeverity.ERROR)
         stats.warnings_count = sum(1 for f in findings if f.severity == FindingSeverity.WARNING)
@@ -259,21 +277,45 @@ class MarkdownFormatter(ResultFormatter):
             lines.append("")
             lines.append(f"**File:** `{finding.file}:{finding.line}`")
             lines.append("")
-            lines.append(f"**Message:** {finding.message}")
-            lines.append("")
 
-            if finding.context:
+            # Get old_code and new_code from metadata (for ML detector)
+            old_code = finding.metadata.get("old_code", "")
+            new_code = finding.metadata.get("new_code", "")
+
+            # Show code with before/after if available
+            if old_code or new_code:
+                if old_code:
+                    lines.append("**Before (problematic code):**")
+                    lines.append("```python")
+                    lines.append(f"")
+                    lines.append(old_code)
+                    lines.append("```")
+                    lines.append("")
+                if new_code:
+                    lines.append("**After (suggested fix):**")
+                    lines.append("```python")
+                    lines.append("")
+                    lines.append(new_code)
+                    lines.append("```")
+                    lines.append("")
+            elif finding.context:
+                # Fallback to context
                 lines.append("**Code:**")
                 lines.append("```")
                 lines.append(finding.context)
                 lines.append("```")
                 lines.append("")
 
+            lines.append(f"**Message:** {finding.message}")
+            lines.append("")
+
             if finding.fix:
-                lines.append("**Suggested Fix:**")
-                lines.append("```")
-                lines.append(finding.fix)
-                lines.append("```")
+                lines.append(f"**Suggested Fix:** {finding.fix}")
+                lines.append("")
+
+            # Show explanation if available (for ML detector)
+            if finding.metadata.get("explanation"):
+                lines.append(f"**Explanation:** {finding.metadata['explanation']}")
                 lines.append("")
 
             if finding.metadata.get("cwe"):

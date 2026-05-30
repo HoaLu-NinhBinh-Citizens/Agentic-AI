@@ -313,10 +313,12 @@ class UnifiedReviewEngine:
 
         # Calculate stats
         execution_time_ms = (time.time() - start_time) * 1000
+        # Pass actual number of files scanned - a clean file still counts as scanned
         stats = PipelineStats.from_findings(
             findings,
             execution_time_ms=execution_time_ms,
             detectors_used=[d.name for d in self.detectors],
+            files_scanned=len(contexts),  # Actual files processed (may be fewer than input due to errors)
         )
 
         # Format output

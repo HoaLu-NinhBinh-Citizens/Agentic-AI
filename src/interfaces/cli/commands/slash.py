@@ -86,35 +86,131 @@ class Command:
 # ─── Builtin commands ────────────────────────────────────────────────────────
 
 async def cmd_review(ctx: CommandContext) -> CommandResult:
-    """Run code review on specified files."""
-    from src.application.workflows.code_review.workflow import CodeReviewWorkflow
+    """Run code review on specified files using UnifiedReviewEngine."""
+    # Check if unified pipeline is available
+    try:
+        from src.application.workflows.unified.review_engine import (
+            UnifiedReviewEngine,
+            ReviewEngineConfig,
+        )
+    except ImportError as e:
+        # Fallback to legacy workflow
+        return await _fallback_to_legacy_review(ctx, error_msg=f"Unified pipeline unavailable: {e}")
+
+    files = ctx.files if ctx.files else []
+    
+    # If no files provided, check workspace for source files
+    # Limit to prevent scanning large directories
+    if not files:
+        from pathlib import Path
+        workspace = Path(ctx.workspace_root)
+        if workspace.exists() and workspace.is_dir():
+            try:
+                # Find source files with a limit
+                for ext in [".py", ".js", ".ts", ".c", ".cpp"]:
+                    source_files = list(workspace.rglob(f"*{ext}"))[:50]  # Limit to 50 files
+                    if source_files:
+                        files = [str(f) for f in source_files]
+                        break
+            except Exception:
+                pass
+        if not files:
+            return CommandResult(
+                success=True,
+                output="No source files found to review. Use /review @file.py to specify files explicitly.",
+            )
+
+    focus = ctx.raw_flags.get("focus", "all").split(",")
+    if "all" in focus:
+        focus = ["security", "quality", "ml", "embedded"]
+    auto_apply = "auto" in ctx.raw_flags or ctx.raw_flags.get("mode") == "auto"
+
+    # Normalize focus areas for unified pipeline
+    normalized_focus = []
+    for f in focus:
+        if f in ["security", "quality", "ml", "embedded"]:
+            normalized_focus.append(f)
+        elif f == "code_quality":
+            normalized_focus.append("quality")
+        elif f == "best_practices":
+            normalized_focus.append("quality")
+
+    config = ReviewEngineConfig(
+        focus_areas=normalized_focus or ["security", "quality", "ml"],
+        output_format="markdown",
+        confidence_threshold=0.5,
+    )
+
+    try:
+        engine = UnifiedReviewEngine(config)
+        # Convert to Path objects
+        from pathlib import Path
+        file_paths = [Path(f) for f in files]
+
+        result = await engine.review(file_paths, incremental=False)
+
+        output = _format_unified_review_summary(result)
+        return CommandResult(
+            success=True,
+            output=output,
+            data={
+                "files_reviewed": result.stats.files_scanned,
+                "total_findings": len(result.findings),
+                "errors": result.stats.errors_count,
+                "warnings": result.stats.warnings_count,
+                "info": result.stats.info_count,
+            },
+        )
+    except Exception as e:
+        import logging
+        logging.warning("Unified review failed: %s", e)
+        # Fallback to legacy workflow
+        return await _fallback_to_legacy_review(ctx, error_msg=f"Unified review failed: {e}")
+
+
+async def _fallback_to_legacy_review(
+    ctx: CommandContext, error_msg: str | None = None
+) -> CommandResult:
+    """Fallback to legacy CodeReviewWorkflow if unified pipeline fails."""
+    try:
+        from src.application.workflows.code_review.workflow import CodeReviewWorkflow
+    except ImportError:
+        return CommandResult(
+            success=False,
+            output=f"Code review unavailable. {error_msg or 'Both unified and legacy pipelines failed.'}",
+        )
 
     files = ctx.files if ctx.files else ["."]
     focus = ctx.raw_flags.get("focus", "all").split(",")
-    auto_apply = "auto" in ctx.raw_flags or ctx.raw_flags.get("mode") == "auto"
-    dry_run = "dry-run" in ctx.raw_flags or "dry_run" in ctx.raw_flags
 
-    workflow = CodeReviewWorkflow(ctx.workspace_root)
-    result = await workflow.review_and_fix(
-        files=files,
-        focus_areas=focus,
-        auto_apply=auto_apply,
-        dry_run=dry_run,
-        interactive=False,
-    )
+    try:
+        workflow = CodeReviewWorkflow(ctx.workspace_root)
+        result = await workflow.review_and_fix(
+            files=files,
+            focus_areas=focus,
+            auto_apply=False,
+            dry_run=True,
+            interactive=False,
+        )
 
-    output = _format_review_summary(result)
-    return CommandResult(success=True, output=output, data={
-        "files_reviewed": result.files_reviewed,
-        "total_findings": result.total_findings,
-        "errors": result.errors,
-        "warnings": result.warnings,
-    })
+        output = _format_review_summary(result)
+        return CommandResult(success=True, output=output, data={
+            "files_reviewed": result.files_reviewed,
+            "total_findings": result.total_findings,
+            "errors": result.errors,
+            "warnings": result.warnings,
+        })
+    except Exception as e:
+        return CommandResult(
+            success=False,
+            output=f"Code review failed. {error_msg or str(e)}",
+            errors=[str(e)],
+        )
 
 
 async def cmd_fix(ctx: CommandContext) -> CommandResult:
-    """Show and apply fixes for a specific file or line."""
-    from src.application.workflows.code_review.workflow import CodeReviewWorkflow
+    """Show and apply fixes for a specific file or line using UnifiedReviewEngine."""
+    from pathlib import Path
 
     if not ctx.primary_file:
         return CommandResult(
@@ -125,35 +221,132 @@ async def cmd_fix(ctx: CommandContext) -> CommandResult:
         )
 
     files = [ctx.primary_file]
-    workflow = CodeReviewWorkflow(ctx.workspace_root)
-    result = await workflow.review_and_fix(
-        files=files,
-        focus_areas=["code_quality", "security"],
-        auto_apply=False,
-        dry_run=True,
-        interactive=False,
+
+    # Check if unified pipeline is available
+    try:
+        from src.application.workflows.unified.review_engine import (
+            UnifiedReviewEngine,
+            ReviewEngineConfig,
+        )
+    except ImportError as e:
+        # Fallback to legacy workflow
+        return await _fallback_to_legacy_fix(ctx, error_msg=f"Unified pipeline unavailable: {e}")
+
+    config = ReviewEngineConfig(
+        focus_areas=["security", "quality", "ml", "embedded"],
+        output_format="markdown",
+        confidence_threshold=0.5,
     )
 
-    # Filter to specific line if given
-    fixes = result.fix_batch.fixes
-    if ctx.primary_line:
-        fixes = [f for f in fixes if f.line_start == ctx.primary_line]
+    try:
+        engine = UnifiedReviewEngine(config)
+        result = await engine.review([Path(f) for f in files], incremental=False)
 
-    output = _format_fixes_list(fixes)
-    return CommandResult(success=True, output=output, data={
-        "fix_count": len(fixes),
-        "fixes": [
-            {
-                "id": f.id,
-                "file": f.file_path,
-                "line": f.line_start,
-                "rule": f.rule_id,
-                "reason": f.reason[:80],
-                "severity": f.severity.value,
-            }
-            for f in fixes
-        ],
-    })
+        # Filter to specific line if given
+        fixes = result.findings
+        if ctx.primary_line:
+            fixes = [f for f in fixes if f.line == ctx.primary_line]
+
+        # Filter to fixable findings
+        fixable = [f for f in fixes if f.fix]
+
+        output = _format_unified_fixes_list(fixable)
+        return CommandResult(success=True, output=output, data={
+            "fix_count": len(fixable),
+            "fixes": [
+                {
+                    "id": f.rule_id,
+                    "file": f.file,
+                    "line": f.line,
+                    "rule": f.rule_id,
+                    "reason": f.message[:80],
+                    "severity": f.severity.value,
+                }
+                for f in fixable
+            ],
+        })
+
+    except Exception as e:
+        import logging
+        logging.warning("Unified fix failed: %s", e)
+        # Fallback to legacy workflow
+        return await _fallback_to_legacy_fix(ctx, error_msg=f"Unified fix failed: {e}")
+
+
+async def _fallback_to_legacy_fix(
+    ctx: CommandContext, error_msg: str | None = None
+) -> CommandResult:
+    """Fallback to legacy CodeReviewWorkflow if unified pipeline fails."""
+    try:
+        from src.application.workflows.code_review.workflow import CodeReviewWorkflow
+    except ImportError:
+        return CommandResult(
+            success=False,
+            output=f"Fix command unavailable. {error_msg or 'Both unified and legacy pipelines failed.'}",
+        )
+
+    files = [ctx.primary_file]
+
+    try:
+        workflow = CodeReviewWorkflow(ctx.workspace_root)
+        result = await workflow.review_and_fix(
+            files=files,
+            focus_areas=["code_quality", "security"],
+            auto_apply=False,
+            dry_run=True,
+            interactive=False,
+        )
+
+        # Filter to specific line if given
+        fixes = result.fix_batch.fixes
+        if ctx.primary_line:
+            fixes = [f for f in fixes if f.line_start == ctx.primary_line]
+
+        output = _format_fixes_list(fixes)
+        return CommandResult(success=True, output=output, data={
+            "fix_count": len(fixes),
+            "fixes": [
+                {
+                    "id": f.id,
+                    "file": f.file_path,
+                    "line": f.line_start,
+                    "rule": f.rule_id,
+                    "reason": f.reason[:80],
+                    "severity": f.severity.value,
+                }
+                for f in fixes
+            ],
+        })
+    except Exception as e:
+        return CommandResult(
+            success=False,
+            output=f"Fix command failed. {error_msg or str(e)}",
+            errors=[str(e)],
+        )
+
+
+def _format_unified_fixes_list(fixes: list) -> str:
+    """Format unified findings as fixes."""
+    if not fixes:
+        return "No fixes found for the specified file/line."
+
+    output = f"## Found {len(fixes)} Fixes\n\n"
+    for fix in fixes:
+        sev_icon = {
+            "error": "[X]",
+            "warning": "[!]",
+            "info": "[i]",
+        }.get(fix.severity.value, "?")
+        output += f"{sev_icon} `{fix.file}:{fix.line}` "
+        output += f"**[{fix.rule_id}]** {fix.message[:60]}\n"
+
+        if fix.context:
+            output += f"```\n{fix.context[:100]}\n```\n"
+
+        if fix.fix:
+            output += f"**Fix:** {fix.fix[:80]}\n"
+        output += "\n"
+    return output
 
 
 async def cmd_explain(ctx: CommandContext) -> CommandResult:
@@ -490,6 +683,50 @@ def _format_review_summary(result) -> str:
 - Pending: {result.fix_batch.pending}
 - Success rate: {result.fix_batch.success_rate:.0%}
 """
+    return output
+
+
+def _format_unified_review_summary(result) -> str:
+    """Format unified review result for slash command output."""
+    errors = result.stats.errors_count
+    warnings = result.stats.warnings_count
+    info = result.stats.info_count
+    total = len(result.findings)
+    duration_ms = result.stats.execution_time_ms
+
+    output = f"""## Unified Code Review Summary
+
+| Metric | Value |
+|--------|-------|
+| Files reviewed | {result.stats.files_scanned} |
+| Total findings | {total} |
+| Duration | {duration_ms:.0f}ms |
+| Detectors | {', '.join(result.stats.detectors_used)} |
+
+### By Severity
+
+- **[X] Errors:** {errors}
+- **[!] Warnings:** {warnings}
+- **[i] Info:** {info}
+
+### Top Findings
+
+"""
+
+    # Show top 5 findings
+    top_findings = sorted(
+        result.findings,
+        key=lambda f: (-f.severity.to_numeric(), -f.confidence)
+    )[:5]
+
+    for i, f in enumerate(top_findings, 1):
+        output += f"{i}. `[{f.rule_id}]` {f.file}:{f.line} - {f.message[:60]}\n"
+
+    if result.suggestions:
+        output += f"\n### Fix Suggestions\n\n"
+        for sug in result.suggestions[:3]:
+            output += f"- {sug.get('title', 'Fix')}: {sug.get('description', '')[:50]}...\n"
+
     return output
 
 
