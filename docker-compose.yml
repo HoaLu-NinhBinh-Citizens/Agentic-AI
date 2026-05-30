@@ -1,0 +1,39 @@
+version: '3.8'
+
+services:
+  ai-support:
+    build: .
+    image: aisupport/ai-support:latest
+    container_name: ai-support
+    volumes:
+      - ./workspace:/workspace
+      - ./data:/data
+      - ollama-data:/root/.ollama
+    environment:
+      - AI_SUPPORT_DATA_DIR=/data
+      - AI_SUPPORT_LLM_MODEL=llama3:70b
+    ports:
+      - "8080:8080"
+    depends_on:
+      - ollama
+    restart: unless-stopped
+
+  ollama:
+    image: ollama/ollama:latest
+    container_name: ollama
+    volumes:
+      - ollama-data:/root/.ollama
+    ports:
+      - "11434:11434"
+    restart: unless-stopped
+    # GPU support (uncomment for NVIDIA GPU)
+    # deploy:
+    #   resources:
+    #     reservations:
+    #       devices:
+    #         - driver: nvidia
+    #           count: all
+    #           capabilities: [gpu]
+
+volumes:
+  ollama-data:

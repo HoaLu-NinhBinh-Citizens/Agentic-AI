@@ -29,6 +29,9 @@ from .prompts import (
     build_ml_review_prompt,
     FixPromptConfig,
 )
+from .prompt_engine import PromptEngine, PromptTemplate, PromptContext
+from .context_builder import ContextBuilder, LLMContext
+from .response_parser import ResponseParser, ParsedResponse, ValidationError
 
 __all__ = [
     # From client
@@ -57,4 +60,15 @@ __all__ = [
     "build_security_review_prompt",
     "build_ml_review_prompt",
     "FixPromptConfig",
+    # From prompt_engine
+    "PromptEngine",
+    "PromptTemplate",
+    "PromptContext",
+    # From context_builder
+    "ContextBuilder",
+    "LLMContext",
+    # From response_parser
+    "ResponseParser",
+    "ParsedResponse",
+    "ValidationError",
 ]

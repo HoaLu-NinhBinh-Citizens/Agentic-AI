@@ -60,6 +60,11 @@ from src.application.workflows.unified.suggestion_engine import SuggestionEngine
 from src.infrastructure.indexing.tree_sitter import SafeTreeSitterIndexer
 from src.infrastructure.indexing.reference_graph import ReferenceGraph
 from src.infrastructure.indexing.dependency_graph import DependencyGraph
+from src.infrastructure.performance import (
+    ParallelProcessor,
+    IncrementalProcessor,
+    CacheManager,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -79,6 +84,8 @@ class ReviewEngineConfig:
         include_stats: Include statistics in output
         enable_parallel: Enable parallel file processing
         max_workers: Max parallel workers for file processing
+        enable_incremental: Skip unchanged files (requires cache)
+        enable_caching: Cache results for faster subsequent runs
     """
     focus_areas: list[str] = field(default_factory=lambda: [
         "security", "quality", "ml", "embedded"
@@ -90,6 +97,8 @@ class ReviewEngineConfig:
     include_stats: bool = True
     enable_parallel: bool = True
     max_workers: int = 4
+    enable_incremental: bool = True
+    enable_caching: bool = True
 
 
 # ─── Review Result ───────────────────────────────────────────────────────────────
@@ -150,6 +159,21 @@ class UnifiedReviewEngine:
         """
         self.config = config or ReviewEngineConfig()
         self._init_components()
+        self._init_performance_components()
+
+    def _init_performance_components(self) -> None:
+        """Initialize performance optimization components."""
+        self._parallel_processor = ParallelProcessor(
+            max_workers=self.config.max_workers,
+            chunk_size=100
+        )
+        self._incremental_processor = IncrementalProcessor(
+            cache_dir=Path(".ai_support/index_cache")
+        )
+        self._cache = CacheManager(
+            cache_dir=Path(".ai_support/results_cache"),
+            max_memory_mb=500
+        )
 
     def _init_components(self) -> None:
         """Initialize all required components."""
@@ -224,6 +248,7 @@ class UnifiedReviewEngine:
         paths: list[Path | str],
         focus_areas: Optional[list[str]] = None,
         output_format: Optional[str] = None,
+        incremental: bool = True,
     ) -> ReviewResult:
         """Run code review on the specified paths.
 
@@ -231,6 +256,7 @@ class UnifiedReviewEngine:
             paths: List of file/directory paths to review
             focus_areas: Override focus areas for this run
             output_format: Override output format
+            incremental: Use incremental processing (skip unchanged files)
 
         Returns:
             ReviewResult with findings, stats, and formatted output
@@ -257,8 +283,24 @@ class UnifiedReviewEngine:
                 output="No files found to review.",
             )
 
-        # Build contexts for all files
-        contexts = await self._build_contexts(file_paths)
+        # Incremental processing - skip unchanged files
+        if incremental and self.config.enable_incremental:
+            changed_files, _ = self._incremental_processor.get_changed_files(file_paths)
+            logger.info("Incremental: %d changed, %d unchanged",
+                        len(changed_files), len(file_paths) - len(changed_files))
+        else:
+            changed_files = file_paths
+
+        if not changed_files:
+            logger.info("No changed files to process")
+            return ReviewResult(
+                findings=[],
+                stats=PipelineStats.from_findings([], (time.time() - start_time) * 1000),
+                output="No changes detected since last run.",
+            )
+
+        # Build contexts for changed files only
+        contexts = await self._build_contexts(changed_files)
 
         # Run all detectors
         all_findings = await self._run_detectors(contexts)
@@ -332,18 +374,27 @@ class UnifiedReviewEngine:
         contexts: dict[str, CodeContext] = {}
 
         # Build reference graph first (needed for symbol info)
-        await self.ref_graph.index_directory(str(file_paths[0].parent) if file_paths else ".")
+        if file_paths:
+            await self.ref_graph.index_directory(str(file_paths[0].parent))
 
-        if self.config.enable_parallel:
-            # Parallel processing
-            tasks = [self.context_builder.build(p) for p in file_paths]
+        if self.config.enable_parallel and len(file_paths) > 1:
+            # Parallel processing with semaphore for rate limiting
+            semaphore = asyncio.Semaphore(self.config.max_workers)
+
+            async def build_with_limit(p: Path) -> tuple[str, CodeContext]:
+                async with semaphore:
+                    try:
+                        return str(p), await self.context_builder.build(p)
+                    except Exception as e:
+                        logger.warning("Failed to build context for %s: %s", p, e)
+                        return str(p), None
+
+            tasks = [build_with_limit(p) for p in file_paths]
             results = await asyncio.gather(*tasks, return_exceptions=True)
 
-            for path, result in zip(file_paths, results):
-                if isinstance(result, Exception):
-                    logger.warning("Failed to build context for %s: %s", path, result)
-                else:
-                    contexts[str(path)] = result
+            for result in results:
+                if isinstance(result, tuple) and result[1] is not None:
+                    contexts[result[0]] = result[1]
         else:
             # Sequential processing
             for path in file_paths:
@@ -514,9 +565,17 @@ class UnifiedReviewEngine:
                 "focus_areas": self.config.focus_areas,
                 "output_format": self.config.output_format,
                 "confidence_threshold": self.config.confidence_threshold,
+                "enable_parallel": self.config.enable_parallel,
+                "max_workers": self.config.max_workers,
+                "enable_incremental": self.config.enable_incremental,
             },
             "reference_graph": self.ref_graph.get_stats(),
             "dependency_graph": self.dep_graph.get_stats(),
+            "performance": {
+                "cache_hits": self._cache.stats.hits,
+                "cache_misses": self._cache.stats.misses,
+                "cache_hit_rate": self._cache.stats.hit_rate,
+            },
         }
 
 
