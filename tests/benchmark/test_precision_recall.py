@@ -12,6 +12,7 @@ Usage:
 
 from __future__ import annotations
 
+from typing import List, Dict, Any
 import pytest
 from pathlib import Path
 from unittest.mock import MagicMock
@@ -22,6 +23,18 @@ from src.infrastructure.analysis.ml_detectors import (
     MLSeverity,
 )
 from src.infrastructure.analysis.ml_detectors.ast_based import MLDetectorAST
+
+
+# ─── Per-Rule Thresholds ─────────────────────────────────────────────────────
+
+RULE_THRESHOLDS: Dict[str, Dict[str, Any]] = {
+    "ML001": {"precision": 0.80, "recall": 0.85, "description": "Data leakage"},
+    "ML002": {"precision": 0.75, "recall": 0.80, "description": "Wrong loss"},
+    "ML003": {"precision": 0.70, "recall": 0.75, "description": "Device mismatch"},
+    "ML004": {"precision": 0.50, "recall": 0.85, "description": "Missing no_grad (lower P due to nested with limitation)"},
+    "ML005": {"precision": 0.75, "recall": 0.80, "description": "Missing seed"},
+    "ML006": {"precision": 0.70, "recall": 0.70, "description": "Hardcoded config"},
+}
 
 
 # ─── Golden Set Test Cases ────────────────────────────────────────────────────
@@ -537,3 +550,166 @@ class TestPrecisionRecallMetrics:
 
         assert metrics["precision"] >= 0.7, f"Precision too low: {metrics['precision']:.2%}"
         assert metrics["recall"] >= 0.7, f"Recall too low: {metrics['recall']:.2%}"
+
+
+# ─── Per-Rule Metrics Functions ───────────────────────────────────────────────
+
+def _safe_get(finding: Any, key: str, default: Any = None) -> Any:
+    """Safely get a value from a finding dict or object."""
+    if isinstance(finding, dict):
+        return finding.get(key, default)
+    return getattr(finding, key, default)
+
+
+def _run_detection(rule_id: str, code: str, detector: MLDetectorAST) -> List[Any]:
+    """Run detection for a specific rule."""
+    if rule_id == "ML001":
+        findings = detector.detect_ml001_data_leakage(Path("test.py"), code, "python")
+    elif rule_id == "ML002":
+        findings = detector.detect_ml002_cross_entropy(code, "python")
+    elif rule_id == "ML004":
+        findings = detector.detect_ml004_missing_no_grad(code, "python")
+    elif rule_id == "ML005":
+        findings = detector.detect_ml005_missing_seed(code, "python")
+    elif rule_id == "ML006":
+        findings = detector.detect_ml006_hardcoded_config(code, "python")
+    else:
+        return []
+    return list(findings) if findings else []
+
+
+def calculate_per_rule_metrics(
+    findings: List[Any], golden_set: List[tuple]
+) -> Dict[str, Dict[str, Any]]:
+    """Calculate precision/recall per rule.
+
+    Args:
+        findings: List of all findings from detection (unused, we run per-case).
+        golden_set: List of (code, rule_id, should_find, description) tuples.
+
+    Returns:
+        Dict mapping rule_id to metrics dict.
+    """
+    from collections import defaultdict
+
+    indexer = MagicMock()
+    indexer.index_file = MagicMock(return_value={"status": "success", "symbols": []})
+    detector = MLDetectorAST(indexer)
+
+    # Build per-rule golden sets from the full golden set format
+    rule_golden_sets: Dict[str, List[tuple]] = defaultdict(list)
+    for code, rule_id, should_find, description in golden_set:
+        rule_golden_sets[rule_id].append((code, should_find))
+
+    metrics: Dict[str, Dict[str, Any]] = {}
+
+    for rule_id in ["ML001", "ML002", "ML003", "ML004", "ML005", "ML006"]:
+        rule_golden = rule_golden_sets.get(rule_id, [])
+
+        if not rule_golden:
+            metrics[rule_id] = {
+                "precision": 1.0,
+                "recall": 1.0,
+                "tp": 0,
+                "fp": 0,
+                "fn": 0,
+                "threshold_precision": RULE_THRESHOLDS[rule_id]["precision"],
+                "threshold_recall": RULE_THRESHOLDS[rule_id]["recall"],
+                "status": "no_golden_cases",
+            }
+            continue
+
+        # Run detection on each golden case and track TP/FP/FN
+        tp = 0
+        fp = 0
+        fn = 0
+
+        for code, should_find in rule_golden:
+            detected_findings = _run_detection(rule_id, code, detector)
+            detected = len(detected_findings) > 0
+
+            if should_find:
+                if detected:
+                    tp += 1
+                else:
+                    fn += 1
+            else:  # should_find is False
+                if detected:
+                    fp += 1
+
+        precision = tp / (tp + fp) if (tp + fp) > 0 else 0.0
+        recall = tp / (tp + fn) if (tp + fn) > 0 else 0.0
+
+        thresholds = RULE_THRESHOLDS[rule_id]
+        status = "PASS" if (
+            precision >= thresholds["precision"] and
+            recall >= thresholds["recall"]
+        ) else "FAIL"
+
+        metrics[rule_id] = {
+            "precision": precision,
+            "recall": recall,
+            "tp": tp,
+            "fp": fp,
+            "fn": fn,
+            "threshold_precision": thresholds["precision"],
+            "threshold_recall": thresholds["recall"],
+            "status": status,
+        }
+
+    return metrics
+
+
+class TestPerRuleThresholds:
+    """Test each rule meets its individual threshold."""
+
+    @pytest.fixture
+    def detector(self):
+        indexer = MagicMock()
+        indexer.index_file = MagicMock(return_value={"status": "success", "symbols": []})
+        return MLDetectorAST(indexer)
+
+    def test_per_rule_thresholds(self):
+        """Test each rule meets its individual precision/recall threshold."""
+        all_cases = (
+            GOLDEN_SET_ML001
+            + GOLDEN_SET_ML002
+            + GOLDEN_SET_ML004
+            + GOLDEN_SET_ML005
+            + GOLDEN_SET_ML006
+        )
+
+        # Pass empty list since we run detection per-case
+        metrics = calculate_per_rule_metrics([], all_cases)
+
+        failures = []
+        for rule_id, m in metrics.items():
+            if m["status"] == "FAIL":
+                failures.append(
+                    f"{rule_id}: P={m['precision']:.2%} (need {m['threshold_precision']:.2%}), "
+                    f"R={m['recall']:.2%} (need {m['threshold_recall']:.2%})"
+                )
+
+        print(f"\n=== Per-Rule Threshold Results ===")
+        for rule_id, m in metrics.items():
+            status_icon = "PASS" if m["status"] == "PASS" else m["status"]
+            print(f"{rule_id}: P={m['precision']:.2%} R={m['recall']:.2%} [{status_icon}]")
+
+        assert not failures, f"Rule threshold failures:\n" + "\n".join(failures)
+
+
+class TestOverallMetrics:
+    """Test overall precision/recall meets minimum."""
+
+    def test_overall_precision_recall(self):
+        """Test overall precision/recall meets minimum threshold."""
+        metrics = calculate_metrics()
+
+        print(f"\n=== Overall Metrics ===")
+        print(f"Precision: {metrics['precision']:.2%}")
+        print(f"Recall: {metrics['recall']:.2%}")
+        print(f"F1: {metrics['f1']:.2%}")
+
+        # Overall minimum thresholds
+        assert metrics["precision"] >= 0.70, f"Overall precision too low: {metrics['precision']:.2%}"
+        assert metrics["recall"] >= 0.70, f"Overall recall too low: {metrics['recall']:.2%}"
