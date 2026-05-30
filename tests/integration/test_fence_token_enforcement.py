@@ -149,7 +149,7 @@ class StrictHardwareProbe(FakeHardwareProbe):
     async def _validate_token(self, operation: str) -> None:
         """Validate token before any operation - raises on failure."""
         self._validated_count += 1
-        is_valid, reason = await self._lock_manager.validate_fence_token(
+        is_valid, reason = await self._lock_manager.target_lock.validate_fence_token(
             target_name=self._target_name,
             token=self._fence_token,
             operation_name=operation,
