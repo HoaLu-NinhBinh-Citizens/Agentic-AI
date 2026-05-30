@@ -10,14 +10,13 @@ FIX W-009: Added exponential backoff retry for transient failures.
 from __future__ import annotations
 
 import asyncio
-import logging
-import random
+import structlog
 import time
 from collections import deque
 from enum import Enum
 from typing import Any, Awaitable, Callable, TypeVar
 
-logger = logging.getLogger(__name__)
+logger = structlog.get_logger(__name__)
 
 T = TypeVar("T")
 
@@ -177,17 +176,24 @@ class CircuitBreaker:
         Raises:
             CircuitBreakerOpenError: If circuit is open.
         """
-        # W-009: Retry loop for transient failures
         last_exception = None
+        
         for attempt in range(self.max_retries + 1):
             try:
                 return await self._execute(func, *args, **kwargs)
+            except CircuitBreakerOpenError:
+                # Circuit is open, don't retry
+                raise
             except Exception as e:
                 last_exception = e
                 is_transient = self._is_transient_failure(e)
                 
-                if not is_transient or attempt >= self.max_retries:
-                    # Non-transient or max retries reached, record failure
+                # Only retry if transient and haven't exhausted retries
+                if is_transient and attempt < self.max_retries:
+                    continue
+                else:
+                    # Non-transient or max retries reached
+                    # Record failure only ONCE per call (after retries exhausted)
                     await self._record_failure(e)
                     raise
         
@@ -211,7 +217,7 @@ class CircuitBreaker:
                     # W-008: Only first request wins to become half-open
                     if not self._half_open_lock_held:
                         self._state = CircuitBreakerState.HALF_OPEN
-                        self._half_open_used = False
+                        self._half_open_used = False  # Reset for new probe attempt
                         self._half_open_lock_held = True
                         logger.info(
                             "circuit_half_open",
@@ -247,7 +253,7 @@ class CircuitBreaker:
             return result
 
         except Exception as e:
-            await self._record_failure(e)
+            # Don't record failure here - let call() handle it
             raise
 
     async def _record_failure(self, e: Exception) -> None:
@@ -265,7 +271,7 @@ class CircuitBreaker:
                 if self._state == CircuitBreakerState.HALF_OPEN:
                     self._state = CircuitBreakerState.OPEN
                     self._half_open_used = False
-                    self._half_open_lock_held = False
+                    self._half_open_lock_held = False  # Reset so next request can transition to HALF_OPEN
                     logger.warning(
                         "circuit_opened_probe_failed",
                         server=self.name,

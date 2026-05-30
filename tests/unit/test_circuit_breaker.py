@@ -4,7 +4,7 @@ import asyncio
 import time
 
 import pytest
-from infrastructure.resilience.circuit_breaker import (
+from src.infrastructure.resilience.circuit_breaker import (
     CircuitBreaker,
     CircuitBreakerOpenError,
     CircuitBreakerState,
