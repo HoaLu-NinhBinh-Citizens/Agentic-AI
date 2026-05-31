@@ -240,3 +240,57 @@ export interface AppState {
   messages: ChatMessage[];
   steeringContext: SteeringContext;
 }
+
+// ============================================================================
+// Ollama Types
+// ============================================================================
+
+export interface OllamaModel {
+  name: string;
+  modified_at: string;
+  size: number;
+}
+
+export interface OllamaHealthStatus {
+  available: boolean;
+  error?: string;
+  latencyMs?: number;
+}
+
+export interface PullProgress {
+  status: string;
+  digest?: string;
+  total?: number;
+  completed?: number;
+  percent?: number;
+}
+
+export interface OllamaGenerateOptions {
+  prompt: string;
+  system?: string;
+  context?: number[];
+  stream?: boolean;
+  options?: {
+    temperature?: number;
+    num_predict?: number;
+    top_p?: number;
+    top_k?: number;
+  };
+}
+
+// ============================================================================
+// AI Provider Config Types
+// ============================================================================
+
+export type AIProvider = 'ollama' | 'openai' | 'anthropic';
+
+export interface AIProviderConfig {
+  provider: AIProvider;
+  ollamaEndpoint?: string;
+  ollamaModel?: string;
+  ollamaTemperature?: number;
+  openaiApiKey?: string;
+  openaiModel?: string;
+  anthropicApiKey?: string;
+  anthropicModel?: string;
+}

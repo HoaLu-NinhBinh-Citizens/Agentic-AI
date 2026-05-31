@@ -1,15 +1,53 @@
 /// <reference types="vite/client" />
 
+// ============================================================================
+// Ollama Types
+// ============================================================================
+
+interface OllamaModel {
+  name: string;
+  modified_at: string;
+  size: number;
+}
+
+interface OllamaHealthStatus {
+  available: boolean;
+  error?: string;
+  latencyMs?: number;
+}
+
+interface PullProgress {
+  status: string;
+  digest?: string;
+  total?: number;
+  completed?: number;
+  percent?: number;
+}
+
+// ============================================================================
+// AI Types
+// ============================================================================
+
 interface AIConfig {
-  provider: 'openai' | 'anthropic';
-  apiKey: string;
+  provider: 'ollama' | 'openai' | 'anthropic';
+  apiKey?: string;
   model?: string;
   maxTokens?: number;
   temperature?: number;
+  // Ollama specific
+  ollamaEndpoint?: string;
+  ollamaModel?: string;
+  ollamaTemperature?: number;
+  // OpenAI specific
+  openaiApiKey?: string;
+  openaiModel?: string;
+  // Anthropic specific
+  anthropicApiKey?: string;
+  anthropicModel?: string;
 }
 
 interface ChatMessage {
-  role: 'user' | 'assistant';
+  role: 'user' | 'assistant' | 'system';
   content: string;
 }
 
@@ -37,18 +75,25 @@ interface SteeringContext {
 
 interface StorageAPI {
   getSettings: () => Promise<{
-    aiProvider: 'openai' | 'anthropic';
+    aiProvider: 'ollama' | 'openai' | 'anthropic';
     aiModel?: string;
     maxTokens: number;
     temperature: number;
     fontSize: number;
     autoSave: boolean;
     autoSaveDelay: number;
+    ollamaEndpoint?: string;
+    ollamaModel?: string;
+    ollamaTemperature?: number;
+    openaiModel?: string;
+    anthropicModel?: string;
   }>;
   updateSettings: (updates: Record<string, unknown>) => Promise<boolean>;
   getAPIKey: () => Promise<string | undefined>;
   setAPIKey: (key: string) => Promise<boolean>;
   hasAPIKey: () => Promise<boolean>;
+  getAIConfig: () => Promise<AIConfig | undefined>;
+  setAIConfig: (config: AIConfig) => Promise<boolean>;
   getWorkspace: () => Promise<{ path: string; name: string; lastOpened: string } | null>;
   setWorkspace: (path: string) => Promise<boolean>;
   getTasks: () => Promise<Array<{
@@ -139,5 +184,23 @@ interface Window {
     steering: SteeringAPI;
     storage: StorageAPI;
     app: AppAPI;
+    // Ollama
+    ollamaHealth: (timeout?: number) => Promise<OllamaHealthStatus>;
+    ollamaListModels: () => Promise<OllamaModel[]>;
+    ollamaGenerate: (options: {
+      prompt: string;
+      system?: string;
+      context?: number[];
+      stream?: boolean;
+      options?: {
+        temperature?: number;
+        num_predict?: number;
+        top_p?: number;
+        top_k?: number;
+      };
+    }) => Promise<{ content?: string; error?: string }>;
+    ollamaPullModel: (model: string, onProgress?: (progress: PullProgress) => void) => Promise<boolean>;
+    ollamaGetContextLimit: (model: string) => Promise<number>;
+    ollamaOnChunk: (callback: (chunk: string) => void) => void;
   };
 }

@@ -2,6 +2,27 @@ const { app, BrowserWindow, ipcMain, dialog } = require('electron');
 const path = require('path');
 const fs = require('fs');
 
+// Ollama Client
+let ollamaClient = null;
+
+function initializeOllamaClient() {
+  try {
+    const { ollamaClient: client } = require('./services/ollamaClient.cjs');
+    ollamaClient = client;
+    console.log('[Main] Ollama client initialized');
+  } catch (error) {
+    console.error('[Main] Failed to initialize Ollama client:', error);
+    // Create a fallback client
+    ollamaClient = {
+      healthCheck: async () => ({ available: false, error: 'Not initialized' }),
+      listModels: async () => [],
+      generate: async () => '',
+      pullModel: async () => false,
+      getContextLimit: () => 4096,
+    };
+  }
+}
+
 // Terminal Manager (Phase 3)
 let terminalManager = null;
 let gitIntegration = null;
@@ -98,6 +119,63 @@ ipcMain.handle('ai:generateCode', async (_, spec, existingCode) => {
 
 ipcMain.handle('ai:isInitialized', async () => {
   return aiService ? aiService.isInitialized() : false;
+});
+
+// ============================================================================
+// IPC Handlers - Ollama
+// ============================================================================
+ipcMain.handle('ollama:health', async (_, timeout = 3000) => {
+  if (!ollamaClient) {
+    return { available: false, error: 'Ollama client not initialized' };
+  }
+  try {
+    return await ollamaClient.healthCheck(timeout, 2);
+  } catch (error) {
+    return { available: false, error: error.message };
+  }
+});
+
+ipcMain.handle('ollama:listModels', async () => {
+  if (!ollamaClient) return [];
+  try {
+    return await ollamaClient.listModels();
+  } catch (error) {
+    console.error('Failed to list models:', error);
+    return [];
+  }
+});
+
+ipcMain.handle('ollama:generate', async (event, options) => {
+  if (!ollamaClient) {
+    return { error: 'Ollama client not initialized' };
+  }
+  try {
+    const result = await ollamaClient.generate(
+      options,
+      options.stream !== false ? (chunk) => {
+        event.sender.send('ollama:chunk', chunk);
+      } : undefined
+    );
+    return { content: result };
+  } catch (error) {
+    return { error: error.message };
+  }
+});
+
+ipcMain.handle('ollama:pullModel', async (event, model) => {
+  if (!ollamaClient) {
+    return false;
+  }
+  return new Promise((resolve) => {
+    ollamaClient.pullModel(model, (progress) => {
+      event.sender.send('ollama:pullProgress', progress);
+    }).then(resolve);
+  });
+});
+
+ipcMain.handle('ollama:getContextLimit', async (_, model) => {
+  if (!ollamaClient) return 4096;
+  return ollamaClient.getContextLimit(model);
 });
 
 // ============================================================================
@@ -242,6 +320,9 @@ ipcMain.handle('app:getVersion', () => {
 // ============================================================================
 
 function createWindow() {
+  // Initialize Ollama client
+  initializeOllamaClient();
+  
   // Initialize Phase 3 services
   initializePhase3Services();
   

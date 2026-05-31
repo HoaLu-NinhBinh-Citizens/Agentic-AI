@@ -1,5 +1,5 @@
 import { create } from 'zustand';
-import { FileNode, Task, Spec, ChatMessage, SteeringContext } from '../../shared/types';
+import { FileNode, Task, Spec, ChatMessage, SteeringContext, OllamaModel, OllamaHealthStatus, AIProviderConfig } from '../../shared/types';
 
 interface AppStore {
   // Workspace
@@ -39,6 +39,16 @@ interface AppStore {
   expandedFolders: string[];
   addExpandedFolder: (path: string) => void;
   removeExpandedFolder: (path: string) => void;
+
+  // AI Config
+  aiConfig: AIProviderConfig | null;
+  setAiConfig: (config: AIProviderConfig | null) => void;
+
+  // Ollama state
+  ollamaHealth: OllamaHealthStatus | null;
+  setOllamaHealth: (status: OllamaHealthStatus | null) => void;
+  ollamaModels: OllamaModel[];
+  setOllamaModels: (models: OllamaModel[]) => void;
 }
 
 export const useAppStore = create<AppStore>((set) => ({
@@ -94,6 +104,16 @@ export const useAppStore = create<AppStore>((set) => ({
   removeExpandedFolder: (path) => set((state) => ({
     expandedFolders: state.expandedFolders.filter(p => p !== path)
   })),
+
+  // AI Config
+  aiConfig: null,
+  setAiConfig: (config) => set({ aiConfig: config }),
+
+  // Ollama
+  ollamaHealth: null,
+  setOllamaHealth: (status) => set({ ollamaHealth: status }),
+  ollamaModels: [],
+  setOllamaModels: (models) => set({ ollamaModels: models }),
 }));
 
 function toggleFolderInTree(files: FileNode[], path: string): FileNode[] {

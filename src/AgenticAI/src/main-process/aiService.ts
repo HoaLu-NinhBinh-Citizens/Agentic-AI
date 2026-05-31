@@ -1,18 +1,25 @@
-import { OpenAI } from 'openai';
-import { Anthropic } from '@anthropic-ai/sdk';
+import OpenAI from 'openai';
+import Anthropic from '@anthropic-ai/sdk';
+import { ollamaClient } from './ollamaClient';
 
-export type AIProvider = 'openai' | 'anthropic';
+export type AIProvider = 'ollama' | 'openai' | 'anthropic';
 
 export interface AIConfig {
   provider: AIProvider;
-  apiKey: string;
-  model?: string;
-  maxTokens?: number;
-  temperature?: number;
+  // Ollama
+  ollamaEndpoint?: string;
+  ollamaModel?: string;
+  ollamaTemperature?: number;
+  // OpenAI
+  openaiApiKey?: string;
+  openaiModel?: string;
+  // Anthropic
+  anthropicApiKey?: string;
+  anthropicModel?: string;
 }
 
 export interface ChatMessage {
-  role: 'system' | 'user' | 'assistant';
+  role: 'user' | 'assistant' | 'system';
   content: string;
 }
 
@@ -26,120 +33,184 @@ export interface AIResponse {
   model: string;
 }
 
+export interface StreamChunk {
+  content: string;
+  done: boolean;
+}
+
 export class AIService {
   private openai: OpenAI | null = null;
   private anthropic: Anthropic | null = null;
   private config: AIConfig | null = null;
+  private abortController: AbortController | null = null;
 
   initialize(config: AIConfig): void {
     this.config = config;
 
-    if (config.provider === 'openai') {
-      this.openai = new OpenAI({ apiKey: config.apiKey });
-    } else if (config.provider === 'anthropic') {
-      this.anthropic = new Anthropic({ apiKey: config.apiKey });
+    if (config.provider === 'openai' && config.openaiApiKey) {
+      this.openai = new OpenAI({ apiKey: config.openaiApiKey });
+    } else if (config.provider === 'anthropic' && config.anthropicApiKey) {
+      this.anthropic = new Anthropic({ apiKey: config.anthropicApiKey });
+    } else if (config.provider === 'ollama') {
+      if (config.ollamaEndpoint) {
+        ollamaClient.setEndpoint(config.ollamaEndpoint);
+      }
     }
-  }
-
-  isInitialized(): boolean {
-    return this.config !== null && this.config.apiKey.length > 0;
-  }
-
-  getConfig(): AIConfig | null {
-    return this.config ? { ...this.config, apiKey: '***' } : null;
   }
 
   async chat(
     messages: ChatMessage[],
-    systemPrompt?: string,
-    onChunk?: (chunk: string) => void
+    onChunk?: (chunk: StreamChunk) => void
   ): Promise<AIResponse> {
     if (!this.config) {
-      throw new Error('AI service not initialized. Call initialize() first.');
+      throw new Error('AI service not initialized');
     }
 
-    if (!this.config.apiKey) {
-      throw new Error('API key not configured');
-    }
+    this.abortController?.abort();
+    this.abortController = new AbortController();
 
-    const allMessages: ChatMessage[] = [];
-
-    if (systemPrompt) {
-      allMessages.push({ role: 'system', content: systemPrompt });
-    }
-    allMessages.push(...messages);
-
-    if (this.config.provider === 'openai' && this.openai) {
-      return this.chatOpenAI(allMessages, onChunk);
+    if (this.config.provider === 'ollama') {
+      return this.chatWithOllama(messages, onChunk);
+    } else if (this.config.provider === 'openai' && this.openai) {
+      return this.chatWithOpenAI(messages, onChunk);
     } else if (this.config.provider === 'anthropic' && this.anthropic) {
-      return this.chatAnthropic(allMessages, onChunk);
+      return this.chatWithAnthropic(messages, onChunk);
     }
 
-    throw new Error(`Unknown provider: ${this.config.provider}`);
+    throw new Error('No AI provider initialized');
   }
 
-  private async chatOpenAI(
+  private async chatWithOllama(
     messages: ChatMessage[],
-    onChunk?: (chunk: string) => void
+    onChunk?: (chunk: StreamChunk) => void
   ): Promise<AIResponse> {
-    const stream = await this.openai!.chat.completions.create({
-      model: this.config!.model || 'gpt-4',
+    const model = this.config?.ollamaModel || 'codellama';
+    const temperature = this.config?.ollamaTemperature || 0.7;
+    const contextLimit = ollamaClient.getContextLimit(model);
+
+    let prompt = messages.map(m => {
+      if (m.role === 'system') return `System: ${m.content}`;
+      if (m.role === 'user') return `User: ${m.content}`;
+      return `Assistant: ${m.content}`;
+    }).join('\n\n');
+
+    prompt += '\n\nAssistant:';
+
+    if (prompt.length > contextLimit * 4) {
+      const excess = prompt.length - contextLimit * 4;
+      const truncateAt = prompt.indexOf('\n\n', excess);
+      if (truncateAt > 0) {
+        prompt = prompt.slice(truncateAt + 2);
+      }
+    }
+
+    let fullContent = '';
+
+    const content = await ollamaClient.generate(
+      {
+        prompt,
+        options: { temperature, num_predict: 2048 },
+        stream: true,
+      },
+      onChunk ? (chunk) => {
+        fullContent += chunk;
+        onChunk({ content: chunk, done: false });
+      } : undefined,
+      this.abortController.signal
+    );
+
+    if (onChunk) {
+      onChunk({ content: '', done: true });
+    }
+
+    return { content: fullContent || content, model };
+  }
+
+  private async chatWithOpenAI(
+    messages: ChatMessage[],
+    onChunk?: (chunk: StreamChunk) => void
+  ): Promise<AIResponse> {
+    if (!this.openai) throw new Error('OpenAI not initialized');
+
+    const model = this.config?.openaiModel || 'gpt-4';
+
+    const stream = await this.openai.chat.completions.create({
+      model,
       messages: messages as unknown as OpenAI.Chat.ChatCompletionMessageParam[],
-      temperature: this.config!.temperature ?? 0.7,
-      max_tokens: this.config!.maxTokens ?? 4096,
+      temperature: this.config?.ollamaTemperature ?? 0.7,
+      max_tokens: 4096,
       stream: true,
     });
 
     let fullContent = '';
-    let usage = { promptTokens: 0, completionTokens: 0, totalTokens: 0 };
 
     for await (const chunk of stream) {
       const delta = chunk.choices[0]?.delta?.content || '';
       if (delta) {
         fullContent += delta;
-        onChunk?.(delta);
-      }
-      if (chunk.usage) {
-        usage = {
-          promptTokens: chunk.usage.prompt_tokens || 0,
-          completionTokens: chunk.usage.completion_tokens || 0,
-          totalTokens: chunk.usage.total_tokens || 0,
-        };
+        onChunk?.({ content: delta, done: false });
       }
     }
 
-    return { content: fullContent, usage, model: this.config!.model || 'gpt-4' };
+    onChunk?.({ content: '', done: true });
+
+    return { content: fullContent, model };
   }
 
-  private async chatAnthropic(
+  private async chatWithAnthropic(
     messages: ChatMessage[],
-    onChunk?: (chunk: string) => void
+    onChunk?: (chunk: StreamChunk) => void
   ): Promise<AIResponse> {
+    if (!this.anthropic) throw new Error('Anthropic not initialized');
+
     const systemMessage = messages.find(m => m.role === 'system');
     const userMessages = messages.filter(m => m.role !== 'system');
 
-    const stream = await this.anthropic!.messages.stream({
-      model: this.config!.model || 'claude-3-5-sonnet-20241022',
-      max_tokens: this.config!.maxTokens ?? 4096,
-      temperature: this.config!.temperature ?? 0.7,
+    const stream = await this.anthropic.messages.stream({
+      model: this.config?.anthropicModel || 'claude-3-5-sonnet-20241022',
+      max_tokens: 4096,
+      temperature: this.config?.ollamaTemperature ?? 0.7,
       system: systemMessage?.content,
       messages: userMessages as unknown as Anthropic.MessageCreateParamsNonStreaming['messages'],
     });
 
     let fullContent = '';
 
-    for await (const event of stream.fullStream) {
-      if (event.type === 'content_block_delta' && event.type === 'content_block_delta') {
-        if ('text' in event.delta) {
-          fullContent += event.delta.text;
-          onChunk?.(event.delta.text);
-        }
+    for await (const event of stream.fullStreamEventEnumerator()) {
+      if (event.type === 'content_block_delta' && 'text' in event.delta) {
+        fullContent += event.delta.text;
+        onChunk?.({ content: event.delta.text, done: false });
       }
     }
 
-    const usage = { promptTokens: 0, completionTokens: 0, totalTokens: 0 };
+    onChunk?.({ content: '', done: true });
 
-    return { content: fullContent, usage, model: this.config!.model || 'claude-3-5-sonnet' };
+    return { content: fullContent, model: this.config?.anthropicModel || 'claude-3-5-sonnet' };
+  }
+
+  cancel(): void {
+    this.abortController?.abort();
+  }
+
+  isInitialized(): boolean {
+    if (!this.config) return false;
+    
+    if (this.config.provider === 'openai') {
+      return !!this.config.openaiApiKey;
+    } else if (this.config.provider === 'anthropic') {
+      return !!this.config.anthropicApiKey;
+    } else if (this.config.provider === 'ollama') {
+      return true;
+    }
+    return false;
+  }
+
+  getConfig(): AIConfig | null {
+    return this.config;
+  }
+
+  getProvider(): AIProvider | null {
+    return this.config?.provider || null;
   }
 
   async codeReview(code: string, language: string, context?: string): Promise<string> {
@@ -162,7 +233,7 @@ Context: ${context || 'No additional context'}`;
 
     const response = await this.chat([
       { role: 'user', content: `Review this code:\n\n\`\`\`${language}\n${code}\n\`\`\`` }
-    ], systemPrompt);
+    ]);
 
     return response.content;
   }
@@ -174,15 +245,18 @@ Context: ${context || 'No additional context'}`;
       ? `Modify this existing code:\n\n\`\`\`\n${existingCode}\n\`\`\`\n\nTo meet this specification:\n\n${spec}`
       : `Generate code for this specification:\n\n${spec}`;
 
-    const response = await this.chat([{ role: 'user', content: userMessage }], systemPrompt);
+    const response = await this.chat([{ role: 'user', content: userMessage }]);
     return response.content;
   }
 
   async explainCode(code: string, language: string): Promise<string> {
     const response = await this.chat([
       { role: 'user', content: `Explain this ${language} code:\n\n\`\`\`${language}\n${code}\n\`\`\`` }
-    ], 'You are a helpful code assistant that explains code clearly.');
-    return response.content;
+    ], { content: 'You are a helpful code assistant that explains code clearly.', role: 'system' } as unknown as StreamChunk & { role?: string } as ChatMessage);
+    
+    const systemMsg = { role: 'system' as const, content: 'You are a helpful code assistant that explains code clearly.' };
+    const response2 = await this.chat([systemMsg, { role: 'user', content: `Explain this ${language} code:\n\n\`\`\`${language}\n${code}\n\`\`\`` }]);
+    return response2.content;
   }
 
   async createTasksFromSpec(spec: string): Promise<string> {
@@ -198,15 +272,14 @@ Return a JSON array of tasks:
 
     const response = await this.chat([
       { role: 'user', content: `Create tasks for this specification:\n\n${spec}` }
-    ], systemPrompt);
-
+    ]);
     return response.content;
   }
 
   async suggestRefactor(code: string, language: string, goal: string): Promise<string> {
     const response = await this.chat([
       { role: 'user', content: `Suggest refactoring for this ${language} code to achieve: ${goal}\n\n\`\`\`${language}\n${code}\n\`\`\`` }
-    ], 'You are an expert software architect. Provide specific, actionable refactoring suggestions.');
+    ]);
     return response.content;
   }
 
@@ -220,7 +293,7 @@ Return ONLY the completion, no explanation.`;
 
     const response = await this.chat([
       { role: 'user', content: `Complete this ${language} code:\n\n\`\`\`${language}\n${code}\n\`\`\`` }
-    ], systemPrompt);
+    ]);
     return response.content;
   }
 }

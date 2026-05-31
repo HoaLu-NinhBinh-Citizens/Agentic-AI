@@ -109,6 +109,21 @@ contextBridge.exposeInMainWorld('electronAPI', {
     executeCommand: (id, args) => ipcRenderer.invoke('extension:executeCommand', { id, args }),
   },
   
+  // Ollama
+  ollamaHealth: (timeout) => ipcRenderer.invoke('ollama:health', timeout),
+  ollamaListModels: () => ipcRenderer.invoke('ollama:listModels'),
+  ollamaGenerate: (options) => ipcRenderer.invoke('ollama:generate', options),
+  ollamaPullModel: (model, onProgress) => {
+    if (onProgress) {
+      ipcRenderer.on('ollama:pullProgress', (_, progress) => onProgress(progress));
+    }
+    return ipcRenderer.invoke('ollama:pullModel', model);
+  },
+  ollamaGetContextLimit: (model) => ipcRenderer.invoke('ollama:getContextLimit', model),
+  ollamaOnChunk: (callback) => {
+    ipcRenderer.on('ollama:chunk', (_, chunk) => callback(chunk));
+  },
+  
   // App
   app: {
     minimize: () => ipcRenderer.invoke('app:minimize'),
