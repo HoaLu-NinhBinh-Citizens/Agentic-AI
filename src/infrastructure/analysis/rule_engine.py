@@ -718,441 +718,283 @@ class RuleEngine:
 def _init_builtin_rules() -> list[Rule]:
     """Initialize all 28 built-in rules.
 
-    Returns:
-        Complete list of built-in rules
+    Rules are defined inline to avoid circular imports.
     """
     rules: list[Rule] = []
 
-    # ═══════════════════════════════════════════════════════════════════════════
     # SECURITY RULES (6 rules)
-    # ═══════════════════════════════════════════════════════════════════════════
+    rules.extend([
+        Rule(
+            id="SEC001", name="hardcoded-secret",
+            description="Hardcoded API key, token, password, or secret detected",
+            severity=RuleSeverity.ERROR,
+            languages=["python", "javascript", "typescript", "go", "java"],
+            patterns=[
+                r'["\']api[_-]?key["\']\s*[:=]\s*["\'][a-zA-Z0-9_\-]{16,}["\']',
+                r'["\']secret["\']\s*[:=]\s*["\'][a-zA-Z0-9_\-]{8,}["\']',
+                r'["\']password["\']\s*[:=]\s*["\'][^"\']{4,}["\']',
+                r'Bearer\s+[a-zA-Z0-9_\-\.]+',
+                r'ghp_[a-zA-Z0-9]{36}',
+                r'AKIA[0-9A-Z]{16}',
+                r'sk-[a-zA-Z0-9]{32,}',
+            ],
+            cwe_id="CWE-798", tags=["security", "secrets", "critical"],
+            fix_template="Use environment variable: os.getenv('SECRET_NAME')",
+        ),
+        Rule(
+            id="SEC002", name="sql-injection",
+            description="Potential SQL injection via string concatenation",
+            severity=RuleSeverity.ERROR,
+            languages=["python", "javascript", "java"],
+            patterns=[
+                r'execute\s*\(\s*["\'].*\%s.*["\'].*%',
+                r'execute\s*\(\s*f["\']',
+                r'cursor\.execute\s*\([^)]*\+[^)]*\)',
+            ],
+            cwe_id="CWE-89", tags=["security", "injection", "critical"],
+            fix_template="Use parameterized queries",
+        ),
+        Rule(
+            id="SEC003", name="command-injection",
+            description="Shell command injection risk via subprocess with shell=True",
+            severity=RuleSeverity.ERROR,
+            languages=["python", "javascript", "java"],
+            patterns=[
+                r'subprocess\.(run|call|popen)\s*\([^)]*shell\s*=\s*True',
+                r'\beval\s*\(',
+            ],
+            cwe_id="CWE-78", tags=["security", "injection", "critical"],
+            fix_template="Use subprocess.run with shell=False",
+        ),
+        Rule(
+            id="SEC004", name="path-traversal",
+            description="Potential path traversal vulnerability",
+            severity=RuleSeverity.ERROR,
+            languages=["python", "javascript", "java", "go"],
+            patterns=[
+                r'open\s*\([^)]*\+\s*path',
+                r'os\.path\.join\s*\([^)]*\+',
+            ],
+            cwe_id="CWE-22", tags=["security", "path-traversal"],
+            fix_template="Validate and sanitize path input",
+        ),
+        Rule(
+            id="SEC005", name="eval-usage",
+            description="Use of eval() or exec() is a security risk",
+            severity=RuleSeverity.WARNING,
+            languages=["python", "javascript"],
+            patterns=[r'\beval\s*\('],
+            cwe_id="CWE-95", tags=["security", "dynamic-code"],
+            fix_template="Avoid eval/exec",
+        ),
+        Rule(
+            id="SEC006", name="insecure-random",
+            description="Using random.random() for security purposes",
+            severity=RuleSeverity.WARNING,
+            languages=["python", "javascript"],
+            patterns=[r'random\.random\s*\(\s*\)', r'Math\.random\s*\(\s*\)'],
+            cwe_id="CWE-338", tags=["security", "cryptography"],
+            fix_template="Use secrets module",
+        ),
+    ])
 
-    rules.append(Rule(
-        id="SEC001",
-        name="hardcoded-secret",
-        description="Hardcoded API key, token, password, or secret detected",
-        severity=RuleSeverity.ERROR,
-        languages=["python", "javascript", "typescript", "go", "java"],
-        patterns=[
-            r'["\']api[_-]?key["\']\s*[:=]\s*["\'][a-zA-Z0-9_\-]{16,}["\']',
-            r'["\']secret["\']\s*[:=]\s*["\'][a-zA-Z0-9_\-]{8,}["\']',
-            r'["\']password["\']\s*[:=]\s*["\'][^"\']{4,}["\']',
-            r'["\']token["\']\s*[:=]\s*["\'][a-zA-Z0-9_\-\.]{16,}["\']',
-            r'Bearer\s+[a-zA-Z0-9_\-\.]+',
-            r'ghp_[a-zA-Z0-9]{36}',
-            r'AKIA[0-9A-Z]{16}',
-            r'sk-[a-zA-Z0-9]{32,}',
-        ],
-        cwe_id="CWE-798",
-        tags=["security", "secrets", "critical"],
-        fix_template="Use environment variable: os.getenv('SECRET_NAME')",
-    ))
-
-    rules.append(Rule(
-        id="SEC002",
-        name="sql-injection",
-        description="Potential SQL injection via string concatenation",
-        severity=RuleSeverity.ERROR,
-        languages=["python", "javascript", "java"],
-        patterns=[
-            r'execute\s*\(\s*["\'].*\%s.*["\'].*%',
-            r'execute\s*\(\s*f["\']',
-            r'execute\s*\(\s*["\'].*\+',
-            r'cursor\.execute\s*\([^)]*\+[^)]*\)',
-            r'pool\.execute\s*\([^)]*\+[^)]*\)',
-            r'query\s*\(\s*["\'].*\+',
-            r'\$\{.*\}.*from|insert|update|delete|select',
-        ],
-        cwe_id="CWE-89",
-        tags=["security", "injection", "critical"],
-        fix_template="Use parameterized queries: cursor.execute('SELECT * FROM users WHERE id = %s', (id,))",
-    ))
-
-    rules.append(Rule(
-        id="SEC003",
-        name="command-injection",
-        description="Shell command injection risk via subprocess with shell=True",
-        severity=RuleSeverity.ERROR,
-        languages=["python", "javascript", "java"],
-        patterns=[
-            r'subprocess\.(run|call|popen|Popen|run_shell)\s*\([^)]*shell\s*=\s*True',
-            r'exec\s*\(',
-            r'eval\s*\(',
-            r'child_process\.exec\s*\(',
-            r'Runtime\.getRuntime\(\)\.exec\s*\(',
-        ],
-        cwe_id="CWE-78",
-        tags=["security", "injection", "critical"],
-        fix_template="Use subprocess.run with shell=False and list of arguments",
-    ))
-
-    rules.append(Rule(
-        id="SEC004",
-        name="path-traversal",
-        description="Potential path traversal vulnerability",
-        severity=RuleSeverity.ERROR,
-        languages=["python", "javascript", "java", "go"],
-        patterns=[
-            r'open\s*\([^)]*\+\s*path',
-            r'open\s*\([^)]*%s[^)]*%',
-            r'os\.path\.join\s*\([^)]*\+',
-            r'readFile\s*\([^)]*\+',
-            r'readFile\s*\([^)]*\$',
-            r'FileInputStream\s*\([^)]*\+',
-            r'ioutil\.ReadFile\s*\([^)]*\.',
-        ],
-        cwe_id="CWE-22",
-        tags=["security", "path-traversal"],
-        fix_template="Validate and sanitize path input, use os.path.realpath()",
-    ))
-
-    rules.append(Rule(
-        id="SEC005",
-        name="eval-usage",
-        description="Use of eval() or exec() is a security risk",
-        severity=RuleSeverity.WARNING,
-        languages=["python", "javascript"],
-        patterns=[
-            r'\beval\s*\(',
-            r'\bexec\s*\(',
-            r'new\s+Function\s*\(',
-            r'vm\.runIn',
-        ],
-        cwe_id="CWE-95",
-        tags=["security", "dynamic-code"],
-        fix_template="Avoid eval/exec; use safer alternatives like ast.literal_eval",
-    ))
-
-    rules.append(Rule(
-        id="SEC006",
-        name="insecure-random",
-        description="Using random.random() or Math.random() for security purposes",
-        severity=RuleSeverity.WARNING,
-        languages=["python", "javascript"],
-        patterns=[
-            r'random\.random\s*\(\s*\)',
-            r'Math\.random\s*\(\s*\)',
-            r'random\.choice\s*\(\s*\)',
-        ],
-        cwe_id="CWE-338",
-        tags=["security", "cryptography"],
-        fix_template="Use secrets module: secrets.randbelow() or crypto.randomBytes()",
-    ))
-
-    # ═══════════════════════════════════════════════════════════════════════════
     # TYPE SAFETY RULES (4 rules)
-    # ═══════════════════════════════════════════════════════════════════════════
+    rules.extend([
+        Rule(
+            id="TYPE001", name="untyped-function",
+            description="Python function without type hints",
+            severity=RuleSeverity.INFO, languages=["python"],
+            patterns=[r'^def\s+[a-zA-Z_][a-zA-Z0-9_]*\s*\([^)]*\)\s*(?:->)?\s*:'],
+            tags=["type-safety", "python"],
+            fix_template="Add type hints: def func(param: int) -> str:",
+        ),
+        Rule(
+            id="TYPE002", name="any-usage",
+            description="Function using 'Any' type annotation",
+            severity=RuleSeverity.HINT, languages=["python"],
+            patterns=[r':\s*Any\s*[,\)]', r'->\s*Any\b'],
+            tags=["type-safety", "python"],
+            fix_template="Replace Any with specific type annotations",
+        ),
+        Rule(
+            id="TYPE003", name="missing-return-type",
+            description="Public function missing return type annotation",
+            severity=RuleSeverity.INFO, languages=["python"],
+            patterns=[r'def\s+[A-Z][a-zA-Z0-9_]*\s*\([^)]*\)\s*(?:->)?\s*:'],
+            tags=["type-safety", "python"],
+            fix_template="Add return type",
+        ),
+        Rule(
+            id="TYPE004", name="type-mismatch",
+            description="Potential type mismatch in comparison",
+            severity=RuleSeverity.WARNING, languages=["python", "javascript", "typescript"],
+            patterns=[r'if\s+type\s*\([^)]*\)\s*==\s*type\s*\('],
+            tags=["type-safety", "type-checking"],
+            fix_template="Use isinstance() instead of type()",
+        ),
+    ])
 
-    rules.append(Rule(
-        id="TYPE001",
-        name="untyped-function",
-        description="Python function without type hints",
-        severity=RuleSeverity.INFO,
-        languages=["python"],
-        patterns=[
-            r'^def\s+[a-zA-Z_][a-zA-Z0-9_]*\s*\([^)]*\)\s*(?:->)?\s*:',
-        ],
-        tags=["type-safety", "python"],
-        fix_template="Add type hints: def func(param: int) -> str:",
-    ))
-
-    rules.append(Rule(
-        id="TYPE002",
-        name="any-usage",
-        description="Function using 'Any' type annotation",
-        severity=RuleSeverity.HINT,
-        languages=["python"],
-        patterns=[
-            r':\s*Any\s*[,\)]',
-            r'->\s*Any\b',
-        ],
-        tags=["type-safety", "python"],
-        fix_template="Replace Any with specific type annotations",
-    ))
-
-    rules.append(Rule(
-        id="TYPE003",
-        name="missing-return-type",
-        description="Public function missing return type annotation",
-        severity=RuleSeverity.INFO,
-        languages=["python"],
-        patterns=[
-            r'def\s+[A-Z][a-zA-Z0-9_]*\s*\([^)]*\)\s*(?:->)?\s*:\s*(?!.*\breturn\b.*->)',
-        ],
-        tags=["type-safety", "python"],
-        fix_template="Add return type: def public_func() -> None:",
-    ))
-
-    rules.append(Rule(
-        id="TYPE004",
-        name="type-mismatch",
-        description="Potential type mismatch in comparison or assignment",
-        severity=RuleSeverity.WARNING,
-        languages=["python", "javascript", "typescript"],
-        patterns=[
-            r'if\s+isinstance\s*\([^)]*,\s*str\s*\)\s+and\s+isinstance',
-            r'if\s+type\s*\([^)]*\)\s*==\s*type\s*\(',
-        ],
-        tags=["type-safety", "type-checking"],
-        fix_template="Use isinstance() for type checking instead of type()",
-    ))
-
-    # ═══════════════════════════════════════════════════════════════════════════
     # IMPORT ANALYSIS RULES (4 rules)
-    # ═══════════════════════════════════════════════════════════════════════════
+    rules.extend([
+        Rule(
+            id="IMP001", name="unused-import",
+            description="Imported module not used in the file",
+            severity=RuleSeverity.INFO, languages=["python"],
+            patterns=[r'^import\s+([a-zA-Z_][a-zA-Z0-9_]*)'],
+            tags=["imports", "python", "unused"],
+            fix_template="Remove unused import",
+        ),
+        Rule(
+            id="IMP002", name="circular-import",
+            description="Potential circular import detected",
+            severity=RuleSeverity.WARNING, languages=["python"],
+            patterns=[r'^from\s+\.\s+import', r'^import\s+\.'],
+            tags=["imports", "python", "circular"],
+            fix_template="Restructure module dependencies",
+        ),
+        Rule(
+            id="IMP003", name="wildcard-import",
+            description="Wildcard import (from X import *) reduces clarity",
+            severity=RuleSeverity.WARNING, languages=["python"],
+            patterns=[r'from\s+[a-zA-Z_][a-zA-Z0-9_]*\s+import\s+\*'],
+            tags=["imports", "python", "best-practice"],
+            fix_template="Use explicit imports",
+        ),
+        Rule(
+            id="IMP004", name="relative-import",
+            description="Relative import used",
+            severity=RuleSeverity.INFO, languages=["python"],
+            patterns=[r'from\s+\.\.?\w*\s+import'],
+            tags=["imports", "python", "style"],
+            fix_template="Consider absolute imports",
+        ),
+    ])
 
-    rules.append(Rule(
-        id="IMP001",
-        name="unused-import",
-        description="Imported module not used in the file",
-        severity=RuleSeverity.INFO,
-        languages=["python"],
-        patterns=[
-            r'^import\s+([a-zA-Z_][a-zA-Z0-9_]*)',
-            r'^from\s+([a-zA-Z_][a-zA-Z0-9_]*)\s+import',
-        ],
-        tags=["imports", "python", "unused"],
-        fix_template="Remove unused import",
-    ))
-
-    rules.append(Rule(
-        id="IMP002",
-        name="circular-import",
-        description="Potential circular import detected",
-        severity=RuleSeverity.WARNING,
-        languages=["python"],
-        patterns=[
-            r'^from\s+\.\s+import',
-            r'^import\s+\.',
-        ],
-        tags=["imports", "python", "circular"],
-        fix_template="Use lazy imports or restructure module dependencies",
-    ))
-
-    rules.append(Rule(
-        id="IMP003",
-        name="wildcard-import",
-        description="Wildcard import (from X import *) reduces clarity",
-        severity=RuleSeverity.WARNING,
-        languages=["python"],
-        patterns=[
-            r'from\s+[a-zA-Z_][a-zA-Z0-9_]*\s+import\s+\*',
-        ],
-        tags=["imports", "python", "best-practice"],
-        fix_template="Use explicit imports: from module import ClassA, ClassB",
-    ))
-
-    rules.append(Rule(
-        id="IMP004",
-        name="relative-import",
-        description="Relative import used (Python 3 style)",
-        severity=RuleSeverity.INFO,
-        languages=["python"],
-        patterns=[
-            r'from\s+\.\.?\w*\s+import',
-        ],
-        tags=["imports", "python", "style"],
-        fix_template="Consider absolute imports for better readability",
-    ))
-
-    # ═══════════════════════════════════════════════════════════════════════════
     # NAMING CONVENTION RULES (4 rules)
-    # ═══════════════════════════════════════════════════════════════════════════
+    rules.extend([
+        Rule(
+            id="NAME001", name="snake-case-function",
+            description="Function name should use snake_case",
+            severity=RuleSeverity.INFO, languages=["python"],
+            patterns=[r'def\s+[A-Z][a-zA-Z0-9_]*\s*\(', r'def\s+[a-z_]+[A-Z][a-zA-Z0-9_]*\s*\('],
+            tags=["naming", "python", "style"],
+            fix_template="Use snake_case: def my_function():",
+        ),
+        Rule(
+            id="NAME002", name="PascalCase-class",
+            description="Class name should use PascalCase",
+            severity=RuleSeverity.INFO, languages=["python"],
+            patterns=[r'class\s+[a-z][a-z0-9_]*\s*[\(:]'],
+            tags=["naming", "python", "style"],
+            fix_template="Use PascalCase: class MyClass:",
+        ),
+        Rule(
+            id="NAME003", name="UPPER_CASE-CONSTANT",
+            description="Module-level constant should use UPPER_CASE",
+            severity=RuleSeverity.INFO, languages=["python"],
+            patterns=[r'^[a-z][a-z0-9_]*\s*=\s*(?:\d+|["\'].*["\']|True|False|None)'],
+            tags=["naming", "python", "style"],
+            fix_template="Use UPPER_CASE for constants",
+        ),
+        Rule(
+            id="NAME004", name="single-letter-variable",
+            description="Avoid single-letter variable names",
+            severity=RuleSeverity.HINT, languages=["python", "javascript", "java"],
+            patterns=[r'\bfor\s+([a-h]|p|t|q|r|s|u|v|w)\b'],
+            tags=["naming", "style", "readability"],
+            fix_template="Use descriptive variable names",
+        ),
+    ])
 
-    rules.append(Rule(
-        id="NAME001",
-        name="snake-case-function",
-        description="Function name should use snake_case",
-        severity=RuleSeverity.INFO,
-        languages=["python"],
-        patterns=[
-            r'def\s+[A-Z][a-zA-Z0-9_]*\s*\(',
-            r'def\s+[a-z_]+[A-Z][a-zA-Z0-9_]*\s*\(',
-        ],
-        tags=["naming", "python", "style"],
-        fix_template="Use snake_case: def my_function():",
-    ))
-
-    rules.append(Rule(
-        id="NAME002",
-        name="PascalCase-class",
-        description="Class name should use PascalCase",
-        severity=RuleSeverity.INFO,
-        languages=["python"],
-        patterns=[
-            r'class\s+[a-z][a-z0-9_]*\s*[\(:]',
-            r'class\s+[a-z_]+_[a-z_]*\s*[\(:]',
-        ],
-        tags=["naming", "python", "style"],
-        fix_template="Use PascalCase: class MyClass:",
-    ))
-
-    rules.append(Rule(
-        id="NAME003",
-        name="UPPER_CASE-CONSTANT",
-        description="Module-level constant should use UPPER_CASE",
-        severity=RuleSeverity.INFO,
-        languages=["python"],
-        patterns=[
-            r'^[a-z][a-z0-9_]*\s*=\s*(?:\d+|["\'].*["\']|True|False|None)',
-        ],
-        tags=["naming", "python", "style"],
-        fix_template="Use UPPER_CASE for constants: MAX_SIZE = 100",
-    ))
-
-    rules.append(Rule(
-        id="NAME004",
-        name="single-letter-variable",
-        description="Avoid single-letter variable names (except i, j, k, x, y, z, n, m)",
-        severity=RuleSeverity.HINT,
-        languages=["python", "javascript", "java"],
-        patterns=[
-            r'\bfor\s+([a-h]|p|t|q|r|s|u|v|w)\b',
-            r'\b([a-h]|p|t|q|r|s|u|v|w)\s*=\s*',
-        ],
-        tags=["naming", "style", "readability"],
-        fix_template="Use descriptive variable names: count instead of c",
-    ))
-
-    # ═══════════════════════════════════════════════════════════════════════════
     # CODE QUALITY RULES (10 rules)
-    # ═══════════════════════════════════════════════════════════════════════════
-
-    rules.append(Rule(
-        id="QUAL001",
-        name="long-function",
-        description=f"Function exceeds {MAX_FUNCTION_LINES} lines",
-        severity=RuleSeverity.WARNING,
-        languages=["python", "javascript", "typescript", "java", "c", "cpp", "go", "rust"],
-        patterns=[],
-        tags=["complexity", "refactoring", "quality"],
-        fix_template=f"Extract to smaller functions (target: <{MAX_FUNCTION_LINES} lines)",
-    ))
-
-    rules.append(Rule(
-        id="QUAL002",
-        name="nested-callbacks",
-        description="Callback/Promise nesting exceeds 3 levels",
-        severity=RuleSeverity.WARNING,
-        languages=["javascript", "typescript", "python"],
-        patterns=[
-            r'\.then\s*\(.*\n.*\.then\s*\(',
-            r'\.then\s*\(.*\n.*\.then\s*\(.*\n.*\.then',
-            r'async\s+def.*:\n.*await.*:\n.*await',
-        ],
-        tags=["complexity", "async", "quality"],
-        fix_template="Use async/await or extract to named functions",
-    ))
-
-    rules.append(Rule(
-        id="QUAL003",
-        name="broad-except",
-        description="Bare except or except Exception catches everything",
-        severity=RuleSeverity.WARNING,
-        languages=["python"],
-        patterns=[
-            r'except\s*:\s*\n',
-            r'except\s+Exception\s*:\s*\n',
-        ],
-        tags=["error-handling", "python", "quality"],
-        fix_template="Catch specific exceptions: except ValueError as e:",
-    ))
-
-    rules.append(Rule(
-        id="QUAL004",
-        name="empty-except",
-        description="Empty except block without logging",
-        severity=RuleSeverity.WARNING,
-        languages=["python"],
-        patterns=[
-            r'except\s*:\s*\n\s*pass',
-            r'except\s+\w+\s*:\s*\n\s*pass',
-            r'except\s+\w+\s+as\s+\w+:\s*\n\s*pass',
-        ],
-        tags=["error-handling", "python", "quality"],
-        fix_template="Add logging or re-raise the exception",
-    ))
-
-    rules.append(Rule(
-        id="QUAL005",
-        name="TODO-FIXME",
-        description="Unresolved TODO/FIXME/XXX comment found",
-        severity=RuleSeverity.INFO,
-        languages=["python", "javascript", "typescript", "c", "cpp", "java", "go", "rust"],
-        patterns=[
-            r'\bTODO\b',
-            r'\bFIXME\b',
-            r'\bXXX\b',
-            r'\bHACK\b',
-            r'\bBUG\b',
-            r'\bNOTE:.*(?:fix|todo|hack)',
-        ],
-        tags=["documentation", "maintenance", "quality"],
-        fix_template="Resolve the TODO/FIXME or create tracking issue",
-    ))
-
-    rules.append(Rule(
-        id="QUAL006",
-        name="print-statement",
-        description="Print statement used instead of logging",
-        severity=RuleSeverity.HINT,
-        languages=["python"],
-        patterns=[
-            r'\bprint\s*\(',
-        ],
-        tags=["logging", "python", "style"],
-        fix_template="Use logging module: logging.info(), logging.debug()",
-    ))
-
-    rules.append(Rule(
-        id="QUAL007",
-        name="magic-number",
-        description="Magic number detected (literal number > 1 not in constant)",
-        severity=RuleSeverity.INFO,
-        languages=["python", "javascript", "typescript", "java", "c", "cpp", "go", "rust"],
-        patterns=[
-            r'(?<![a-zA-Z_])(0x[0-9A-Fa-f]+|(?:[2-9]|[1-9]\d+))\b(?![xXa-zA-Z0-9_.\-%])',
-        ],
-        tags=["readability", "maintainability", "quality"],
-        fix_template="Define as constant: BUFFER_SIZE = 4096",
-    ))
-
-    rules.append(Rule(
-        id="QUAL008",
-        name="consecutive-blank-lines",
-        description="Multiple consecutive blank lines detected",
-        severity=RuleSeverity.HINT,
-        languages=["python", "javascript", "typescript", "c", "cpp", "java", "go", "rust"],
-        patterns=[
-            r'\n\n\n\n+',
-        ],
-        tags=["formatting", "style", "quality"],
-        fix_template="Use single blank line between sections",
-    ))
-
-    rules.append(Rule(
-        id="QUAL009",
-        name="trailing-whitespace",
-        description="Lines with trailing whitespace",
-        severity=RuleSeverity.HINT,
-        languages=["python", "javascript", "typescript", "c", "cpp", "java", "go", "rust"],
-        patterns=[
-            r'[ \t]+\n',
-        ],
-        tags=["formatting", "style", "quality"],
-        fix_template="Remove trailing whitespace",
-    ))
-
-    rules.append(Rule(
-        id="QUAL010",
-        name="cyclomatic-complexity",
-        description=f"Function cyclomatic complexity exceeds {MAX_CYCLOMATIC_COMPLEXITY}",
-        severity=RuleSeverity.WARNING,
-        languages=["python", "javascript", "typescript", "c", "cpp", "java", "go", "rust"],
-        patterns=[],
-        tags=["complexity", "quality", "maintainability"],
-        fix_template=f"Simplify function (target complexity <{MAX_CYCLOMATIC_COMPLEXITY})",
-    ))
+    rules.extend([
+        Rule(
+            id="QUAL001", name="long-function",
+            description=f"Function exceeds {MAX_FUNCTION_LINES} lines",
+            severity=RuleSeverity.WARNING,
+            languages=["python", "javascript", "typescript", "java", "c", "cpp", "go", "rust"],
+            patterns=[], tags=["complexity", "refactoring", "quality"],
+            fix_template="Extract to smaller functions",
+        ),
+        Rule(
+            id="QUAL002", name="nested-callbacks",
+            description="Callback/Promise nesting exceeds 3 levels",
+            severity=RuleSeverity.WARNING,
+            languages=["javascript", "typescript", "python"],
+            patterns=[r'\.then\s*\(.*\n.*\.then\s*\('],
+            tags=["complexity", "async", "quality"],
+            fix_template="Use async/await or extract to named functions",
+        ),
+        Rule(
+            id="QUAL003", name="broad-except",
+            description="Bare except or except Exception catches everything",
+            severity=RuleSeverity.WARNING, languages=["python"],
+            patterns=[r'except\s*:\s*\n', r'except\s+Exception\s*:\s*\n'],
+            tags=["error-handling", "python", "quality"],
+            fix_template="Catch specific exceptions",
+        ),
+        Rule(
+            id="QUAL004", name="empty-except",
+            description="Empty except block without logging",
+            severity=RuleSeverity.WARNING, languages=["python"],
+            patterns=[r'except\s*:\s*\n\s*pass', r'except\s+\w+\s*:\s*\n\s*pass'],
+            tags=["error-handling", "python", "quality"],
+            fix_template="Add logging or re-raise the exception",
+        ),
+        Rule(
+            id="QUAL005", name="TODO-FIXME",
+            description="Unresolved TODO/FIXME/XXX comment found",
+            severity=RuleSeverity.INFO,
+            languages=["python", "javascript", "typescript", "c", "cpp", "java", "go", "rust"],
+            patterns=[r'\bTODO\b', r'\bFIXME\b', r'\bXXX\b', r'\bHACK\b'],
+            tags=["documentation", "maintenance", "quality"],
+            fix_template="Resolve the TODO/FIXME or create tracking issue",
+        ),
+        Rule(
+            id="QUAL006", name="print-statement",
+            description="Print statement used instead of logging",
+            severity=RuleSeverity.HINT, languages=["python"],
+            patterns=[r'\bprint\s*\('],
+            tags=["logging", "python", "style"],
+            fix_template="Use logging module",
+        ),
+        Rule(
+            id="QUAL007", name="magic-number",
+            description="Magic number detected (literal number > 1 not in constant)",
+            severity=RuleSeverity.INFO,
+            languages=["python", "javascript", "typescript", "java", "c", "cpp", "go", "rust"],
+            patterns=[r'(?<![a-zA-Z_])(0x[0-9A-Fa-f]+|(?:[2-9]|[1-9]\d+))\b(?![xXa-zA-Z0-9_.\-%])'],
+            tags=["readability", "maintainability", "quality"],
+            fix_template="Define as constant",
+        ),
+        Rule(
+            id="QUAL008", name="consecutive-blank-lines",
+            description="Multiple consecutive blank lines detected",
+            severity=RuleSeverity.HINT,
+            languages=["python", "javascript", "typescript", "c", "cpp", "java", "go", "rust"],
+            patterns=[r'\n\n\n\n+'],
+            tags=["formatting", "style", "quality"],
+            fix_template="Use single blank line between sections",
+        ),
+        Rule(
+            id="QUAL009", name="trailing-whitespace",
+            description="Lines with trailing whitespace",
+            severity=RuleSeverity.HINT,
+            languages=["python", "javascript", "typescript", "c", "cpp", "java", "go", "rust"],
+            patterns=[r'[ \t]+\n'],
+            tags=["formatting", "style", "quality"],
+            fix_template="Remove trailing whitespace",
+        ),
+        Rule(
+            id="QUAL010", name="cyclomatic-complexity",
+            description=f"Function cyclomatic complexity exceeds {MAX_CYCLOMATIC_COMPLEXITY}",
+            severity=RuleSeverity.WARNING,
+            languages=["python", "javascript", "typescript", "c", "cpp", "java", "go", "rust"],
+            patterns=[],
+            tags=["complexity", "quality", "maintainability"],
+            fix_template="Simplify function",
+        ),
+    ])
 
     return rules
 

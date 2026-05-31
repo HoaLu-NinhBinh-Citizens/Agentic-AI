@@ -661,38 +661,110 @@ class CodebaseIndexer:
 
 
 class CallGraph:
-    """Real call graph constructed from AST analysis."""
+    """Real call graph constructed from AST analysis.
     
-    def __init__(self, indexer: CodebaseIndexer):
+    This class uses the dedicated call_graph module for proper
+    AST-based call site analysis with cross-file reference resolution.
+    """
+
+    def __init__(self, indexer: CodebaseIndexer | None = None, project_root: str | None = None):
         self.indexer = indexer
+        self.project_root = Path(project_root) if project_root else Path.cwd()
         self._callees: dict[str, set[str]] = {}  # caller -> callees
         self._callers: dict[str, set[str]] = {}  # callee -> callers
         self._lock = asyncio.Lock()
-    
+        self._graph = None  # Actual call graph instance
+
     async def build(self) -> None:
-        """Build call graph from indexed symbols."""
+        """Build call graph from indexed symbols using AST analysis."""
         async with self._lock:
-            # For each function, analyze calls
-            functions = self.indexer.find_symbols_by_kind(SymbolKind.FUNCTION)
+            from src.core.cognition.call_graph import CallGraph as RealCallGraph
+
+            # Build indexed files dict from indexer
+            indexed_files: dict[str, list[dict]] = {}
+            if self.indexer:
+                for file_path in self.indexer._file_hashes:
+                    symbols = []
+                    for uid in self.indexer._symbols_by_file.get(file_path, []):
+                        sym = self.indexer.get_symbol(uid)
+                        if sym:
+                            symbols.append({
+                                "name": sym.name,
+                                "kind": sym.kind.name.lower(),
+                                "line": sym.location.line,
+                                "end_line": sym.location.end_line or sym.location.line,
+                                "signature": sym.signature,
+                            })
+                    indexed_files[file_path] = symbols
+
+            # Create and build real call graph
+            self._graph = RealCallGraph(self.project_root)
+            if indexed_files:
+                self._graph.build(indexed_files)
+            else:
+                self._graph.build_from_directory(self.project_root)
+
+            # Build lookup maps from actual call graph
+            self._callees.clear()
+            self._callers.clear()
+
+            for site in self._graph._call_sites:
+                # Add to callers
+                if site.callee not in self._callers:
+                    self._callers[site.callee] = set()
+                self._callers[site.callee].add(site.caller)
+
+                # Add to callees
+                if site.caller not in self._callees:
+                    self._callees[site.caller] = set()
+                self._callees[site.caller].add(site.callee)
+
+            logger.info("call_graph_built: functions=%d call_sites=%d",
+                       self._graph.stats.get("functions", 0),
+                       self._graph.stats.get("call_sites", 0))
+
+    def get_callees(self, func_uid: str) -> list[str]:
+        """Get function names called by this function."""
+        return list(self._callees.get(func_uid, set()))
+
+    def get_callers(self, func_uid: str) -> list[str]:
+        """Get function names that call this function."""
+        return list(self._callers.get(func_uid, set()))
+
+    def get_real_graph(self):
+        """Get the underlying call_graph.CallGraph instance."""
+        return self._graph
+
+    def find_references(self, symbol_name: str, file_path: str | None = None) -> list[dict]:
+        """Find all references to a symbol.
+        
+        Args:
+            symbol_name: Name of the symbol
+            file_path: Optional file to limit search
             
-            for func in functions:
-                self._callees[func.uid] = set()
-                
-                # In real implementation, parse function body and find call expressions
-                # For now, we have the foundation
-                pass
-            
-            logger.info("call_graph_built: functions=%s", len(functions))
-    
-    def get_callees(self, func_uid: str) -> list[Symbol]:
-        """Get functions called by this function."""
-        callee_uids = self._callees.get(func_uid, set())
-        return [self.indexer.get_symbol(uid) for uid in callee_uids if self.indexer.get_symbol(uid)]
-    
-    def get_callers(self, func_uid: str) -> list[Symbol]:
-        """Get functions that call this function."""
-        caller_uids = self._callers.get(func_uid, set())
-        return [self.indexer.get_symbol(uid) for uid in caller_uids if self.indexer.get_symbol(uid)]
+        Returns:
+            List of reference dicts with caller, callee, file, line
+        """
+        if self._graph is None:
+            return []
+        
+        refs = self._graph.find_references(symbol_name, file_path)
+        return [
+            {
+                "caller": r.caller,
+                "callee": r.callee,
+                "file": r.file,
+                "line": r.line,
+                "is_method": r.is_method,
+            }
+            for r in refs
+        ]
+
+    def find_cycles(self) -> list[list[str]]:
+        """Find circular dependencies in call graph."""
+        if self._graph is None:
+            return []
+        return self._graph.find_cycles()
 
 
 # =============================================================================

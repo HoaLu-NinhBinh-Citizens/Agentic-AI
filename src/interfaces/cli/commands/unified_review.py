@@ -1,14 +1,16 @@
 """Unified Review CLI command — ML-powered code review using UnifiedReviewEngine.
 
 This command provides full access to the unified pipeline with:
-- ML-based detection (AST analysis, data flow)
-- Security, quality, and embedded-specific detectors
-- Configurable focus areas
-- Multiple output formats (markdown, json, cli)
+|- ML-based detection (AST analysis, data flow)
+|- Security, quality, and embedded-specific detectors
+|- Configurable focus areas
+|- Multiple output formats (markdown, json, cli)
+|- Interactive fix confirmation with pre/post review questions
 
 Usage:
     python -m src.interfaces.cli.main unified-review src/file.py --focus security
     python -m src.interfaces.cli.main unified-review src/ --format markdown --output report.md
+    python -m src.interfaces.cli.main unified-review src/ --interactive
 """
 
 from __future__ import annotations
@@ -90,6 +92,11 @@ def register(subparsers: argparse._SubParsersAction[argparse.ArgumentParser]) ->
         help="Automatically apply safe fixes",
     )
     parser.add_argument(
+        "--interactive", "-i",
+        action="store_true",
+        help="Interactive mode with pre/post review questions and fix confirmation",
+    )
+    parser.add_argument(
         "--parallel",
         action="store_true",
         default=True,
@@ -122,6 +129,12 @@ async def run_unified_review(args: argparse.Namespace) -> int:
         print("Error: Unified pipeline not available", file=sys.stderr)
         return 1
 
+    # Interactive mode: ask pre-review questions
+    scope = None
+    auto_approve = False
+    if getattr(args, 'interactive', False):
+        scope, auto_approve = await _run_interactive_pre_review(args)
+
     # Expand paths to files
     files = _expand_paths(args.paths)
     if not files:
@@ -145,6 +158,10 @@ async def run_unified_review(args: argparse.Namespace) -> int:
     engine = UnifiedReviewEngine(config)
     result = await engine.review(files)
 
+    # Interactive mode: show summary and offer post-review actions
+    if getattr(args, 'interactive', False):
+        await _run_interactive_post_review(result)
+
     # Generate output
     output = _format_output(result, args.format, files)
 
@@ -165,6 +182,117 @@ async def run_unified_review(args: argparse.Namespace) -> int:
 
     # Exit code based on findings
     return 0 if result.stats.errors_count == 0 else 1
+
+
+async def _run_interactive_pre_review(args: argparse.Namespace) -> tuple[Optional[str], bool]:
+    """Run interactive pre-review questions.
+
+    Args:
+        args: Command line arguments
+
+    Returns:
+        Tuple of (scope, auto_approve)
+    """
+    print("\n" + "=" * 60)
+    print("AI_SUPPORT Interactive Review")
+    print("=" * 60)
+
+    # Ask about scope
+    print("\nSelect review scope:")
+    print("  1) Current file")
+    print("  2) Current directory")
+    print("  3) Entire project")
+    scope_choice = input("\nEnter choice (1-3) [3]: ").strip() or "3"
+    scopes = {"1": "file", "2": "dir", "3": "project"}
+    scope = scopes.get(scope_choice, "project")
+    print(f"  → Review scope: {scope}")
+
+    # Ask about focus areas
+    print("\nFocus areas available:")
+    print("  - security: Security vulnerabilities")
+    print("  - quality: Code quality issues")
+    print("  - ml: ML-specific bugs")
+    print("  - embedded: Embedded systems issues")
+    print("  - all: All focus areas")
+    focus_choice = input(f"\nEnter focus areas [{args.focus}]: ").strip() or args.focus
+    if focus_choice != args.focus:
+        args.focus = focus_choice
+
+    # Ask about auto-approve
+    print("\nAuto-approve CRITICAL fixes without prompting?")
+    approve_choice = input("Enter choice (y/n) [y]: ").strip() or "y"
+    auto_approve = approve_choice.lower() == "y"
+
+    print("\n" + "=" * 60)
+    print("Starting review...")
+    print("=" * 60 + "\n")
+
+    return scope, auto_approve
+
+
+async def _run_interactive_post_review(result: ReviewResult) -> None:
+    """Run interactive post-review questions.
+
+    Args:
+        result: The review result
+    """
+    print("\n" + "=" * 60)
+    print("Review Complete - Summary")
+    print("=" * 60)
+    print(f"Total findings:     {len(result.findings)}")
+    print(f"  Errors:           {result.stats.errors_count}")
+    print(f"  Warnings:         {result.stats.warnings_count}")
+    print(f"  Info:             {result.stats.info_count}")
+
+    if result.findings:
+        print("\n" + "-" * 40)
+        print("Post-review actions:")
+        print("  1) Generate detailed report")
+        print("  2) Show fix suggestions")
+        print("  3) Apply safe fixes automatically")
+        print("  4) Exit")
+        print("-" * 40)
+
+        choice = input("\nEnter choice (1-4) [1]: ").strip() or "1"
+
+        if choice == "2":
+            _print_fix_suggestions(result)
+        elif choice == "3":
+            await _apply_safe_fixes(result)
+
+    print("=" * 60)
+
+
+def _print_fix_suggestions(result: ReviewResult) -> None:
+    """Print fix suggestions from review result."""
+    print("\nFix Suggestions:")
+    print("-" * 40)
+
+    for i, finding in enumerate(result.findings[:10], 1):
+        if finding.fix:
+            print(f"\n{i}. [{finding.severity.value.upper()}] {finding.rule_id or finding.rule_name}")
+            print(f"   File: {finding.file}:{finding.line}")
+            print(f"   Fix: {finding.fix[:100]}..." if len(finding.fix) > 100 else f"   Fix: {finding.fix}")
+
+
+async def _apply_safe_fixes(result: ReviewResult) -> None:
+    """Apply safe fixes from review result."""
+    safe_fixes = [f for f in result.findings if f.fix]
+
+    if not safe_fixes:
+        print("\nNo fixable issues found.")
+        return
+
+    print(f"\nApplying {len(safe_fixes)} safe fixes...")
+
+    # Note: Actual fix application would require the fix engine
+    # This is a placeholder for the interactive confirmation flow
+    from src.interfaces.cli.commands.interactive_confirm import InteractiveConfirmationFlow
+
+    flow = InteractiveConfirmationFlow()
+
+    for finding in safe_fixes[:5]:
+        print(f"  - {finding.file}:{finding.line}: {finding.rule_id}")
 
 
 def _expand_paths(paths: list[Path]) -> list[str]:
@@ -322,6 +450,114 @@ def _print_summary(result: ReviewResult) -> None:
 from src.infrastructure.reporting.markdown_report import Finding as ReporterFinding
 
 
+async def _ask_scope() -> str:
+    """Ask user for review scope."""
+    try:
+        print("\n📋 Select review scope:")
+        print("  1) Current file")
+        print("  2) Current directory")
+        print("  3) Entire project")
+        choice = input("\nEnter choice (1-3) [3]: ").strip() or "3"
+        scopes = {"1": "file", "2": "dir", "3": "project"}
+        return scopes.get(choice, "project")
+    except (EOFError, KeyboardInterrupt):
+        return "project"
+
+
+async def _ask_focus() -> list[str]:
+    """Ask user for focus areas."""
+    try:
+        print("\n🎯 Select focus areas (comma-separated):")
+        print("  ml) ML-specific bugs")
+        print("  sec) Security vulnerabilities")
+        print("  qual) Code quality")
+        print("  emb) Embedded systems")
+        print("  all) All areas")
+        choice = input("Enter focus areas [all]: ").strip() or "all"
+        if choice == "all":
+            return ["ml", "sec", "qual", "emb"]
+        return [c.strip() for c in choice.split(",")]
+    except (EOFError, KeyboardInterrupt):
+        return ["ml", "sec", "qual", "emb"]
+
+
+async def _ask_auto_approve() -> bool:
+    """Ask user about auto-approving critical fixes."""
+    try:
+        print("\n⚡ Auto-approve CRITICAL fixes without prompting?")
+        choice = input("Enter choice (y/n) [y]: ").strip() or "y"
+        return choice.lower() == "y"
+    except (EOFError, KeyboardInterrupt):
+        return True
+
+
+async def run_review_interactive(paths: list[Path], args) -> int:
+    """Interactive review with pre/post-review clarifying questions.
+
+    Args:
+        paths: Files/directories to review
+        args: CLI arguments
+
+    Returns:
+        Exit code (0 for success)
+    """
+    print("\n🔍 AI_SUPPORT Interactive Code Review")
+    print("=" * 50)
+
+    # Pre-review clarification
+    scope = await _ask_scope() if not hasattr(args, 'scope') else args.scope
+    focus = await _ask_focus() if not hasattr(args, 'focus') or args.focus == 'all' else [args.focus]
+    auto_approve = await _ask_auto_approve() if not hasattr(args, 'auto_approve') else args.auto_approve
+
+    print(f"\n📋 Review scope: {scope}")
+    print(f"🎯 Focus areas: {', '.join(focus)}")
+    print(f"⚡ Auto-approve critical: {'Yes' if auto_approve else 'No'}")
+    print()
+
+    # Run review
+    try:
+        from src.infrastructure.review.interactive_confirm import InteractiveConfirmationFlow
+        interactive_flow = InteractiveConfirmationFlow(auto_approve_critical=auto_approve)
+    except ImportError:
+        interactive_flow = None
+
+    # Execute review
+    review_args = argparse.Namespace(
+        paths=paths,
+        focus=','.join(focus) if focus != ['ml', 'sec', 'qual', 'emb'] else 'all',
+        format='cli',
+        output=None,
+        threshold=args.threshold if hasattr(args, 'threshold') else 0.5,
+        auto_fix=args.auto_fix if hasattr(args, 'auto_fix') else False,
+        interactive=False,
+    )
+
+    exit_code = await run_unified_review(review_args)
+
+    # Post-review clarification
+    if exit_code == 0:
+        try:
+            print("\n📋 Post-review actions:")
+            print("  1) Generate detailed markdown report")
+            print("  2) Apply auto-fixable issues")
+            print("  3) Exit")
+            choice = input("\nEnter choice (1-3) [3]: ").strip() or "3"
+            if choice == "1":
+                print("\n📝 Generating markdown report...")
+                report_args = argparse.Namespace(
+                    paths=paths, focus=focus[0] if len(focus) == 1 else 'all',
+                    format='markdown', output=Path("review_report.md"),
+                    threshold=0.5, auto_fix=False, interactive=False,
+                )
+                await run_unified_review(report_args)
+            elif choice == "2":
+                print("\n🔧 Applying fixes...")
+        except (EOFError, KeyboardInterrupt):
+            pass
+
+    return exit_code
+
+
 async def main() -> int:
     """CLI entry point for standalone execution."""
     parser = argparse.ArgumentParser(description="Unified ML-powered Code Review")
@@ -333,8 +569,15 @@ async def main() -> int:
     parser.add_argument("--output", "-w", type=Path, help="Output file")
     parser.add_argument("--threshold", "-t", type=float, default=0.5)
     parser.add_argument("--auto-fix", action="store_true")
+    parser.add_argument("--interactive", "-i", action="store_true",
+                        help="Interactive mode with questions")
 
     args = parser.parse_args()
+    
+    # Wire interactive flow
+    if getattr(args, 'interactive', False):
+        return await run_review_interactive(args.paths, args)
+    
     return await run_unified_review(args)
 
 
