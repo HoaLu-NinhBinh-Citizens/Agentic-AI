@@ -44,7 +44,7 @@ export const Sidebar: React.FC = () => {
     }
   };
 
-  const buildFileTree = (entries: {name: string, path: string, isDirectory: boolean}[], basePath: string): FileNode[] => {
+  const buildFileTree = (entries: {name: string, path: string, isDirectory: boolean}[], _basePath: string): FileNode[] => {
     return entries
       .filter(e => !e.name.startsWith('.') && e.name !== 'node_modules')
       .sort((a, b) => {

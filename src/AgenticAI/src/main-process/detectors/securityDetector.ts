@@ -91,7 +91,6 @@ export const sqlInjectionDetector: SecurityDetector = {
 
           // Check for query methods with string concatenation
           if (callee.type === 'MemberExpression') {
-            const objType = callee.object.type;
             const propName = callee.property.type === 'Identifier' ? callee.property.name : '';
 
             // Common ORM/database methods
@@ -207,7 +206,7 @@ export const commandInjectionDetector: SecurityDetector = {
             const propName = callee.property.type === 'Identifier' ? callee.property.name : '';
 
             // Node.js child_process methods
-            if (objType === 'require' && callee.object.arguments?.[0]?.value === 'child_process') {
+            if (objType === 'require' && (callee.object as any).arguments?.[0]?.value === 'child_process') {
               if (['exec', 'execSync', 'execFile', 'execFileSync'].includes(propName)) {
                 const firstArg = args[0];
                 if (firstArg.type === 'BinaryExpression' || firstArg.type === 'TemplateLiteral') {
@@ -428,8 +427,8 @@ export const pathTraversalDetector: SecurityDetector = {
           const args = path.node.arguments;
 
           if (callee.type === 'MemberExpression' && args.length > 0) {
-            const objType = callee.object.type === 'Identifier' ? callee.object.name : '';
-            const propName = callee.property.type === 'Identifier' ? callee.property.name : '';
+            const objType = callee.object.type === 'Identifier' ? (callee.object as any).name : '';
+            const propName = callee.property.type === 'Identifier' ? (callee.property as any).name : '';
 
             // fs methods that might be vulnerable
             if (['readFile', 'readFileSync', 'writeFile', 'writeFileSync', 'createReadStream', 'createWriteStream', 'unlink', 'rm'].includes(propName)) {
@@ -518,7 +517,6 @@ export const insecureRandomDetector: SecurityDetector = {
 
             // Weak PRNGs
             if (['rand', 'srand', 'random'].some(fn => callee.name === fn)) {
-              const ancestors = path.scope.getAllBindings();
               // Check for common weak random patterns
               issues.push({
                 id: generateIssueId(),

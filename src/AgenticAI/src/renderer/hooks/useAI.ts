@@ -18,11 +18,11 @@ export interface UseAIReturn {
   isInitialized: boolean;
 }
 
-export function useAI(options: UseAIOptions = {}): UseAIReturn {
+export function useAI(_options: UseAIOptions = {}): UseAIReturn {
   const [messages, setMessages] = useState<ChatMessage[]>([]);
   const [isLoading, setIsLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const [systemPrompt, setSystemPrompt] = useState(options.systemPrompt || '');
+  const [_systemPrompt, setSystemPrompt] = useState('');
   const [isInitialized, setIsInitialized] = useState(false);
 
   const messagesRef = useRef(messages);
@@ -69,11 +69,7 @@ export function useAI(options: UseAIOptions = {}): UseAIReturn {
         { role: 'user', content },
       ];
 
-      const fullResponse = await aiService.chat(
-        aiMessages,
-        systemPrompt || undefined,
-        undefined
-      );
+      const fullResponse = await aiService.chat(aiMessages);
 
       const assistantMessage: ChatMessage = {
         id: `assistant-${Date.now()}`,
@@ -97,7 +93,7 @@ export function useAI(options: UseAIOptions = {}): UseAIReturn {
     } finally {
       setIsLoading(false);
     }
-  }, [isLoading, systemPrompt]);
+  }, [isLoading]);
 
   const clearMessages = useCallback(() => {
     setMessages([]);
@@ -116,7 +112,7 @@ export function useAI(options: UseAIOptions = {}): UseAIReturn {
   };
 }
 
-export function useStreamingAI(options: UseAIOptions = {}) {
+export function useStreamingAI(_options: UseAIOptions = {}) {
   const [content, setContent] = useState('');
   const [isLoading, setIsLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -150,10 +146,9 @@ export function useStreamingAI(options: UseAIOptions = {}) {
 
       const response = await aiService.chat(
         messages as any,
-        options.systemPrompt,
-        (chunk) => {
-          setContent(prev => prev + chunk);
-          onChunk?.(chunk);
+        (chunk: any) => {
+          setContent(prev => prev + chunk.content);
+          onChunk?.(chunk.content);
         }
       );
 
@@ -165,7 +160,7 @@ export function useStreamingAI(options: UseAIOptions = {}) {
     } finally {
       setIsLoading(false);
     }
-  }, [isLoading, options.systemPrompt]);
+  }, [isLoading]);
 
   const clear = useCallback(() => {
     setContent('');

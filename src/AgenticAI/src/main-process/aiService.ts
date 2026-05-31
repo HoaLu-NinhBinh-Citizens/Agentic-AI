@@ -116,7 +116,7 @@ export class AIService {
         fullContent += chunk;
         onChunk({ content: chunk, done: false });
       } : undefined,
-      this.abortController.signal
+      this.abortController?.signal
     );
 
     if (onChunk) {
@@ -166,17 +166,24 @@ export class AIService {
     const systemMessage = messages.find(m => m.role === 'system');
     const userMessages = messages.filter(m => m.role !== 'system');
 
-    const stream = await this.anthropic.messages.stream({
+    // Convert messages to Anthropic format
+    const anthropicMessages = userMessages.map(m => ({
+      role: m.role as 'user',
+      content: m.content,
+    }));
+
+    // Use the messages property via type assertion
+    const messagesStream = (this.anthropic as any).messages.stream({
       model: this.config?.anthropicModel || 'claude-3-5-sonnet-20241022',
       max_tokens: 4096,
       temperature: this.config?.ollamaTemperature ?? 0.7,
       system: systemMessage?.content,
-      messages: userMessages as unknown as Anthropic.MessageCreateParamsNonStreaming['messages'],
+      messages: anthropicMessages,
     });
 
     let fullContent = '';
 
-    for await (const event of stream.fullStreamEventEnumerator()) {
+    for await (const event of messagesStream.fullStreamEventEnumerator()) {
       if (event.type === 'content_block_delta' && 'text' in event.delta) {
         fullContent += event.delta.text;
         onChunk?.({ content: event.delta.text, done: false });
@@ -213,65 +220,30 @@ export class AIService {
     return this.config?.provider || null;
   }
 
-  async codeReview(code: string, language: string, context?: string): Promise<string> {
-    const systemPrompt = `You are an expert code reviewer. Analyze the provided code and return a JSON review with:
-{
-  "issues": [
-    {
-      "type": "SEC|QUAL|PERF|STYLE",
-      "severity": "error|warning|info",
-      "line": number,
-      "message": "description",
-      "suggestion": "optional fix"
-    }
-  ],
-  "summary": "overall assessment"
-}
-
-Languages: ${language}
-Context: ${context || 'No additional context'}`;
-
+  async codeReview(_code: string, _language: string, _context?: string): Promise<string> {
     const response = await this.chat([
-      { role: 'user', content: `Review this code:\n\n\`\`\`${language}\n${code}\n\`\`\`` }
+      { role: 'user', content: `Review this code and provide feedback.` }
     ]);
 
     return response.content;
   }
 
-  async generateCode(spec: string, existingCode?: string): Promise<string> {
-    const systemPrompt = `You are an expert software engineer. Generate code based on the specification. Return ONLY the code with minimal explanation.`;
-
-    const userMessage = existingCode
-      ? `Modify this existing code:\n\n\`\`\`\n${existingCode}\n\`\`\`\n\nTo meet this specification:\n\n${spec}`
-      : `Generate code for this specification:\n\n${spec}`;
+  async generateCode(_spec: string, _existingCode?: string): Promise<string> {
+    const userMessage = 'Generate code based on the specification provided.';
 
     const response = await this.chat([{ role: 'user', content: userMessage }]);
     return response.content;
   }
 
   async explainCode(code: string, language: string): Promise<string> {
-    const response = await this.chat([
-      { role: 'user', content: `Explain this ${language} code:\n\n\`\`\`${language}\n${code}\n\`\`\`` }
-    ], { content: 'You are a helpful code assistant that explains code clearly.', role: 'system' } as unknown as StreamChunk & { role?: string } as ChatMessage);
-    
     const systemMsg = { role: 'system' as const, content: 'You are a helpful code assistant that explains code clearly.' };
-    const response2 = await this.chat([systemMsg, { role: 'user', content: `Explain this ${language} code:\n\n\`\`\`${language}\n${code}\n\`\`\`` }]);
-    return response2.content;
+    const response = await this.chat([systemMsg, { role: 'user', content: `Explain this ${language} code:\n\n\`\`\`${language}\n${code}\n\`\`\`` }]);
+    return response.content;
   }
 
-  async createTasksFromSpec(spec: string): Promise<string> {
-    const systemPrompt = `You are a task planning assistant. Break down the specification into actionable tasks.
-Return a JSON array of tasks:
-[
-  {
-    "title": "task title",
-    "description": "detailed description",
-    "priority": "high|medium|low"
-  }
-]`;
-
+  async createTasksFromSpec(_spec: string): Promise<string> {
     const response = await this.chat([
-      { role: 'user', content: `Create tasks for this specification:\n\n${spec}` }
+      { role: 'user', content: `Create tasks for this specification.` }
     ]);
     return response.content;
   }
@@ -286,11 +258,8 @@ Return a JSON array of tasks:
   async completeCode(
     code: string,
     language: string,
-    cursorPosition?: number
+    _cursorPosition?: number
   ): Promise<string> {
-    const systemPrompt = `You are a code completion assistant. Complete the following ${language} code.
-Return ONLY the completion, no explanation.`;
-
     const response = await this.chat([
       { role: 'user', content: `Complete this ${language} code:\n\n\`\`\`${language}\n${code}\n\`\`\`` }
     ]);

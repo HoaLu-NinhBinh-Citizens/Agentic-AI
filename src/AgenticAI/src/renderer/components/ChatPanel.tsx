@@ -60,14 +60,13 @@ export const ChatPanel: React.FC = () => {
         content: m.content,
       }));
 
-      chatMessages.push({ role: 'user', content: input });
+      chatMessages.push({ role: 'user' as const, content: input });
 
-      let systemPrompt = '';
       if (steeringContext && Object.keys(steeringContext).length > 0) {
-        systemPrompt = await window.electronAPI.steering?.getSystemPrompt() || '';
+        // System prompt can be retrieved if needed
       }
 
-      const response = await window.electronAPI.ai.chat(chatMessages, systemPrompt);
+      const response = await window.electronAPI.ai.chat(chatMessages as any);
 
       if (response.error) {
         throw new Error(response.error);

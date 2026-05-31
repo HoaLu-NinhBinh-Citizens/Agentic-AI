@@ -17,12 +17,10 @@ export interface CommitInfo {
 
 class GitIntegration {
   private git: SimpleGit | null = null;
-  private repoPath: string | null = null;
 
   async openRepository(path: string): Promise<GitInfo> {
     try {
       this.git = simpleGit(path);
-      this.repoPath = path;
       
       const isRepo = await this.git.checkIsRepo();
       if (!isRepo) {

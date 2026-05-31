@@ -259,7 +259,7 @@ function detectJSIssues(ast: any, issues: CodeIssue[]) {
       // Check for console.log in production
       if (path.node.name === 'console') {
         const parent = path.parent;
-        if (parent && parent.type === 'MemberExpression' && parent.property && parent.property.name === 'log') {
+        if (parent && parent.type === 'MemberExpression' && parent.property && (parent.property as any).name === 'log') {
           issues.push({
             id: generateIssueId(),
             severity: 'info',
@@ -364,7 +364,7 @@ function detectJSIssues(ast: any, issues: CodeIssue[]) {
   });
 }
 
-function analyzePython(code: string): AnalysisResult {
+function analyzePython(_code: string): AnalysisResult {
   // Placeholder for Python analysis with tree-sitter
   // This would require tree-sitter-python integration
   return {

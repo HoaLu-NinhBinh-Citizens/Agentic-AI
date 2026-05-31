@@ -1,6 +1,13 @@
 import { create } from 'zustand';
 import { FileNode, Task, Spec, ChatMessage, SteeringContext, OllamaModel, OllamaHealthStatus, AIProviderConfig } from '../../shared/types';
 
+export type SidebarView = 'explorer' | 'search' | 'git' | 'terminal' | 'settings';
+
+interface CursorPosition {
+  line: number;
+  column: number;
+}
+
 interface AppStore {
   // Workspace
   workspacePath: string | null;
@@ -14,9 +21,11 @@ interface AppStore {
   // Editor
   activeFile: string | null;
   openFiles: string[];
+  cursorPosition: CursorPosition | null;
   setActiveFile: (path: string | null) => void;
   addOpenFile: (path: string) => void;
   removeOpenFile: (path: string) => void;
+  setCursorPosition: (pos: CursorPosition | null) => void;
   
   // Spec & Tasks
   spec: Spec | null;
@@ -35,10 +44,22 @@ interface AppStore {
   steeringContext: SteeringContext;
   setSteeringContext: (context: SteeringContext) => void;
   
-  // UI State
+  // UI State - Expanded Folders
   expandedFolders: string[];
   addExpandedFolder: (path: string) => void;
   removeExpandedFolder: (path: string) => void;
+
+  // UI State - Sidebar View
+  activeSidebarView: SidebarView;
+  setActiveSidebarView: (view: SidebarView) => void;
+  
+  // UI State - Terminal
+  isTerminalOpen: boolean;
+  setTerminalOpen: (open: boolean) => void;
+  
+  // UI State - Settings
+  isSettingsOpen: boolean;
+  setSettingsOpen: (open: boolean) => void;
 
   // AI Config
   aiConfig: AIProviderConfig | null;
@@ -66,6 +87,7 @@ export const useAppStore = create<AppStore>((set) => ({
   
   activeFile: null,
   openFiles: [],
+  cursorPosition: null,
   setActiveFile: (path) => set({ activeFile: path }),
   addOpenFile: (path) => set((state) => ({
     openFiles: state.openFiles.includes(path) ? state.openFiles : [...state.openFiles, path]
@@ -76,6 +98,7 @@ export const useAppStore = create<AppStore>((set) => ({
       ? state.openFiles.find(f => f !== path) || null 
       : state.activeFile
   })),
+  setCursorPosition: (pos) => set({ cursorPosition: pos }),
   
   spec: null,
   tasks: [],
@@ -104,6 +127,18 @@ export const useAppStore = create<AppStore>((set) => ({
   removeExpandedFolder: (path) => set((state) => ({
     expandedFolders: state.expandedFolders.filter(p => p !== path)
   })),
+
+  // UI State - Sidebar View
+  activeSidebarView: 'explorer',
+  setActiveSidebarView: (view) => set({ activeSidebarView: view }),
+  
+  // UI State - Terminal
+  isTerminalOpen: false,
+  setTerminalOpen: (open) => set({ isTerminalOpen: open }),
+  
+  // UI State - Settings
+  isSettingsOpen: false,
+  setSettingsOpen: (open) => set({ isSettingsOpen: open }),
 
   // AI Config
   aiConfig: null,

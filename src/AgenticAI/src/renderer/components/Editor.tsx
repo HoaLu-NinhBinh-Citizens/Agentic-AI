@@ -8,8 +8,7 @@ export const EditorPanel: React.FC = () => {
     activeFile, 
     openFiles, 
     setActiveFile, 
-    removeOpenFile,
-    workspacePath 
+    removeOpenFile
   } = useAppStore();
   
   const [content, setContent] = useState<string>('');

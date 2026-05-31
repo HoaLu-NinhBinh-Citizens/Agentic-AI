@@ -1,10 +1,132 @@
+/* ==================== App Layout ==================== */
+.app-container {
+  display: flex;
+  flex-direction: column;
+  height: 100vh;
+  width: 100vw;
+  overflow: hidden;
+}
+
+.app-main {
+  display: flex;
+  flex-direction: row;
+  flex: 1;
+  overflow: hidden;
+}
+
+.app-content {
+  display: flex;
+  flex: 1;
+  overflow: hidden;
+}
+
+.sidebar-container {
+  width: 280px;
+  min-width: 180px;
+  max-width: 500px;
+  border-right: 1px solid var(--border);
+  overflow: hidden;
+  display: flex;
+  flex-direction: column;
+}
+
+.editor-area {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
+
+.right-panels {
+  display: flex;
+  flex-direction: column;
+  width: 380px;
+  min-width: 280px;
+  max-width: 600px;
+  border-left: 1px solid var(--border);
+  overflow: hidden;
+}
+
+/* ==================== Activity Bar ==================== */
+.activity-bar {
+  width: 48px;
+  background: var(--bg-tertiary);
+  display: flex;
+  flex-direction: column;
+  justify-content: space-between;
+  border-right: 1px solid var(--border);
+}
+
+.activity-icons {
+  display: flex;
+  flex-direction: column;
+  padding: 8px 0;
+}
+
+.activity-icon {
+  width: 48px;
+  height: 48px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: transparent;
+  border: none;
+  color: var(--text-secondary);
+  cursor: pointer;
+  transition: all 0.15s ease;
+}
+
+.activity-icon:hover {
+  color: var(--text-primary);
+  background: var(--bg-hover);
+}
+
+.activity-icon.active {
+  color: var(--text-primary);
+  border-left: 2px solid var(--accent);
+  background: var(--bg-secondary);
+}
+
+.activity-bottom {
+  padding: 8px 0;
+}
+
+/* ==================== Status Bar ==================== */
+.status-bar {
+  height: 24px;
+  background: var(--accent);
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding: 0 12px;
+  font-size: 12px;
+  color: white;
+}
+
+.status-left,
+.status-right {
+  display: flex;
+  gap: 16px;
+}
+
+.status-item {
+  cursor: default;
+  padding: 2px 4px;
+  border-radius: 2px;
+}
+
+.status-item:hover {
+  background: rgba(255,255,255,0.1);
+}
+
 /* Sidebar */
 .sidebar {
   background: var(--bg-secondary);
   border-right: 1px solid var(--border);
   display: flex;
   flex-direction: column;
-  height: 100vh;
+  flex: 1;
+  overflow: hidden;
 }
 
 .sidebar-header {
@@ -166,10 +288,9 @@
 /* Task Panel */
 .task-panel {
   background: var(--bg-secondary);
-  border-right: 1px solid var(--border);
   display: flex;
   flex-direction: column;
-  height: 100vh;
+  flex: 1;
   overflow: hidden;
 }
 
@@ -293,7 +414,8 @@
   background: var(--bg-secondary);
   display: flex;
   flex-direction: column;
-  height: 100vh;
+  flex: 1;
+  overflow: hidden;
 }
 
 .chat-header {
@@ -1309,4 +1431,360 @@
 
 .review-empty p {
   font-size: 13px;
+}
+
+/* ==================== Layout ==================== */
+.app-container {
+  display: flex;
+  flex-direction: column;
+  height: 100vh;
+  width: 100vw;
+  overflow: hidden;
+  background: var(--bg-primary);
+}
+
+.app-main {
+  display: flex;
+  flex-direction: row;
+  flex: 1;
+  overflow: hidden;
+}
+
+.app-content {
+  display: flex;
+  flex: 1;
+  overflow: hidden;
+}
+
+.sidebar-container {
+  width: 240px;
+  min-width: 120px;
+  max-width: 400px;
+  border-right: 1px solid var(--border);
+  overflow: hidden;
+}
+
+.editor-area {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
+
+.right-panels {
+  display: flex;
+  width: 640px;
+  min-width: 320px;
+  max-width: 800px;
+  border-left: 1px solid var(--border);
+}
+
+/* ==================== Activity Bar ==================== */
+.activity-bar {
+  width: 48px;
+  background: var(--bg-tertiary);
+  display: flex;
+  flex-direction: column;
+  justify-content: space-between;
+  border-right: 1px solid var(--border);
+}
+
+.activity-icons {
+  display: flex;
+  flex-direction: column;
+  padding: 8px 0;
+}
+
+.activity-icon {
+  width: 48px;
+  height: 48px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: transparent;
+  border: none;
+  color: var(--text-secondary);
+  cursor: pointer;
+  transition: all 0.15s ease;
+}
+
+.activity-icon:hover {
+  color: var(--text-primary);
+  background: var(--bg-hover);
+}
+
+.activity-icon.active {
+  color: var(--text-primary);
+  border-left: 2px solid var(--accent);
+  background: var(--bg-secondary);
+}
+
+.activity-bottom {
+  padding: 8px 0;
+}
+
+/* ==================== Status Bar ==================== */
+.status-bar {
+  height: 24px;
+  background: var(--accent);
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding: 0 12px;
+  font-size: 12px;
+  color: white;
+}
+
+.status-left,
+.status-right {
+  display: flex;
+  gap: 16px;
+}
+
+.status-item {
+  cursor: default;
+  padding: 2px 4px;
+  border-radius: 2px;
+}
+
+.status-item:hover {
+  background: rgba(255,255,255,0.1);
+}
+
+/* ==================== Settings Modal ==================== */
+.settings-overlay {
+  position: fixed;
+  top: 0;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  background: rgba(0, 0, 0, 0.5);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  z-index: 1000;
+}
+
+.settings-modal {
+  width: 600px;
+  max-height: 80vh;
+  background: var(--bg-secondary);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  display: flex;
+  flex-direction: column;
+  box-shadow: 0 8px 32px rgba(0, 0, 0, 0.5);
+}
+
+.settings-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding: 16px 20px;
+  border-bottom: 1px solid var(--border);
+}
+
+.settings-header h2 {
+  margin: 0;
+  font-size: 18px;
+}
+
+.settings-content {
+  flex: 1;
+  overflow-y: auto;
+  padding: 20px;
+}
+
+.settings-section {
+  margin-bottom: 24px;
+}
+
+.settings-section h3 {
+  margin: 0 0 12px 0;
+  font-size: 14px;
+  color: var(--text-secondary);
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+}
+
+.provider-tabs {
+  display: flex;
+  gap: 8px;
+}
+
+.provider-tab {
+  flex: 1;
+  padding: 12px;
+  background: var(--bg-tertiary);
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  color: var(--text-primary);
+  cursor: pointer;
+  transition: all 0.15s;
+}
+
+.provider-tab:hover {
+  background: var(--bg-hover);
+}
+
+.provider-tab.active {
+  background: var(--accent);
+  border-color: var(--accent);
+  color: white;
+}
+
+.settings-footer {
+  display: flex;
+  justify-content: space-between;
+  padding: 16px 20px;
+  border-top: 1px solid var(--border);
+}
+
+.footer-right {
+  display: flex;
+  gap: 8px;
+}
+
+.settings-footer button {
+  padding: 8px 16px;
+  border-radius: 4px;
+  cursor: pointer;
+  font-size: 14px;
+  background: var(--bg-tertiary);
+  border: 1px solid var(--border);
+  color: var(--text-primary);
+}
+
+.settings-footer button.primary {
+  background: var(--accent);
+  border-color: var(--accent);
+  color: white;
+}
+
+/* ==================== Terminal Panel ==================== */
+.terminal-panel {
+  height: 200px;
+  min-height: 100px;
+  background: var(--bg-primary);
+  border-top: 1px solid var(--border);
+  display: flex;
+  flex-direction: column;
+}
+
+.terminal-sidebar {
+  height: 100%;
+}
+
+.terminal-placeholder {
+  text-align: center;
+  padding: 20px;
+  color: var(--text-secondary);
+}
+
+.terminal-placeholder p {
+  margin: 8px 0;
+}
+
+.terminal-placeholder .hint {
+  font-size: 12px;
+  color: var(--text-secondary);
+}
+
+.terminal-preview {
+  margin-top: 20px;
+  padding: 12px;
+  background: var(--bg-secondary);
+  border-radius: 4px;
+  text-align: left;
+  font-family: monospace;
+}
+
+.cursor {
+  animation: blink 1s step-end infinite;
+}
+
+@keyframes blink {
+  50% { opacity: 0; }
+}
+
+/* ==================== Git Panel Updates ==================== */
+.git-placeholder {
+  text-align: center;
+  padding: 30px 20px;
+  color: var(--text-secondary);
+}
+
+.git-placeholder svg {
+  margin-bottom: 12px;
+  opacity: 0.5;
+}
+
+.git-placeholder .hint {
+  font-size: 12px;
+  margin-top: 8px;
+}
+
+.git-changes,
+.git-commits {
+  margin-top: 16px;
+}
+
+.git-changes h4,
+.git-commits h4 {
+  font-size: 11px;
+  text-transform: uppercase;
+  color: var(--text-secondary);
+  margin-bottom: 8px;
+}
+
+.change-item .badge {
+  font-size: 10px;
+  padding: 2px 6px;
+  border-radius: 2px;
+  background: var(--warning);
+  color: var(--bg-primary);
+}
+
+.branch-indicator {
+  font-size: 11px;
+  padding: 2px 8px;
+  background: var(--bg-tertiary);
+  border-radius: 4px;
+  margin-left: auto;
+}
+
+/* ==================== Search Panel Updates ==================== */
+.search-header {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 12px;
+  font-size: 13px;
+  font-weight: 500;
+  border-bottom: 1px solid var(--border);
+}
+
+.search-header .refresh-btn {
+  margin-left: auto;
+  background: transparent;
+  border: none;
+  color: var(--text-secondary);
+  cursor: pointer;
+  padding: 4px;
+}
+
+.search-placeholder {
+  text-align: center;
+  padding: 40px 20px;
+  color: var(--text-secondary);
+}
+
+.search-placeholder svg {
+  margin-bottom: 12px;
+  opacity: 0.5;
+}
+
+.search-placeholder .hint {
+  font-size: 12px;
+  margin-top: 8px;
 }

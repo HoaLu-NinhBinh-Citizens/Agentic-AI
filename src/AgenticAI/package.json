@@ -2,6 +2,7 @@
   "name": "agentic-ai",
   "version": "1.0.0",
   "description": "AI Agentic IDE like Cursor + Kiro",
+  "author": "AgenticAI <contact@agenticai.local>",
   "main": "electron/main.js",
   "scripts": {
     "dev": "concurrently \"npm run dev:vite\" \"npm run dev:electron\"",
@@ -9,7 +10,8 @@
     "dev:electron": "wait-on http://localhost:5173 && electron .",
     "build": "tsc && vite build && electron-builder",
     "build:vite": "vite build",
-    "build:services": "tsc -p tsconfig.services.json"
+    "build:services": "tsc -p tsconfig.services.json",
+    "clean": "rimraf dist release node_modules/.cache"
   },
   "dependencies": {
     "@anthropic-ai/sdk": "^0.10.0",
@@ -34,12 +36,13 @@
   "devDependencies": {
     "@types/react": "^18.2.43",
     "@types/react-dom": "^18.2.17",
-    "@vitejs/plugin-react": "^4.2.1",
+    "@vitejs/plugin-react": "^4.6.0",
     "concurrently": "^8.2.2",
-    "electron": "^28.1.0",
-    "electron-builder": "^24.9.1",
+    "electron": "^42.3.0",
+    "electron-builder": "^26.8.1",
+    "rimraf": "^5.0.10",
     "typescript": "^5.3.3",
-    "vite": "^5.0.10",
+    "vite": "^6.2.0",
     "wait-on": "^7.2.0"
   },
   "build": {

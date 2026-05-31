@@ -1,17 +1,6 @@
 import { useState, useCallback, useEffect } from 'react';
 import { Command } from '../../shared/types';
 
-declare global {
-  interface Window {
-    electronAPI: {
-      commands: {
-        getAll: () => Promise<{ success: boolean; commands?: Command[] }>;
-        execute: (commandId: string) => Promise<{ success: boolean; error?: string }>;
-      };
-    };
-  }
-}
-
 interface UseCommandPaletteOptions {
   autoLoad?: boolean;
 }
@@ -49,7 +38,8 @@ export function useCommandPalette(options: UseCommandPaletteOptions = {}) {
   }, [autoLoad]);
 
   const loadCommands = useCallback(async () => {
-    if (!window.electronAPI?.commands) {
+    const commandsAPI = (window.electronAPI as any)?.commands;
+    if (!commandsAPI) {
       // Use fallback commands
       setState(prev => ({
         ...prev,
@@ -62,7 +52,7 @@ export function useCommandPalette(options: UseCommandPaletteOptions = {}) {
     setState(prev => ({ ...prev, isLoading: true, error: null }));
 
     try {
-      const result = await window.electronAPI.commands.getAll();
+      const result = await commandsAPI.getAll();
 
       if (result.success && result.commands) {
         setState(prev => ({
@@ -131,9 +121,10 @@ export function useCommandPalette(options: UseCommandPaletteOptions = {}) {
       return { ...prev, recentCommands: recent };
     });
 
-    if (window.electronAPI?.commands) {
+    const commandsAPI = (window.electronAPI as any)?.commands;
+    if (commandsAPI) {
       try {
-        const result = await window.electronAPI.commands.execute(commandId);
+        const result = await commandsAPI.execute(commandId);
         if (!result.success) {
           setState(prev => ({ ...prev, error: result.error || 'Command execution failed' }));
           return false;
@@ -149,7 +140,7 @@ export function useCommandPalette(options: UseCommandPaletteOptions = {}) {
     }
 
     // Fallback: execute command directly if not available
-    const command = state.commands.find(cmd => cmd.id === commandId);
+    const command = state.commands.find((cmd: Command) => cmd.id === commandId);
     if (command) {
       close();
       return true;
@@ -200,7 +191,7 @@ function filterCommands(commands: Command[], query: string): Command[] {
   const lowerQuery = query.toLowerCase().trim();
   const queryWords = lowerQuery.split(/\s+/);
 
-  return commands.filter(cmd => {
+  return commands.filter((cmd: Command) => {
     const label = cmd.label.toLowerCase();
     const category = cmd.category.toLowerCase();
     const id = cmd.id.toLowerCase();
@@ -210,7 +201,7 @@ function filterCommands(commands: Command[], query: string): Command[] {
       category.includes(word) ||
       id.includes(word)
     );
-  }).sort((a, b) => {
+  }).sort((a: Command, b: Command) => {
     // Prioritize exact matches
     const aExact = a.label.toLowerCase() === lowerQuery;
     const bExact = b.label.toLowerCase() === lowerQuery;

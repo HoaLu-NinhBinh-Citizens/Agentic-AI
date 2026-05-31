@@ -122,7 +122,7 @@ export class FixEngine {
   /**
    * Generate a unified diff for display
    */
-  generateDiff(original: string, replacement: string, context: number = 3): DiffResult {
+  private generateDiff(original: string, replacement: string, context: number = 3): DiffResult {
     const originalLines = original.split('\n');
     const replacementLines = replacement.split('\n');
     const hunks: DiffHunk[] = [];
@@ -130,8 +130,6 @@ export class FixEngine {
     let i = 0;
     let j = 0;
     let currentHunk: DiffHunk | null = null;
-    let hunkStartI = 0;
-    let hunkStartJ = 0;
 
     while (i < originalLines.length || j < replacementLines.length) {
       const origLine = originalLines[i];
@@ -150,8 +148,6 @@ export class FixEngine {
             replacementCount: 0,
             lines: [],
           };
-          hunkStartI = i;
-          hunkStartJ = j;
         }
 
         if (isRemove) {

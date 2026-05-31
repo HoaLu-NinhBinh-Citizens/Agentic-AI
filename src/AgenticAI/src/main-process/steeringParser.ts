@@ -29,7 +29,6 @@ const STEERING_FILES: SteeringFile[] = [
 
 const CURSOR_RULES_DIR = '.cursor/rules';
 const AI_SUPPORT_DIR = '.ai_support';
-const KIRO_DIR = '.kiro';
 
 export class SteeringParser {
   private context: SteeringContext = {};
@@ -81,7 +80,8 @@ export class SteeringParser {
   }
 
   private async loadCursorRules(): Promise<void> {
-    const cursorRulesPath = path.join(this.workspacePath!, CURSOR_RULES_DIR);
+    if (!this.workspacePath) return;
+    const cursorRulesPath = path.join(this.workspacePath, CURSOR_RULES_DIR);
     try {
       const ruleFiles = await fs.promises.readdir(cursorRulesPath);
       const mdcFiles = ruleFiles.filter(f => f.endsWith('.mdc'));
@@ -102,7 +102,8 @@ export class SteeringParser {
   }
 
   private async loadAiSupportFiles(): Promise<void> {
-    const aiSupportPath = path.join(this.workspacePath!, AI_SUPPORT_DIR);
+    if (!this.workspacePath) return;
+    const aiSupportPath = path.join(this.workspacePath, AI_SUPPORT_DIR);
     try {
       const files = await fs.promises.readdir(aiSupportPath);
       const mdFiles = files.filter(f => f.endsWith('.md'));
@@ -277,7 +278,7 @@ export class SteeringParser {
   ): void {
     try {
       if (fs.existsSync(dirPath)) {
-        const watcher = fs.watch(dirPath, async (eventType, filename) => {
+        const watcher = fs.watch(dirPath, async (_eventType, filename) => {
           if (filename && filename.endsWith(extension)) {
             await this.loadSteeringFiles();
             callback(this.context, filename);

@@ -1,4 +1,4 @@
-.PHONY: help install test lint format clean docker-build docker-run dev benchmark docs
+.PHONY: help install test lint format clean docker-build docker-run dev benchmark docs agentic-dev agentic-install agentic-clean agentic-build
 
 help:
 	@echo "AI_SUPPORT Makefile"
@@ -16,6 +16,11 @@ help:
 	@echo "  dev          - Start development environment"
 	@echo "  benchmark    - Run performance benchmarks"
 	@echo "  docs         - Build documentation"
+	@echo ""
+	@echo "  agentic-dev     - Start AgenticAI dev server"
+	@echo "  agentic-install - Install AgenticAI dependencies"
+	@echo "  agentic-clean   - Clean AgenticAI build"
+	@echo "  agentic-build    - Build AgenticAI production"
 
 install:
 	pip install -e ".[dev]"
@@ -55,5 +60,21 @@ benchmark:
 
 docs:
 	mkdocs build
+
+# ==================== AgenticAI (Windows PowerShell) ====================
+
+AGENTIC_AI := src/AgenticAI
+
+agentic-install:
+	@cd $(AGENTIC_AI) && npm install
+
+agentic-dev:
+	@cd $(AGENTIC_AI) && npm run dev
+
+agentic-clean:
+	@cd $(AGENTIC_AI) && npm run clean
+
+agentic-build:
+	@cd $(AGENTIC_AI) && npm run build
 
 .DEFAULT_GOAL := help

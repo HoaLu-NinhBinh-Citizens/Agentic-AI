@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useCallback } from 'react';
+import React, { useState, useEffect} from 'react';
 import { FiSettings, FiX, FiSave, FiCheck, FiAlertCircle } from 'react-icons/fi';
 import { OllamaModel, OllamaHealthStatus } from '../../shared/types';
 

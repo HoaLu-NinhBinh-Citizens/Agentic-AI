@@ -44,17 +44,17 @@ export const Terminal: React.FC<TerminalProps> = ({ sessionId, onClose }) => {
     resizeObserver.observe(containerRef.current);
 
     const createTerminalSession = async () => {
-      if (window.electronAPI?.terminalCreate) {
+      if ((window.electronAPI as any)?.terminalCreate) {
         try {
-          const session = await window.electronAPI.terminalCreate();
+          const session = await (window.electronAPI as any).terminalCreate();
           setCurrentSessionId(session.id);
           setIsConnected(true);
 
           terminal.onData(data => {
-            window.electronAPI?.terminalInput(session.id, data);
+            (window.electronAPI as any)?.terminalInput(session.id, data);
           });
 
-          window.electronAPI?.terminalOnOutput(session.id, (output: string) => {
+          (window.electronAPI as any)?.terminalOnOutput(session.id, (output: string) => {
             terminal.write(output);
           });
         } catch {
@@ -84,15 +84,15 @@ export const Terminal: React.FC<TerminalProps> = ({ sessionId, onClose }) => {
       resizeObserver.disconnect();
       terminal.dispose();
       
-      if (currentSessionId && window.electronAPI?.terminalClose) {
-        window.electronAPI.terminalClose(currentSessionId);
+      if (currentSessionId && (window.electronAPI as any)?.terminalClose) {
+        (window.electronAPI as any).terminalClose(currentSessionId);
       }
     };
-  }, []);
+  }, [currentSessionId]);
 
   const handleClose = () => {
-    if (currentSessionId && window.electronAPI?.terminalClose) {
-      window.electronAPI.terminalClose(currentSessionId);
+    if (currentSessionId && (window.electronAPI as any)?.terminalClose) {
+      (window.electronAPI as any).terminalClose(currentSessionId);
     }
     onClose?.();
   };

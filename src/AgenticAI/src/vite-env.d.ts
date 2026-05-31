@@ -170,6 +170,57 @@ interface FileEntry {
   isDirectory: boolean;
 }
 
+interface GitAPI {
+  gitBranch: (path?: string) => Promise<string>;
+  gitInfo: (path: string) => Promise<{
+    isRepo: boolean;
+    branch: string;
+    branches: string[];
+    status: {
+      modified: string[];
+      staged: string[];
+      created: string[];
+      deleted: string[];
+      not_added: string[];
+      current: string;
+      tracking: string | null;
+    } | null;
+    remotes: string[];
+  }>;
+  gitLog: (path: string, count: number) => Promise<Array<{
+    hash: string;
+    message: string;
+    author: string;
+    date: string;
+  }>>;
+  gitStage: (path: string, files: string[]) => Promise<boolean>;
+  gitCommit: (path: string, message: string) => Promise<boolean>;
+  gitCheckout: (path: string, branch: string) => Promise<boolean>;
+}
+
+interface SearchAPI {
+  search: (options: {
+    query: string;
+    path: string;
+    caseSensitive?: boolean;
+    wholeWord?: boolean;
+    regex?: boolean;
+  }) => Promise<Array<{
+    file: string;
+    line: number;
+    column: number;
+    match: string;
+    context: string;
+  }>>;
+}
+
+interface TerminalAPI {
+  terminalCreate: () => Promise<{ id: string }>;
+  terminalClose: (id: string) => Promise<void>;
+  terminalInput: (id: string, data: string) => void;
+  terminalOnOutput: (id: string, callback: (output: string) => void) => void;
+}
+
 interface Window {
   electronAPI?: {
     openDirectory: () => Promise<string | undefined>;
@@ -184,6 +235,9 @@ interface Window {
     steering: SteeringAPI;
     storage: StorageAPI;
     app: AppAPI;
+    git: GitAPI;
+    search: SearchAPI;
+    terminal: TerminalAPI;
     // Ollama
     ollamaHealth: (timeout?: number) => Promise<OllamaHealthStatus>;
     ollamaListModels: () => Promise<OllamaModel[]>;
@@ -202,5 +256,15 @@ interface Window {
     ollamaPullModel: (model: string, onProgress?: (progress: PullProgress) => void) => Promise<boolean>;
     ollamaGetContextLimit: (model: string) => Promise<number>;
     ollamaOnChunk: (callback: (chunk: string) => void) => void;
+    // Legacy aliases
+    gitBranch?: (path?: string) => Promise<string>;
+    gitInfo?: (path: string) => ReturnType<GitAPI['gitInfo']>;
+    gitLog?: (path: string, count: number) => ReturnType<GitAPI['gitLog']>;
+    gitStage?: (path: string, files: string[]) => ReturnType<GitAPI['gitStage']>;
+    gitCommit?: (path: string, message: string) => ReturnType<GitAPI['gitCommit']>;
+    gitCheckout?: (path: string, branch: string) => ReturnType<GitAPI['gitCheckout']>;
+    // Direct storage helpers
+    storeSet?: (key: string, value: unknown) => Promise<void>;
+    storeGet?: (key: string) => Promise<unknown>;
   };
 }

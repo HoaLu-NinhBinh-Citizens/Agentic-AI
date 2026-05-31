@@ -32,7 +32,7 @@ class TerminalManager {
           proc.stdin.write(data);
         }
       },
-      resize: (cols: number, rows: number) => {
+      resize: (_cols: number, _rows: number) => {
         // Note: node-pty would be needed for proper resize
         // This is a simplified version
       },
@@ -66,7 +66,7 @@ class TerminalManager {
     return false;
   }
 
-  getOutput(id: string): string {
+  getOutput(_id: string): string {
     // For simpler implementation, we'll track output through event handlers
     return '';
   }

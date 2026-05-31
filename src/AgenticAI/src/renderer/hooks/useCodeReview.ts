@@ -1,46 +1,6 @@
 import { useState, useCallback } from 'react';
 import { CodeIssue, CodeReviewResult, Fix } from '../../shared/types';
 
-declare global {
-  interface Window {
-    electronAPI: {
-      code: {
-        analyze: (filePath: string, content: string) => Promise<{
-          success: boolean;
-          error?: string;
-          functions?: any[];
-          imports?: any[];
-          exports?: any[];
-          complexity?: number;
-          issues?: CodeIssue[];
-        }>;
-        review: (filePath: string, content: string) => Promise<{
-          success: boolean;
-          error?: string;
-          filePath?: string;
-          analysis?: any;
-          securityIssues?: CodeIssue[];
-          allIssues?: CodeIssue[];
-          totalIssues?: number;
-          errorCount?: number;
-          warningCount?: number;
-          infoCount?: number;
-        }>;
-        applyFix: (fix: Fix) => Promise<{ success: boolean; error?: string }>;
-        applyMultipleFixes: (fixes: Fix[]) => Promise<{
-          success: boolean;
-          applied?: Fix[];
-          failed?: Fix[];
-          errors?: string[];
-        }>;
-      };
-      commands: {
-        getAll: () => Promise<{ success: boolean; commands?: any[] }>;
-      };
-    };
-  }
-}
-
 interface UseCodeReviewOptions {
   onIssueFound?: (issue: CodeIssue) => void;
   onReviewComplete?: (result: CodeReviewResult) => void;
@@ -65,7 +25,8 @@ export function useCodeReview(options: UseCodeReviewOptions = {}) {
   });
 
   const analyzeFile = useCallback(async (filePath: string, content: string) => {
-    if (!window.electronAPI?.code) {
+    const codeAPI = (window.electronAPI as any)?.code;
+    if (!codeAPI) {
       setState(prev => ({ ...prev, error: 'Code analysis not available' }));
       return null;
     }
@@ -73,7 +34,7 @@ export function useCodeReview(options: UseCodeReviewOptions = {}) {
     setState(prev => ({ ...prev, isAnalyzing: true, error: null }));
 
     try {
-      const result = await window.electronAPI.code.analyze(filePath, content);
+      const result = await codeAPI.analyze(filePath, content);
 
       if (result.success) {
         setState(prev => ({
@@ -101,7 +62,8 @@ export function useCodeReview(options: UseCodeReviewOptions = {}) {
   }, []);
 
   const reviewFile = useCallback(async (filePath: string, content: string) => {
-    if (!window.electronAPI?.code) {
+    const codeAPI = (window.electronAPI as any)?.code;
+    if (!codeAPI) {
       setState(prev => ({ ...prev, error: 'Code analysis not available' }));
       return null;
     }
@@ -109,7 +71,7 @@ export function useCodeReview(options: UseCodeReviewOptions = {}) {
     setState(prev => ({ ...prev, isReviewing: true, error: null, issues: [] }));
 
     try {
-      const result = await window.electronAPI.code.review(filePath, content);
+      const result = await codeAPI.review(filePath, content);
 
       if (result.success) {
         const allIssues = result.allIssues || [];
@@ -130,7 +92,7 @@ export function useCodeReview(options: UseCodeReviewOptions = {}) {
         });
 
         // Notify about each issue
-        allIssues.forEach(issue => {
+        allIssues.forEach((issue: CodeIssue) => {
           options.onIssueFound?.(issue);
         });
 
@@ -159,20 +121,21 @@ export function useCodeReview(options: UseCodeReviewOptions = {}) {
       return false;
     }
 
-    if (!window.electronAPI?.code) {
+    const codeAPI = (window.electronAPI as any)?.code;
+    if (!codeAPI) {
       setState(prev => ({ ...prev, error: 'Code analysis not available' }));
       return false;
     }
 
     const fix: Fix = {
-      file: '', // Would be passed in real usage
+      file: '',
       original: issue.fix.original,
       replacement: issue.fix.replacement,
       explanation: issue.fix.description,
     };
 
     try {
-      const result = await window.electronAPI.code.applyFix(fix);
+      const result = await codeAPI.applyFix(fix);
 
       if (result.success) {
         // Remove fixed issue from list
@@ -212,19 +175,20 @@ export function useCodeReview(options: UseCodeReviewOptions = {}) {
       return false;
     }
 
-    if (!window.electronAPI?.code) {
+    const codeAPI = (window.electronAPI as any)?.code;
+    if (!codeAPI) {
       setState(prev => ({ ...prev, error: 'Code analysis not available' }));
       return false;
     }
 
     try {
-      const result = await window.electronAPI.code.applyMultipleFixes(fixes);
+      const result = await codeAPI.applyMultipleFixes(fixes);
 
       if (result.success) {
         // Remove fixed issues from list
         setState(prev => ({
           ...prev,
-          issues: prev.issues.filter(i => !result.applied?.some(f => f.original === i.fix?.original)),
+          issues: prev.issues.filter(i => !result.applied?.some((f: Fix) => f.original === i.fix?.original)),
         }));
         return true;
       } else {
