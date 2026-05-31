@@ -34,19 +34,119 @@ from rich.tree import Tree
 
 # ─── Theme ───────────────────────────────────────────────────────────────────
 
+class ThemeMode(Enum):
+    """Theme mode enumeration."""
+    DARK = "dark"
+    LIGHT = "light"
+
+
 class Theme:
-    """Cursor-like color theme."""
-    BG = "#1e1e2e"           # Dark background
-    BG_LIGHT = "#2a2a3e"    # Lighter panels
-    BG_PANEL = "#252536"     # Panel background
-    ACCENT = "#89b4fa"       # Blue accent
-    ACCENT_GREEN = "#a6e3a1" # Green accent
-    ACCENT_RED = "#f38ba8"   # Red accent
-    ACCENT_YELLOW = "#f9e2af" # Yellow accent
-    TEXT = "#cdd6f4"         # Main text
-    TEXT_DIM = "#6c7086"    # Dim text
-    BORDER = "#45475a"       # Border color
-    SELECTION = "#313244"    # Selection color
+    """Cursor-like color theme with dark/light mode support."""
+
+    # Dark theme (default)
+    _dark = {
+        "bg": "#1e1e2e",
+        "bg_light": "#2a2a3e",
+        "bg_panel": "#252536",
+        "accent": "#89b4fa",
+        "accent_green": "#a6e3a1",
+        "accent_red": "#f38ba8",
+        "accent_yellow": "#f9e2af",
+        "text": "#cdd6f4",
+        "text_dim": "#6c7086",
+        "border": "#45475a",
+        "selection": "#313244",
+    }
+
+    # Light theme
+    _light = {
+        "bg": "#ffffff",
+        "bg_light": "#f5f5f5",
+        "bg_panel": "#fafafa",
+        "accent": "#0078d4",
+        "accent_green": "#107c10",
+        "accent_red": "#d13438",
+        "accent_yellow": "#ca5010",
+        "text": "#242424",
+        "text_dim": "#616161",
+        "border": "#e0e0e0",
+        "selection": "#e8e8e8",
+    }
+
+    _current_mode: ThemeMode = ThemeMode.DARK
+
+    @classmethod
+    def set_mode(cls, mode: ThemeMode) -> None:
+        """Set the current theme mode."""
+        cls._current_mode = mode
+
+    @classmethod
+    def get_mode(cls) -> ThemeMode:
+        """Get the current theme mode."""
+        return cls._current_mode
+
+    @classmethod
+    def toggle(cls) -> ThemeMode:
+        """Toggle between dark and light mode."""
+        cls._current_mode = (
+            ThemeMode.LIGHT if cls._current_mode == ThemeMode.DARK else ThemeMode.DARK
+        )
+        return cls._current_mode
+
+    @classmethod
+    @property
+    def BG(cls) -> str:
+        return cls._dark["bg"] if cls._current_mode == ThemeMode.DARK else cls._light["bg"]
+
+    @classmethod
+    @property
+    def BG_LIGHT(cls) -> str:
+        return cls._dark["bg_light"] if cls._current_mode == ThemeMode.DARK else cls._light["bg_light"]
+
+    @classmethod
+    @property
+    def BG_PANEL(cls) -> str:
+        return cls._dark["bg_panel"] if cls._current_mode == ThemeMode.DARK else cls._light["bg_panel"]
+
+    @classmethod
+    @property
+    def ACCENT(cls) -> str:
+        return cls._dark["accent"] if cls._current_mode == ThemeMode.DARK else cls._light["accent"]
+
+    @classmethod
+    @property
+    def ACCENT_GREEN(cls) -> str:
+        return cls._dark["accent_green"] if cls._current_mode == ThemeMode.DARK else cls._light["accent_green"]
+
+    @classmethod
+    @property
+    def ACCENT_RED(cls) -> str:
+        return cls._dark["accent_red"] if cls._current_mode == ThemeMode.DARK else cls._light["accent_red"]
+
+    @classmethod
+    @property
+    def ACCENT_YELLOW(cls) -> str:
+        return cls._dark["accent_yellow"] if cls._current_mode == ThemeMode.DARK else cls._light["accent_yellow"]
+
+    @classmethod
+    @property
+    def TEXT(cls) -> str:
+        return cls._dark["text"] if cls._current_mode == ThemeMode.DARK else cls._light["text"]
+
+    @classmethod
+    @property
+    def TEXT_DIM(cls) -> str:
+        return cls._dark["text_dim"] if cls._current_mode == ThemeMode.DARK else cls._light["text_dim"]
+
+    @classmethod
+    @property
+    def BORDER(cls) -> str:
+        return cls._dark["border"] if cls._current_mode == ThemeMode.DARK else cls._light["border"]
+
+    @classmethod
+    @property
+    def SELECTION(cls) -> str:
+        return cls._dark["selection"] if cls._current_mode == ThemeMode.DARK else cls._light["selection"]
 
     @classmethod
     def rich_styles(cls) -> dict[str, str]:
@@ -193,16 +293,17 @@ class FileTreeRenderer:
 
     def _file_icon(self, ext: str) -> str:
         icons = {
-            ".py": "🐍", ".js": "📜", ".ts": "📘", ".tsx": "⚛",
-            ".jsx": "⚛", ".rs": "🦀", ".go": "🐹", ".java": "☕",
-            ".c": "⚙", ".h": "⚙", ".cpp": "⚙", ".hpp": "⚙",
-            ".md": "📝", ".json": "📋", ".yaml": "📋", ".yml": "📋",
-            ".toml": "📋", ".txt": "📄", ".sh": "🔧", ".bash": "🔧",
-            ".css": "🎨", ".html": "🌐", ".vue": "💚", ".svelte": "🔥",
-            ".sql": "🗃️", ".db": "🗃️", ".gitignore": "🚫", ".env": "🔐",
-            ".png": "🖼️", ".jpg": "🖼️", ".svg": "🖼️", ".gif": "🖼️",
+            ".py": "[P]", ".js": "[J]", ".ts": "[T]", ".tsx": "[TX]",
+            ".jsx": "[JS]", ".rs": "[R]", ".go": "[GO]", ".java": "[JV]",
+            ".c": "[C]", ".h": "[H]", ".cpp": "[C]", ".hpp": "[H]",
+            ".md": "[MD]", ".json": "[JS]", ".yaml": "[YM]", ".yml": "[YM]",
+            ".toml": "[TM]", ".txt": "[T]", ".sh": "[SH]", ".bash": "[SH]",
+            ".css": "[CS]", ".html": "[HT]", ".vue": "[VU]", ".svelte": "[SV]",
+            ".sql": "[SQ]", ".db": "[DB]", ".gitignore": "[--]", ".env": "[EN]",
+            ".png": "[--]", ".jpg": "[--]", ".svg": "[--]", ".gif": "[--]",
+            ".pyc": "", ".pyo": "", ".so": "", ".dll": "", ".o": "",
         }
-        return icons.get(ext, "📄")
+        return icons.get(ext, "[F]")
 
     def toggle_expand(self, path: Path) -> None:
         if path in self._expanded:
@@ -301,7 +402,7 @@ class TerminalRenderer:
 
     def add_command(self, text: str) -> None:
         """Add a command (user input) line."""
-        self.add_line(f"❯ {text}", style=f"bold {Theme.ACCENT}", is_command=True)
+        self.add_line(f"> {text}", style=f"bold {Theme.ACCENT}", is_command=True)
 
     def add_output(self, text: str) -> None:
         """Add a command output line."""
@@ -542,6 +643,86 @@ class AISupportTUI:
         }
         return langs.get(path.suffix, "Plain Text")
 
+    # ─── Theme Toggle ──────────────────────────────────────────────────────────
+
+    def toggle_theme(self) -> str:
+        """Toggle between dark and light theme.
+
+        Returns:
+            Name of new theme mode
+        """
+        new_mode = Theme.toggle()
+        mode_name = "Light" if new_mode == ThemeMode.LIGHT else "Dark"
+        self.terminal.add_success(f"Switched to {mode_name} theme")
+        self.render()
+        return mode_name
+
+    # ─── LSP Diagnostics ──────────────────────────────────────────────────────
+
+    async def refresh_diagnostics(self) -> None:
+        """Refresh LSP diagnostics for current file."""
+        if not self.selected_file:
+            return
+
+        self.terminal.add_output("Checking diagnostics...")
+
+        try:
+            from src.interfaces.tui.lsp_diagnostics import LSPClient
+            lsp = LSPClient(self.workspace_root)
+            diagnostics = await lsp.get_diagnostics(self.selected_file)
+
+            if diagnostics:
+                self.terminal.add_output(
+                    f"Found {len(diagnostics.diagnostics)} diagnostic(s)"
+                )
+            else:
+                self.terminal.add_output("No diagnostics")
+
+        except Exception as e:
+            self.terminal.add_output(f"Diagnostics unavailable: {e}")
+
+        self.render()
+
+    # ─── Diff View ─────────────────────────────────────────────────────────────
+
+    def show_diff(self, old_content: str, new_content: str) -> None:
+        """Show diff between old and new content.
+
+        Args:
+            old_content: Original content
+            new_content: New content
+        """
+        try:
+            from src.interfaces.tui.diff_view import DiffViewRenderer
+            renderer = DiffViewRenderer()
+            diff = renderer.compute_diff(
+                old_content,
+                new_content,
+                old_path=str(self.selected_file) if self.selected_file else "old",
+                new_path=str(self.selected_file) if self.selected_file else "new",
+            )
+
+            lines = renderer.render_unified(diff)
+            stats = renderer.render_stats(diff)
+
+            self.terminal.add_output(stats)
+
+            for line in lines[:50]:
+                if "+" in line[:3]:
+                    self.terminal.add_line(line, style=Theme.ACCENT_GREEN)
+                elif "-" in line[:3]:
+                    self.terminal.add_line(line, style=Theme.ACCENT_RED)
+                else:
+                    self.terminal.add_output(line)
+
+            if len(lines) > 50:
+                self.terminal.add_output(f"... and {len(lines) - 50} more lines")
+
+        except Exception as e:
+            self.terminal.add_error(f"Failed to show diff: {e}")
+
+        self.render()
+
     # ─── Layout ──────────────────────────────────────────────────────────────
 
     def _build_layout(self) -> None:
@@ -732,6 +913,9 @@ class AISupportTUI:
             ("Save File", "Ctrl+S"),
             ("Toggle File Tree", "Ctrl+B"),
             ("Toggle Chat", "Ctrl+Shift+M"),
+            ("Toggle Theme", "Ctrl+T"),
+            ("Run Diagnostics", "Ctrl+Shift+D"),
+            ("Show Diff", "Ctrl+Shift+L"),
             ("Settings", "Ctrl+,"),
         ]
         table = Table(box=box.ROUNDED, show_header=False, pad_edge=False)
@@ -753,7 +937,7 @@ class AISupportTUI:
         self.terminal.add_output(f"Type /help or press Ctrl+K for commands")
         self.render()
 
-        print(f"\n[dim]{'─' * 60}[/dim]")
+        print(f"\n[dim]{'-' * 60}[/dim]")
         print("[dim]Controls:[/dim]")
         for key, desc in TUIControls.get_key_bindings().items():
             print(f"  [dim]{key:<20}[/dim] {desc}")
@@ -763,7 +947,7 @@ class AISupportTUI:
         try:
             while True:
                 try:
-                    user_input = input("\n❯ ").strip()
+                    user_input = input("\n> ").strip()
                 except (KeyboardInterrupt, EOFError):
                     break
 
@@ -789,6 +973,10 @@ class AISupportTUI:
                     self.toggle_chat()
                 elif user_input == "term":
                     self.toggle_terminal()
+                elif user_input == "theme":
+                    self.toggle_theme()
+                elif user_input == "diag":
+                    asyncio.create_task(self.refresh_diagnostics())
                 elif user_input == "help":
                     self.show_command_palette()
                 else:
@@ -837,6 +1025,10 @@ class AISupportTUI:
             self.show_review()
         elif cmd.startswith("/fix"):
             self.show_fixes()
+        elif cmd == "/theme":
+            self.toggle_theme()
+        elif cmd == "/diag" or cmd == "/diagnostics":
+            asyncio.create_task(self.refresh_diagnostics())
         elif cmd == "/stats":
             self.terminal.add_output("Stats: Review completed with 3 findings")
         else:

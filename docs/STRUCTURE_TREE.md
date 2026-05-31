@@ -307,8 +307,11 @@ src/
 │   │
 │   ├── validation/
 │   │
-│   └── eda/
-│       └── kicad.py
+│   ├── eda/
+│   │   └── kicad.py
+│   │
+│   └── review/                                  # Code review modules
+│       └── review_retriever.py                  # RAG-enhanced retrieval
 │
 ├── application/                               # Use cases & orchestration
 │   │
@@ -613,7 +616,9 @@ src/
 │   │   ├── app.py
 │   │   ├── screens/
 │   │   ├── widgets/
-│   │   └── state/
+│   │   ├── state/
+│   │   ├── lsp_diagnostics.py                  # LSP diagnostics integration
+│   │   └── diff_view.py                        # Diff view for fixes
 │   │
 │   ├── ide/
 │   │   ├── bridge/
@@ -732,6 +737,9 @@ tests/
 │   ├── phase5c/                        # Phase 5C (Retrieval Engine) tests
 │   │   ├── test_phase5c_components.py  # Core components
 │   │   └── test_phase5c_extended.py    # Extended features
+│   ├── test_review_retriever.py        # RAG-enhanced retrieval tests
+│   ├── test_lsp_diagnostics.py          # LSP diagnostics tests
+│   └── test_diff_view.py                # Diff view tests
 │   └── workflow/
 │       └── test_workflow_runtime.py
 ├── integration/
