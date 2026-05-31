@@ -146,6 +146,12 @@ export const Sidebar: React.FC = () => {
     restoreWorkspace();
   }, []);
 
+  useEffect(() => {
+    if (workspacePath && files.length === 0) {
+      loadDirectory(workspacePath);
+    }
+  }, [workspacePath]);
+
   return (
     <div className="sidebar">
       <div className="sidebar-header">
