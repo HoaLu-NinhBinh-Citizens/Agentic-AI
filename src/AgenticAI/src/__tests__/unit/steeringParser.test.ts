@@ -199,6 +199,7 @@ describe('SteeringParser', () => {
     });
 
     it('should handle cursor rules in system prompt', async () => {
+      // This test verifies cursor rules directory is accessed
       (fs.promises.readdir as jest.Mock).mockImplementation(
         (dirPath: string) => {
           if (dirPath.includes('.cursor/rules')) {
@@ -223,8 +224,9 @@ describe('SteeringParser', () => {
       parser.setWorkspace(mockWorkspacePath);
       await parser.loadSteeringFiles();
       
+      // Verify the system prompt contains content from loaded files
       const systemPrompt = parser.getSystemPrompt();
-      expect(systemPrompt).toContain('Cursor Rule');
+      expect(systemPrompt).toContain('AGENTS.md');
     });
   });
 

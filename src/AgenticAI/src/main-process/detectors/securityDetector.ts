@@ -495,41 +495,44 @@ export const insecureRandomDetector: SecurityDetector = {
         plugins: ['typescript'],
       });
 
-      traverse(ast, {
-        CallExpression(path) {
-          const callee = path.node.callee;
+  traverse(ast, {
+    CallExpression(path) {
+      const callee = path.node.callee;
 
-          if (callee.type === 'Identifier') {
-            // Math.random() for security purposes
-            if (callee.name === 'random' && path.parent?.type === 'MemberExpression') {
-              const parent = path.parent;
-              if (parent.object.type === 'Identifier' && parent.object.name === 'Math' && parent.property.type === 'Identifier' && parent.property.name === 'random') {
-                issues.push({
-                  id: generateIssueId(),
-                  severity: 'warning',
-                  rule: 'INSECURE_RANDOM',
-                  message: 'Math.random() is not cryptographically secure; use crypto.randomBytes() or crypto.randomUUID()',
-                  line: path.node.loc?.start.line || 0,
-                  column: path.node.loc?.start.column,
-                });
-              }
-            }
+      // Check for Math.random() specifically
+      if (callee.type === 'MemberExpression') {
+        const obj = callee.object;
+        const prop = callee.property;
 
-            // Weak PRNGs
-            if (['rand', 'srand', 'random'].some(fn => callee.name === fn)) {
-              // Check for common weak random patterns
-              issues.push({
-                id: generateIssueId(),
-                severity: 'warning',
-                rule: 'WEAK_RANDOM',
-                message: 'Non-cryptographic random number generator detected',
-                line: path.node.loc?.start.line || 0,
-                column: path.node.loc?.start.column,
-              });
-            }
-          }
-        },
-      });
+        if (obj.type === 'Identifier' && obj.name === 'Math' &&
+            prop.type === 'Identifier' && prop.name === 'random') {
+          issues.push({
+            id: generateIssueId(),
+            severity: 'warning',
+            rule: 'INSECURE_RANDOM',
+            message: 'Math.random() is not cryptographically secure; use crypto.randomBytes() or crypto.randomUUID()',
+            line: path.node.loc?.start.line || 0,
+            column: path.node.loc?.start.column,
+          });
+        }
+      }
+
+      if (callee.type === 'Identifier') {
+        // Weak PRNGs
+        if (['rand', 'srand', 'random'].some(fn => callee.name === fn)) {
+          // Check for common weak random patterns
+          issues.push({
+            id: generateIssueId(),
+            severity: 'warning',
+            rule: 'WEAK_RANDOM',
+            message: 'Non-cryptographic random number generator detected',
+            line: path.node.loc?.start.line || 0,
+            column: path.node.loc?.start.column,
+          });
+        }
+      }
+    },
+  });
     } catch (e) {
       // Ignore parsing errors
     }

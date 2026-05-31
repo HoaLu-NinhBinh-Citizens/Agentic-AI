@@ -254,6 +254,16 @@ function detectJSIssues(ast: any, issues: CodeIssue[]) {
         });
       }
     },
+    DebuggerStatement(path) {
+      issues.push({
+        id: generateIssueId(),
+        severity: 'warning',
+        rule: 'DEBUGGER',
+        message: 'Remove debugger statement before production',
+        line: path.node.loc?.start.line || 0,
+        column: path.node.loc?.start.column,
+      });
+    },
     Identifier(path) {
       // Check for console.log in production
       if (path.node.name === 'console') {
@@ -268,18 +278,6 @@ function detectJSIssues(ast: any, issues: CodeIssue[]) {
             column: path.node.loc?.start.column,
           });
         }
-      }
-
-      // Check for debugger statements
-      if (path.node.name === 'debugger') {
-        issues.push({
-          id: generateIssueId(),
-          severity: 'warning',
-          rule: 'DEBUGGER',
-          message: 'Remove debugger statement before production',
-          line: path.node.loc?.start.line || 0,
-          column: path.node.loc?.start.column,
-        });
       }
     },
     UnaryExpression(path) {
