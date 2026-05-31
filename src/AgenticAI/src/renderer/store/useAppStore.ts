@@ -1,5 +1,5 @@
 import { create } from 'zustand';
-import { FileNode, Task, Spec, ChatMessage, SteeringContext } from '../shared/types';
+import { FileNode, Task, Spec, ChatMessage, SteeringContext } from '../../shared/types';
 
 interface AppStore {
   // Workspace
