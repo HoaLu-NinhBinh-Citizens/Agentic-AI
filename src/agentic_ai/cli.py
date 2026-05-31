@@ -75,6 +75,28 @@ Examples:
                            help="Action")
     lsp_parser.add_argument("file", help="File path")
     
+    # LLM command
+    llm_parser = subparsers.add_parser("llm", help="Local LLM (Ollama) management")
+    llm_sub = llm_parser.add_subparsers(dest="llm_action", help="LLM actions")
+    
+    # LLM status
+    status_parser = llm_sub.add_parser("status", help="Check local LLM status")
+    status_parser.set_defaults(func="_llm_status")
+    
+    # LLM models
+    models_parser = llm_sub.add_parser("models", help="List available models")
+    models_parser.set_defaults(func="_llm_models")
+    
+    # LLM pull
+    pull_parser = llm_sub.add_parser("pull", help="Pull a model")
+    pull_parser.add_argument("model", help="Model name")
+    pull_parser.set_defaults(func="_llm_pull")
+    
+    # LLM info
+    info_parser = llm_sub.add_parser("info", help="Show model info")
+    info_parser.add_argument("model", help="Model name")
+    info_parser.set_defaults(func="_llm_info")
+    
     args = parser.parse_args()
     
     # Default to interactive mode
@@ -100,6 +122,14 @@ def handle_command(args):
         manage_session(args)
     elif args.command == "lsp":
         run_lsp(args)
+    elif args.command == "llm":
+        # Handle LLM subcommands
+        llm_func = getattr(args, "func", None)
+        if llm_func:
+            func = globals().get(llm_func)
+            if func and callable(func):
+                return func(args)
+        return handle_llm_command(args)
 
 
 def run_interactive(args):
@@ -432,6 +462,183 @@ def run_lsp(args):
     print()
     print("LSP features require running language server")
     print("Start with: agentic-ai lsp diagnostics <file>")
+
+
+async def _llm_status_async():
+    """Check local LLM status."""
+    from src.infrastructure.llm.local_provider import LocalLLMProvider
+    
+    provider = LocalLLMProvider()
+    print(f"Checking local LLM at {provider.config.base_url}...")
+    
+    available = await provider.health_check()
+    
+    if available:
+        print("[OK] Local LLM is running")
+        
+        # Try to list models
+        try:
+            from src.infrastructure.llm.ollama_adapter import OllamaAdapter
+            adapter = OllamaAdapter()
+            models = await adapter.list_models()
+            if models:
+                print(f"\nAvailable models ({len(models)}):")
+                for m in models:
+                    print(f"  - {m.get('name', 'unknown')}")
+            await adapter.close()
+        except Exception as e:
+            print(f"Warning: Could not list models: {e}")
+        
+        await provider.close()
+        return 0
+    else:
+        print("[X] Local LLM is not running")
+        print("\nTo start Ollama, run:")
+        print("  ollama serve")
+        print("\nOr install Ollama from: https://ollama.ai")
+        await provider.close()
+        return 1
+
+
+def _llm_status(args):
+    """Sync wrapper for LLM status."""
+    return asyncio.run(_llm_status_async())
+
+
+async def _llm_models_async():
+    """List available models."""
+    from src.infrastructure.llm.ollama_adapter import OllamaAdapter
+    
+    adapter = OllamaAdapter()
+    
+    print("Fetching models from Ollama...")
+    models = await adapter.list_models()
+    
+    if models:
+        print(f"\nAvailable models ({len(models)}):\n")
+        for m in models:
+            name = m.get("name", "unknown")
+            size = m.get("size", 0)
+            print(f"  {name} ({_format_size(size)})")
+    else:
+        print("\nNo models found.")
+        print("\nTo pull a model, run:")
+        print("  agentic-ai llm pull llama3.2")
+    
+    await adapter.close()
+    return 0
+
+
+def _llm_models(args):
+    """Sync wrapper for LLM models."""
+    return asyncio.run(_llm_models_async())
+
+
+async def _llm_pull_async(model: str):
+    """Pull a model from Ollama registry."""
+    from src.infrastructure.llm.ollama_adapter import OllamaAdapter
+    
+    adapter = OllamaAdapter()
+    
+    print(f"Pulling model: {model}")
+    print("(This may take several minutes depending on model size and network)\n")
+    
+    try:
+        async for status in adapter.pull_model(model):
+            print(f"  {status}")
+        
+        print("\nModel pulled successfully!")
+        await adapter.close()
+        return 0
+    except Exception as e:
+        print(f"\nFailed to pull model: {e}")
+        await adapter.close()
+        return 1
+
+
+def _llm_pull(args):
+    """Sync wrapper for LLM pull."""
+    return asyncio.run(_llm_pull_async(args.model))
+
+
+async def _llm_info_async(model: str):
+    """Show information about a model."""
+    from src.infrastructure.llm.ollama_adapter import OllamaAdapter
+    
+    adapter = OllamaAdapter()
+    
+    print(f"Fetching info for: {model}...")
+    
+    info = await adapter.get_model_info(model)
+    
+    if info:
+        print("\nModel Information:")
+        print("-" * 40)
+        
+        if "modelfile" in info:
+            print("\nModelfile:")
+            modelfile = info["modelfile"]
+            for line in modelfile.split("\n")[:20]:
+                print(f"  {line}")
+            if len(modelfile.split("\n")) > 20:
+                print("  ... (truncated)")
+        
+        if "parameters" in info:
+            print("\nParameters:")
+            print(f"  {info['parameters']}")
+    else:
+        print(f"\nModel '{model}' not found.")
+    
+    await adapter.close()
+    return 0
+
+
+def _llm_info(args):
+    """Sync wrapper for LLM info."""
+    return asyncio.run(_llm_info_async(args.model))
+
+
+def _format_size(size_bytes: int) -> str:
+    """Format bytes as human-readable string."""
+    if size_bytes == 0:
+        return "unknown"
+    
+    units = ["B", "KB", "MB", "GB", "TB"]
+    unit_idx = 0
+    size = float(size_bytes)
+    
+    while size >= 1024 and unit_idx < len(units) - 1:
+        size /= 1024
+        unit_idx += 1
+    
+    if unit_idx == 0:
+        return f"{int(size)} {units[unit_idx]}"
+    return f"{size:.1f} {units[unit_idx]}"
+
+
+def handle_llm_command(args):
+    """Handle LLM subcommands."""
+    if not hasattr(args, "llm_action") or not args.llm_action:
+        print("Available LLM commands:")
+        print("  agentic-ai llm status   - Check if local LLM is running")
+        print("  agentic-ai llm models   - List available models")
+        print("  agentic-ai llm pull <m> - Pull a model")
+        print("  agentic-ai llm info <m> - Show model info")
+        return 1
+    
+    # Dispatch to handler
+    handler_map = {
+        "status": _llm_status,
+        "models": _llm_models,
+        "pull": _llm_pull,
+        "info": _llm_info,
+    }
+    
+    handler = handler_map.get(args.llm_action)
+    if handler:
+        return handler(args)
+    
+    return 1
 
 
 if __name__ == "__main__":

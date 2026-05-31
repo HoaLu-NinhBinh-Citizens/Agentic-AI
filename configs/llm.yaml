@@ -52,6 +52,15 @@ providers:
     # For local LLM inference (no API key required)
     # Set OLLAMA_BASE_URL if not using default http://localhost:11434
 
+# Local LLM Provider (Ollama/llama.cpp) Configuration
+local_provider:
+  enabled: true
+  base_url: "http://localhost:11434"
+  default_model: "llama3.2"
+  timeout: 120
+  temperature: 0.7
+  max_tokens: 4096
+
 # Fix suggestion settings
 fix_suggestion:
   # Maximum lines of context to include in prompt

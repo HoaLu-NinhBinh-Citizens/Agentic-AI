@@ -13,7 +13,7 @@ from .client import (
 )
 from .local_provider import (
     LocalLLMProvider,
-    LLMConfig as LocalLLMConfig,
+    LocalLLMConfig,
     LocalModelInfo,
 )
 from .prompts import (

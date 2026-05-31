@@ -7,7 +7,8 @@ import asyncio
 import sys
 from typing import Any, Callable, Coroutine
 
-from src.interfaces.cli.commands import debug, flash, health, metrics, review, slash, trace, unified_review
+from src.interfaces.cli.commands import debug, flash, health, lsp, local_llm, metrics, review, slash, trace, unified_review, watch
+from src.interfaces.cli.commands import test_gen
 
 Handler = Callable[[argparse.Namespace], Coroutine[Any, Any, int]]
 
@@ -26,7 +27,11 @@ def build_parser() -> argparse.ArgumentParser:
     review.register(sub)
     unified_review.register(sub)
     metrics.register(sub)
+    lsp.register(sub)
+    watch.register(sub)
+    test_gen.register(sub)
     slash.register_commands(sub)
+    local_llm.register(sub)
     return parser
 
 

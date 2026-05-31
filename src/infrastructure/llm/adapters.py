@@ -467,13 +467,15 @@ def create_llm_provider(
     provider: str,
     api_key: Optional[str] = None,
     model: Optional[str] = None,
+    base_url: Optional[str] = None,
 ) -> LLMProvider:
     """Create LLM provider by name.
 
     Args:
-        provider: Provider name ("openai", "anthropic", "mock")
+        provider: Provider name ("openai", "anthropic", "mock", "local")
         api_key: Optional API key override
         model: Optional model override
+        base_url: Optional base URL for local provider
 
     Returns:
         Configured LLMProvider
@@ -489,5 +491,13 @@ def create_llm_provider(
         return ClaudeAdapter(api_key=api_key, model=model or "claude-sonnet-4-20250514")
     elif provider == "mock":
         return MockLLMProvider()
+    elif provider == "local":
+        from .local_provider import LocalLLMProvider, LocalLLMConfig
+        config = LocalLLMConfig(
+            model=model or "llama3.2",
+            api_key=api_key,
+            base_url=base_url or "http://localhost:11434",
+        )
+        return LocalLLMProvider(config)
     else:
-        raise ValueError(f"Unknown provider: {provider}. Use 'openai', 'anthropic', or 'mock'")
+        raise ValueError(f"Unknown provider: {provider}. Use 'openai', 'anthropic', 'local', or 'mock'")

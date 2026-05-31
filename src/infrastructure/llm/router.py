@@ -309,3 +309,38 @@ class LLMRouter:
                 logger.warning("Health check failed for %s: %s", name, str(e))
                 results[name] = False
         return results
+
+    async def initialize_local_provider(
+        self,
+        base_url: str = "http://localhost:11434",
+        model: str = "llama3.2",
+        api_key: str | None = None,
+    ) -> bool:
+        """Initialize and register the local LLM provider.
+
+        Args:
+            base_url: URL of the local LLM server
+            model: Default model to use
+            api_key: Optional API key
+
+        Returns:
+            True if the provider was successfully initialized and registered
+        """
+        try:
+            from .local_provider import LocalLLMProvider, _LocalLLMConfig
+
+            config = _LocalLLMConfig(
+                base_url=base_url,
+                model=model,
+                api_key=api_key,
+            )
+            provider = LocalLLMProvider(config)
+            await provider.initialize()
+
+            self.register_provider("local", provider)
+            logger.info("Local LLM provider initialized: %s", provider.provider_name)
+            return True
+
+        except Exception as e:
+            logger.error("Failed to initialize local provider: %s", e)
+            return False

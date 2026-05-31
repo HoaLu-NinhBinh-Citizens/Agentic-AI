@@ -37,6 +37,9 @@ from src.infrastructure.patching import (
 # Import Color for formatter
 from src.interfaces.conversation.formatters import Color
 
+# Import cmd_test_slash from test_gen
+from src.interfaces.cli.commands.test_gen import cmd_test_slash
+
 
 # ─── Command types ──────────────────────────────────────────────────────────
 
@@ -1110,6 +1113,283 @@ async def cmd_help(ctx: CommandContext) -> CommandResult:
     return CommandResult(success=True, output=output)
 
 
+async def cmd_refactor(ctx: CommandContext) -> CommandResult:
+    """Refactor code using interactive refactoring commands.
+    
+    Supports:
+    - /refactor extract @file:line:end_line --name=function_name
+    - /refactor rename @file old_name new_name --scope=file|project
+    - /refactor inline @file function_name
+    - /refactor move @file --to=target.py --start=line --end=line
+    """
+    from src.infrastructure.refactoring import RefactorEngine
+    
+    if not ctx.primary_file:
+        return CommandResult(
+            success=False,
+            output="Usage: /refactor <extract|rename|inline|move> @file [options]\n"
+                   "  /refactor extract @src/main.py:10:20 --name=my_func\n"
+                   "  /refactor rename @src/main.py old_name new_name\n"
+                   "  /refactor inline @src/main.py function_name\n"
+                   "  /refactor move @src/main.py --to=utils.py --start=10 --end=20",
+        )
+    
+    file_path = Path(ctx.primary_file)
+    if not file_path.exists():
+        return CommandResult(
+            success=False,
+            output=f"File not found: {file_path}",
+        )
+    
+    engine = RefactorEngine(file_path.parent)
+    
+    sub_cmd = ctx.raw_args.strip().split()[0] if ctx.raw_args.strip() else ""
+    
+    if "extract" in sub_cmd.lower():
+        return await _handle_refactor_extract(ctx, engine, file_path)
+    elif "rename" in sub_cmd.lower():
+        return await _handle_refactor_rename(ctx, engine, file_path)
+    elif "inline" in sub_cmd.lower():
+        return await _handle_refactor_inline(ctx, engine, file_path)
+    elif "move" in sub_cmd.lower():
+        return await _handle_refactor_move(ctx, engine, file_path)
+    else:
+        return CommandResult(
+            success=True,
+            output="""## /refactor Commands
+
+| Command | Description |
+|---------|-------------|
+| `/refactor extract` | Extract code block to a function |
+| `/refactor rename` | Rename a symbol |
+| `/refactor inline` | Inline a function |
+| `/refactor move` | Move code to another file |
+
+### Examples
+
+```
+/refactor extract @src/main.py:10:20 --name=process_data
+/refactor rename @src/main.py old_func new_func --scope=project
+/refactor inline @src/main.py helper_function
+/refactor move @src/main.py --to=utils.py --start=5 --end=15
+```
+""",
+        )
+
+
+async def _handle_refactor_extract(
+    ctx: CommandContext,
+    engine: RefactorEngine,
+    file_path: Path,
+) -> CommandResult:
+    """Handle extract function refactoring."""
+    try:
+        content = file_path.read_text(encoding='utf-8')
+        
+        start_line = ctx.primary_line or 1
+        end_line = ctx.lines[1] if len(ctx.lines) > 1 else start_line + 10
+        
+        raw_args = ctx.raw_args
+        new_name = None
+        for flag, value in ctx.raw_flags.items():
+            if flag in ["name", "n"]:
+                new_name = value
+                break
+        
+        result = await engine.extract_function(
+            file_path, content, start_line, end_line, new_name
+        )
+        
+        output = f"""## Extract Function Preview
+
+**File:** `{file_path}`  
+**Lines:** {start_line}-{end_line}
+
+### Original Code
+
+```python
+{result.original_code}
+```
+
+### Extracted Function
+
+```python
+{result.new_function}
+```
+
+### Call Site
+
+```python
+{result.call_site}
+```
+"""
+        if result.parameters:
+            output += f"\n**Parameters:** `{', '.join(result.parameters)}`"
+        if result.return_value:
+            output += f"\n**Return Value:** `{result.return_value}`"
+        
+        output += "\n\n---\n*Use `/fix @file --apply` to apply these changes*"
+        
+        return CommandResult(success=True, output=output)
+        
+    except Exception as e:
+        return CommandResult(success=False, output=f"Extract failed: {e}")
+
+
+async def _handle_refactor_rename(
+    ctx: CommandContext,
+    engine: RefactorEngine,
+    file_path: Path,
+) -> CommandResult:
+    """Handle rename symbol refactoring."""
+    try:
+        parts = ctx.raw_args.strip().split()
+        if len(parts) < 2:
+            return CommandResult(
+                success=False,
+                output="Usage: /refactor rename @file old_name new_name [--scope=file|project]",
+            )
+        
+        old_name = parts[0]
+        new_name = parts[1]
+        scope = ctx.raw_flags.get("scope", "file")
+        
+        result = await engine.rename_symbol(
+            file_path, old_name, new_name, scope=scope
+        )
+        
+        output = f"""## Rename Symbol
+
+| Property | Value |
+|----------|-------|
+| Old Name | `{result.old_name}` |
+| New Name | `{result.new_name}` |
+| Scope | `{scope}` |
+| Files Changed | {len(result.files_changed)} |
+| Occurrences | {result.occurrences} |
+"""
+        if result.files_changed:
+            output += "\n### Files Modified\n\n"
+            for f in result.files_changed:
+                output += f"- `{f}`\n"
+        
+        return CommandResult(success=True, output=output, data={
+            "old_name": result.old_name,
+            "new_name": result.new_name,
+            "files_changed": [str(f) for f in result.files_changed],
+        })
+        
+    except Exception as e:
+        return CommandResult(success=False, output=f"Rename failed: {e}")
+
+
+async def _handle_refactor_inline(
+    ctx: CommandContext,
+    engine: RefactorEngine,
+    file_path: Path,
+) -> CommandResult:
+    """Handle inline function refactoring."""
+    try:
+        func_name = ctx.raw_args.strip().split()[-1] if ctx.raw_args.strip() else ""
+        
+        if not func_name:
+            return CommandResult(
+                success=False,
+                output="Usage: /refactor inline @file function_name",
+            )
+        
+        result = await engine.inline_function(file_path, func_name)
+        
+        if not result.success:
+            return CommandResult(
+                success=False,
+                output=f"Function `{func_name}` not found in `{file_path}`",
+            )
+        
+        output = f"""## Inline Function
+
+| Property | Value |
+|----------|-------|
+| Function | `{func_name}` |
+| Call Sites | {result.call_sites_updated} |
+| Status | {'Inlined' if result.call_sites_updated > 0 else 'Preview'} |
+"""
+        if result.original_function:
+            output += f"\n### Original Function\n\n```python\n{result.original_function}\n```\n"
+        
+        output += "\n---\n*Note: Full inlining requires careful review. Use with caution.*"
+        
+        return CommandResult(success=True, output=output)
+        
+    except Exception as e:
+        return CommandResult(success=False, output=f"Inline failed: {e}")
+
+
+async def _handle_refactor_move(
+    ctx: CommandContext,
+    engine: RefactorEngine,
+    file_path: Path,
+) -> CommandResult:
+    """Handle move code refactoring."""
+    try:
+        target_file = ctx.raw_flags.get("to")
+        if not target_file:
+            return CommandResult(
+                success=False,
+                output="Usage: /refactor move @file --to=target.py [--start=line] [--end=line]",
+            )
+        
+        target_path = Path(target_file)
+        start_line = ctx.primary_line
+        end_line = ctx.lines[1] if len(ctx.lines) > 1 else None
+        
+        if not start_line:
+            return CommandResult(
+                success=True,
+                output=f"""## Move Code Preview
+
+**Source:** `{file_path}`  
+**Target:** `{target_path}`
+
+Please specify the line range using @file:start:end syntax:
+```
+/refactor move @{file_path}:10:20 --to={target_file}
+```
+""",
+            )
+        
+        content = file_path.read_text(encoding='utf-8')
+        
+        if not end_line:
+            end_line = start_line + 5
+        
+        result = await engine.move_code(
+            file_path,
+            '\n'.join(content.split('\n')[start_line-1:end_line]),
+            target_path,
+            start_line=start_line,
+            end_line=end_line,
+        )
+        
+        if result.success:
+            return CommandResult(
+                success=True,
+                output=f"""## Move Code Complete
+
+| Property | Value |
+|----------|-------|
+| Source | `{file_path}` ({start_line}-{end_line}) |
+| Target | `{target_path}` |
+| Status | Moved |
+""",
+            )
+        else:
+            return CommandResult(success=False, output=f"Move failed: {result.error}")
+        
+    except Exception as e:
+        return CommandResult(success=False, output=f"Move failed: {e}")
+
+
 # ─── Command registry ────────────────────────────────────────────────────────
 
 _BUILTIN_COMMANDS: dict[str, Command] = {
@@ -1195,6 +1475,32 @@ _BUILTIN_COMMANDS: dict[str, Command] = {
         aliases=["h", "?"],
         handler=cmd_help,
         examples=["/help", "/help review"],
+    ),
+    "test": Command(
+        name="test",
+        description="Generate unit tests for a Python function or class",
+        category=CommandCategory.UTILITY,
+        aliases=["t"],
+        handler=cmd_test_slash,
+        examples=[
+            "/test src/my_module.py",
+            "/test src/my_module.py:MyFunction",
+            "/test src/my_module.py:MyClass --framework=pytest",
+            "/test src/my_module.py --framework=unittest",
+        ],
+    ),
+    "refactor": Command(
+        name="refactor",
+        description="Refactor code (extract, rename, inline, move)",
+        category=CommandCategory.FIX,
+        aliases=["ref", "extract", "rename"],
+        handler=cmd_refactor,
+        examples=[
+            "/refactor extract @src/main.py:10:20 --name=process_data",
+            "/refactor rename @src/main.py old_func new_func --scope=project",
+            "/refactor inline @src/main.py helper_function",
+            "/refactor move @src/main.py --to=utils.py --start=5 --end=15",
+        ],
     ),
 }
 
