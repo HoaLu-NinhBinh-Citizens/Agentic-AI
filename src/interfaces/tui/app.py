@@ -470,10 +470,22 @@ class AISupportTUI:
         self,
         workspace_root: Optional[str] = None,
         initial_file: Optional[str] = None,
+        use_real_terminal: bool = True,
     ):
         self.workspace_root = Path(workspace_root or os.getcwd())
         self.console = Console()
         self.layout = Layout()
+
+        # Real terminal handler for shell execution
+        self.use_real_terminal = use_real_terminal
+        self._terminal_handler = None
+        if use_real_terminal:
+            try:
+                from src.interfaces.tui.terminal_handler import TerminalHandler
+                self._terminal_handler = TerminalHandler()
+                self._terminal_handler.create_session("main", self.workspace_root)
+            except ImportError:
+                pass
 
         # Renderers
         self.file_tree = FileTreeRenderer(self.workspace_root)
@@ -780,9 +792,36 @@ class AISupportTUI:
                 elif user_input == "help":
                     self.show_command_palette()
                 else:
-                    self.terminal.add_command(user_input)
-                    self.terminal.add_output(f"Command not recognized. Type /help for available commands.")
-                    self.render()
+                    # Try real shell execution
+                    if self._terminal_handler and not user_input.startswith("/"):
+                        asyncio.create_task(self._execute_in_terminal(user_input))
+                    else:
+                        self.terminal.add_command(user_input)
+                        self.terminal.add_output(f"Command not recognized. Type /help for available commands.")
+                        self.render()
+
+    async def _execute_in_terminal(self, command: str) -> None:
+        """Execute command in real terminal."""
+        self.terminal.add_command(command)
+
+        if self._terminal_handler:
+            result = await self._terminal_handler.execute("main", command, timeout=30)
+
+            if result.get("timeout"):
+                self.terminal.add_error(f"Command timed out")
+            elif result.get("error"):
+                self.terminal.add_error(result.get("stderr", "Unknown error"))
+            elif result.get("stderr"):
+                self.terminal.add_output(result["stderr"])
+
+            if result.get("stdout"):
+                for line in result["stdout"].split("\n"):
+                    if line:
+                        self.terminal.add_output(line)
+        else:
+            self.terminal.add_output("Real terminal not available")
+
+        self.render()
 
         except KeyboardInterrupt:
             pass

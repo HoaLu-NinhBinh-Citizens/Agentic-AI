@@ -2,7 +2,8 @@
 
 from . import debug, flash, health, review, slash, trace, unified_review, watch, test_gen
 from .unified_review import register
-from . import search, undo, refactor, local_llm, lsp, metrics
+from . import search, undo, refactor, local_llm, lsp, metrics, complete, settings, git_ai
+
 
 def get_all_commands():
     """Get all available commands."""
@@ -22,7 +23,11 @@ def get_all_commands():
         "local-llm": local_llm.register,
         "lsp": lsp.register,
         "metrics": metrics.register,
+        "complete": complete.register,
+        "settings": settings.register,
+        "git-ai": git_ai.register,
     }
+
 
 __all__ = [
     "debug",
@@ -40,5 +45,8 @@ __all__ = [
     "local_llm",
     "lsp",
     "metrics",
+    "complete",
+    "settings",
+    "git_ai",
     "get_all_commands",
 ]

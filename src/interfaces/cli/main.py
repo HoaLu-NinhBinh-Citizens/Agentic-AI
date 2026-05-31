@@ -9,6 +9,7 @@ from typing import Any, Callable, Coroutine
 
 from src.interfaces.cli.commands import debug, flash, health, lsp, local_llm, metrics, review, slash, trace, unified_review, watch
 from src.interfaces.cli.commands import test_gen, search, undo
+from src.interfaces.cli.commands import complete, settings, git_ai
 
 Handler = Callable[[argparse.Namespace], Coroutine[Any, Any, int]]
 
@@ -34,6 +35,9 @@ def build_parser() -> argparse.ArgumentParser:
     local_llm.register(sub)
     search.register(sub)
     undo.register(sub)
+    complete.register(sub)
+    settings.register(sub)
+    git_ai.register(sub)
     return parser
 
 
