@@ -1,0 +1,131 @@
+---
+description: Enforce STRUCTURE_TREE.md folder structure for all new files
+alwaysApply: true
+---
+
+# Folder Structure Enforcement
+
+## Source of Truth
+
+`docs/STRUCTURE_TREE.md` is the **authoritative source** for the project folder structure.
+
+**Every new file MUST be placed according to STRUCTURE_TREE.md.**
+
+## Rules
+
+### 1. Before Creating Any File
+
+Before creating a new file, you MUST:
+
+1. Read `docs/STRUCTURE_TREE.md` to find the correct location
+2. Check if the file or a similar file already exists in the expected location
+3. Create the file only in the location specified by STRUCTURE_TREE.md
+
+### 2. File Naming Conventions
+
+| Component | Required Files | Notes |
+|-----------|---------------|-------|
+| `core/agent/` | `mock_agent.py` (Phase 1A), `reasoning_loop.py`, `reflection.py`, `state.py` | Use `mock_agent.py` for Phase 1A mock agent |
+| `core/session/` | `session_manager.py`, `session_state.py`, `lifecycle.py`, `session_store.py` | ❌ `manager.py` (already covered by `session_manager.py`) |
+| `interfaces/server/` | `main.py`, `health.py` | ✅ WebSocket subdir OK |
+| `interfaces/server/websocket/` | No specific files in spec | ✅ `manager.py` acceptable as implementation detail |
+
+### 3. Common Violations to Avoid
+
+#### ❌ WRONG: Creating duplicate files
+
+```python
+# WRONG: Creates duplicate session manager
+src/core/session/manager.py  # ← DO NOT CREATE
+
+# ALREADY EXISTS:
+src/core/session/session_manager.py  # ← Use this instead
+```
+
+#### ✅ CORRECT: Phase 1A uses mock_agent.py
+
+```python
+# CORRECT for Phase 1A: Mock agent for streaming responses
+src/core/agent/mock_agent.py  # ← Use this for Phase 1A
+```
+
+#### ✅ CORRECT: Check existing files first
+
+Before creating any file, always check for existing files:
+
+```bash
+# Example: Before adding session manager
+ls src/core/session/
+# If session_manager.py exists → extend it, do NOT create manager.py
+```
+
+### 4. Decision Tree for New Files
+
+```
+Is the file type in STRUCTURE_TREE.md?
+├── YES → Create in specified location
+├── NO  → Check if existing file covers the use case
+│         ├── YES → Extend existing file
+│         └── NO  → Ask user to update STRUCTURE_TREE.md first
+└── UNSURE → Read STRUCTURE_TREE.md before proceeding
+```
+
+### 5. When Creating Files
+
+Always verify:
+- [ ] File location matches STRUCTURE_TREE.md
+- [ ] File name follows existing conventions
+- [ ] No duplicate files exist in nearby directories
+- [ ] Import paths are correct
+
+## Enforcement
+
+If a file violates STRUCTURE_TREE.md:
+
+1. **Report** the violation to the user
+2. **Suggest** the correct location or existing file to use
+3. **Wait for confirmation** before proceeding
+
+## Quick Reference: Core Directories
+
+```
+src/
+├── core/
+│   ├── agent/        → mock_agent.py (Phase 1A), reasoning_loop.py, reflection.py, state.py
+│   ├── session/     → session_manager.py, session_state.py, lifecycle.py, session_store.py
+│   ├── runtime/     → runtime_manager.py, dispatcher.py, scheduler.py
+│   ├── execution/   → executor.py, execution_graph.py, task_queue.py
+│   ├── workspace/   → workspace_manager.py, workspace_context.py
+│   ├── checkpoint/   → checkpoint_manager.py, replay.py, rollback.py
+│   ├── versioning/   → schema_version.py, migration_manager.py
+│   ├── background_jobs/ → scheduler.py, cleanup.py, telemetry.py
+│   ├── health/       → runtime_health.py, readiness.py, liveness.py
+│   └── ports/        → event_bus.py, llm_provider.py, tool_provider.py
+│
+├── domain/
+│   ├── hardware/     → chips.py, peripherals.py, registers.py, interrupts.py
+│   ├── firmware/     → linker.py, memory_map.py, bootloader.py, ota.py
+│   ├── knowledge/    → kb.py, citation.py, parser.py, embeddings.py
+│   ├── events/       → runtime_events.py, hardware_events.py, firmware_events.py
+│   └── models/       → task.py, artifact.py, message.py, event.py, plan.py
+│
+├── application/
+│   ├── workflows/    → coding/, debugging/, planning/, hardware/, refactor/
+│   ├── orchestration/ → workflow_engine.py, routing.py, coordination.py
+│   └── planner/      → task_planner.py, dependency_graph.py, decomposition.py
+│
+├── infrastructure/
+│   ├── gateway/      → base.py, auth.py, retry.py, tracing.py
+│   ├── llm/          → gateway.py, routing.py, tokenizer.py, streaming.py
+│   ├── observability/ → logging/, metrics/, tracing/, profiling/
+│   └── ...
+│
+└── interfaces/
+    ├── server/       → main.py, health.py
+    │   ├── api/      → API endpoints
+    │   ├── websocket/ → WebSocket connections
+    │   ├── middleware/ → Middleware
+    │   └── auth/     → Authentication
+    ├── cli/          → commands/, interactive/, main.py
+    └── tui/          → screens/, widgets/, state/, app.py
+```

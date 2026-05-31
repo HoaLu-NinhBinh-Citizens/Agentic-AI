@@ -379,6 +379,12 @@ Agentic-AI Specific:
                         success=success,
                     )
             
+            # Show detected language in verbose mode
+            if self.verbose and result.detected_language:
+                from src.shared.utils import get_language_display_name
+                lang_name = get_language_display_name(result.detected_language)
+                print(f"\n{Color.DIM}[Detected language: {lang_name} ({result.detected_language})]{Color.RESET}")
+            
             # Add to session
             self.session.add_message("assistant", result.final_response)
             self.session.increment_turn()

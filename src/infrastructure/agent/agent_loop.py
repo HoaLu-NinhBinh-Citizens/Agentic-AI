@@ -5,6 +5,7 @@ Inspired by oh-my-pi's agent loop:
 - Tool calling with result injection
 - Streaming responses
 - Session state management
+- Language detection for response localization
 """
 
 from __future__ import annotations
@@ -26,6 +27,7 @@ from ..llm.client import (
 )
 from ..session.session_manager import Session
 from ..tools.tool_registry import ToolRegistry, ToolCallRequest, ToolCallResponse
+from src.shared.utils import detect_language, get_language_system_prompt_suffix
 
 logger = logging.getLogger(__name__)
 
@@ -58,6 +60,7 @@ class TurnResult:
     messages: list[Message]
     tool_calls: list[dict[str, Any]]
     final_response: str
+    detected_language: str = "en"
 
 
 class AgenticAgent:
@@ -124,7 +127,7 @@ class AgenticAgent:
             user_input: The user's message
 
         Returns:
-            TurnResult with messages, tool calls, and final response
+            TurnResult with messages, tool calls, final response, and detected language
         """
         self._current_tool_calls = []
 
@@ -136,6 +139,19 @@ class AgenticAgent:
                 final_response="Turn limit reached.",
             )
 
+        # Detect language from user input
+        detected_lang = detect_language(user_input)
+        logger.debug(f"Detected language: {detected_lang}")
+
+        # Add language instruction to system context if not English
+        if detected_lang != "en":
+            lang_suffix = get_language_system_prompt_suffix(detected_lang)
+            if lang_suffix:
+                self._messages.append(Message(
+                    role="system",
+                    content=lang_suffix,
+                ))
+
         # Add user message
         self._messages.append(Message(
             role="user",
@@ -146,7 +162,7 @@ class AgenticAgent:
         self.session.add_message("user", user_input)
         
         if self.config.verbose:
-            print(f"\n[Turn] processing user input")
+            print(f"\n[Turn] processing user input (lang: {detected_lang})")
         
         # Run the loop
         try:
@@ -159,6 +175,7 @@ class AgenticAgent:
                 messages=self._messages[-1:],
                 tool_calls=self._current_tool_calls,
                 final_response=error_msg,
+                detected_language=detected_lang,
             )
         
         # Get final response
@@ -168,6 +185,7 @@ class AgenticAgent:
             messages=self._messages[-10:],  # Last 10 messages
             tool_calls=self._current_tool_calls,
             final_response=final_msg.content,
+            detected_language=detected_lang,
         )
     
     async def _run_loop(self) -> None:
