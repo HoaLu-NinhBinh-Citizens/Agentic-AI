@@ -230,7 +230,6 @@ function calculateComplexity(path: any): number {
       }
     },
     CatchClause() { complexity++; },
-    OptionalCatchClause() { complexity++; },
   });
 
   return complexity;
