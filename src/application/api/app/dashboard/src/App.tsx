@@ -5,6 +5,7 @@ import { WorkflowsScreen } from '@/screens/WorkflowsScreen';
 import { HardwareScreen } from '@/screens/HardwareScreen';
 import { TimelineScreen } from '@/screens/TimelineScreen';
 import { TrustScreen } from '@/screens/TrustScreen';
+import { ComparisonScreen } from '@/screens/ComparisonScreen';
 
 const queryClient = new QueryClient({
   defaultOptions: {
@@ -18,6 +19,7 @@ const queryClient = new QueryClient({
 const navItems = [
   { path: '/', label: 'Overview', icon: '📊' },
   { path: '/workflows', label: 'Workflows', icon: '⚙️' },
+  { path: '/comparison', label: 'Compare', icon: '📱' },
   { path: '/trust', label: 'Trust & UX', icon: '🔒' },
   { path: '/hardware', label: 'Hardware', icon: '🔧' },
   { path: '/timeline', label: 'Timeline', icon: '📋' },
@@ -96,6 +98,7 @@ function AppContent() {
           <Routes>
             <Route path="/" element={<OverviewScreen />} />
             <Route path="/workflows" element={<WorkflowsScreen />} />
+            <Route path="/comparison" element={<ComparisonScreen />} />
             <Route path="/trust" element={<TrustScreen />} />
             <Route path="/hardware" element={<HardwareScreen />} />
             <Route path="/timeline" element={<TimelineScreen />} />

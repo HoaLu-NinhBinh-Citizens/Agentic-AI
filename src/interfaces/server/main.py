@@ -204,6 +204,89 @@ async def health_check() -> dict[str, str]:
     return {"status": "ok"}
 
 
+@app.get("/api/score")
+async def get_score() -> dict[str, Any]:
+    """Get AI_SUPPORT score for desktop app.
+    
+    Returns a score representing the system's quality/reliability
+    for embedded engineering assistance.
+    """
+    return {
+        "score": 60,
+        "label": "Production Readiness",
+        "details": {
+            "architecture": 6.0,
+            "distributed_systems": 4.0,
+            "embedded_infrastructure": 5.5,
+            "ai_architecture": 6.0,
+            "security": 4.5,
+            "reliability": 5.0,
+            "observability": 5.5,
+            "scalability": 4.5,
+        },
+        "timestamp": None,
+        "version": "1.0.0",
+    }
+
+
+@app.get("/api/fs/read")
+async def read_file(path: str) -> dict[str, str]:
+    """Read a file from the workspace.
+    
+    Args:
+        path: Path to the file to read.
+        
+    Returns:
+        File content.
+    """
+    from pathlib import Path
+    
+    try:
+        file_path = Path(path)
+        if not file_path.is_file():
+            raise HTTPException(status_code=404, detail="File not found")
+        
+        content = file_path.read_text(encoding="utf-8", errors="replace")
+        return {"content": content, "path": str(file_path)}
+    except Exception as e:
+        logger.error("Error reading file %s: %s", path, e)
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.get("/api/fs/dir")
+async def read_directory(path: str) -> dict[str, Any]:
+    """Read a directory listing.
+    
+    Args:
+        path: Path to the directory to read.
+        
+    Returns:
+        Directory contents.
+    """
+    from pathlib import Path
+    
+    try:
+        dir_path = Path(path)
+        if not dir_path.is_dir():
+            raise HTTPException(status_code=404, detail="Directory not found")
+        
+        items = []
+        for item in dir_path.iterdir():
+            items.append({
+                "name": item.name,
+                "path": str(item),
+                "isDir": item.is_dir(),
+            })
+        
+        # Sort: directories first, then alphabetically
+        items.sort(key=lambda x: (not x["isDir"], x["name"].lower()))
+        
+        return {"path": str(dir_path), "items": items}
+    except Exception as e:
+        logger.error("Error reading directory %s: %s", path, e)
+        raise HTTPException(status_code=500, detail=str(e))
+
+
 @app.post("/sessions", status_code=status.HTTP_201_CREATED)
 async def create_session(body: dict[str, Any] | None = None) -> dict[str, str]:
     """Create a new session.

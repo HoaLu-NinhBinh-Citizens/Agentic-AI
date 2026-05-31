@@ -1,0 +1,35 @@
+{
+  "name": "ai-support-desktop",
+  "version": "1.0.0",
+  "description": "AI_SUPPORT Desktop - Cursor-like Electron app for embedded engineering",
+  "main": "dist/main/index.js",
+  "author": "AI_SUPPORT",
+  "license": "MIT",
+  "scripts": {
+    "dev": "electron-vite dev",
+    "build": "electron-vite build",
+    "preview": "electron-vite preview",
+    "package": "electron-builder --win --config electron-builder.json",
+    "build:win": "npm run build && npm run package"
+  },
+  "dependencies": {
+    "react": "^18.2.0",
+    "react-dom": "^18.2.0",
+    "highlight.js": "^11.9.0",
+    "clsx": "^2.0.0",
+    "lucide-react": "^0.294.0"
+  },
+  "devDependencies": {
+    "@types/react": "^18.2.0",
+    "@types/react-dom": "^18.2.0",
+    "@vitejs/plugin-react": "^4.2.0",
+    "typescript": "^5.3.0",
+    "electron": "^28.0.0",
+    "electron-vite": "^2.0.0",
+    "electron-builder": "^24.9.1",
+    "vite": "^5.0.0",
+    "tailwindcss": "^3.3.0",
+    "postcss": "^8.4.0",
+    "autoprefixer": "^10.4.0"
+  }
+}
