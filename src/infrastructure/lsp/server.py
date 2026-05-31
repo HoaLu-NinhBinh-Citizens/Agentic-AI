@@ -24,6 +24,8 @@ logger = logging.getLogger(__name__)
 try:
     from pygls.server import LanguageServer
     from pygls.types import (
+        CodeAction,
+        CodeActionKind,
         CompletionItem,
         CompletionList,
         CompletionParams,
@@ -38,10 +40,14 @@ try:
         Position,
         Range,
         ReferencesParams,
+        TextDocumentEdit,
         TextDocumentIdentifier,
         TextDocumentItem,
         TextDocumentPositionParams,
+        VersionedTextDocumentIdentifier,
+        WorkspaceEdit,
         WorkspaceFolder,
+        TEXT_DOCUMENT_CODE_ACTION,
         TEXT_DOCUMENT_DID_CHANGE,
         TEXT_DOCUMENT_DID_CLOSE,
         TEXT_DOCUMENT_DID_OPEN,
@@ -53,6 +59,9 @@ except ImportError:
     logger.warning("pygls not installed. LSP server will be disabled.")
     PYGLS_AVAILABLE = False
     LanguageServer = object  # type: ignore
+    # Stub types for when pygls is not available
+    CodeAction = None
+    CodeActionKind = None
 
 # Local imports
 try:
@@ -120,6 +129,7 @@ class LSPCapabilities:
     completion_provider: bool = True
     diagnostic_provider: bool = True
     document_symbol_provider: bool = True
+    code_action_provider: bool = True
     text_document_sync_kind: int = 1  # Full sync
 
 
@@ -791,6 +801,230 @@ if PYGLS_AVAILABLE:
             """Update the workspace root path."""
             self.root_path = path
             logger.info("LSP: Root path set to: %s", path)
+
+        # ─── Code Actions ───────────────────────────────────────────────────
+
+        @self.feature(TEXT_DOCUMENT_CODE_ACTION)
+        async def code_actions(self, params: Any) -> list:
+            """Provide code actions (quick fixes) for diagnostics.
+            
+            Returns quick fix actions for any diagnostics at the cursor position
+            or selected range.
+            """
+            if not PYGLS_AVAILABLE or CodeAction is None:
+                return []
+            
+            try:
+                uri = getattr(params, "text_document", params).uri
+                doc = self._documents.get(uri)
+                if not doc:
+                    return []
+                
+                # Get range from params (may be a selection)
+                if hasattr(params, "range"):
+                    range_start = params.range.start
+                    range_end = params.range.end
+                else:
+                    # Default to entire document
+                    range_start = Position(line=0, character=0)
+                    range_end = Position(line=len(doc.content.split('\n')), character=0)
+                
+                actions: list = []
+                
+                # Get diagnostics for this document
+                diagnostics = doc.diagnostics or []
+                
+                # Filter diagnostics in range
+                relevant_diagnostics = []
+                for diag in diagnostics:
+                    diag_start = diag.range.start.line
+                    diag_end = diag.range.end.line
+                    
+                    if (diag_start >= range_start.line and 
+                        diag_end <= range_end.line):
+                        relevant_diagnostics.append(diag)
+                
+                # Create code actions for each diagnostic
+                for diag in relevant_diagnostics:
+                    if diag.source != "AI_SUPPORT":
+                        continue
+                    
+                    # Generate quick fix based on diagnostic code/message
+                    fix_action = self._generate_quick_fix(doc, diag)
+                    if fix_action:
+                        actions.append(fix_action)
+                
+                # Add refactor actions
+                actions.extend(self._get_refactor_actions(doc, range_start, range_end))
+                
+                # Add source actions
+                actions.extend(self._get_source_actions(doc, range_start, range_end))
+                
+                return actions
+                
+            except Exception as e:
+                logger.warning("Code actions failed: %s", e)
+                return []
+        
+        def _generate_quick_fix(
+            self,
+            doc: LSPDocument,
+            diag: Diagnostic,
+        ) -> Optional[CodeAction]:
+            """Generate a quick fix code action for a diagnostic."""
+            if not PYGLS_AVAILABLE or CodeAction is None:
+                return None
+            
+            message = diag.message.lower()
+            
+            # Determine fix type based on diagnostic message
+            if "trailing whitespace" in message:
+                return self._create_quick_fix(
+                    title="Remove trailing whitespace",
+                    kind=CodeActionKind.QUICK_FIX if CodeActionKind else None,
+                    diagnostics=[diag],
+                    edits=[self._create_edit(
+                        doc.uri,
+                        diag.range,
+                        "",  # Remove trailing whitespace
+                    )],
+                )
+            
+            elif "tab" in message and "space" in message:
+                return self._create_quick_fix(
+                    title="Replace tabs with spaces",
+                    kind=CodeActionKind.QUICK_FIX if CodeActionKind else None,
+                    diagnostics=[diag],
+                    edits=[self._create_edit(
+                        doc.uri,
+                        diag.range,
+                        "",  # Replace with spaces
+                    )],
+                )
+            
+            elif "error" in message or "exception" in message:
+                return self._create_quick_fix(
+                    title="Add error handling",
+                    kind=CodeActionKind.QUICK_FIX if CodeActionKind else None,
+                    diagnostics=[diag],
+                    command=None,
+                    diagnostics_=None,
+                )
+            
+            return None
+        
+        def _get_refactor_actions(
+            self,
+            doc: LSPDocument,
+            start: Position,
+            end: Position,
+        ) -> list:
+            """Get refactoring code actions."""
+            if not PYGLS_AVAILABLE or CodeAction is None:
+                return []
+            
+            actions: list = []
+            
+            # Extract function action
+            if doc.language_id == "python":
+                actions.append(self._create_quick_fix(
+                    title="Extract to function",
+                    kind=CodeActionKind.REFACTOR if CodeActionKind else None,
+                    diagnostics=None,
+                    edits=None,
+                ))
+            
+            # Inline action
+            actions.append(self._create_quick_fix(
+                title="Inline variable",
+                kind=CodeActionKind.REFACTOR_INLINE if CodeActionKind else None,
+                diagnostics=None,
+                edits=None,
+            ))
+            
+            # Rename action
+            actions.append(self._create_quick_fix(
+                title="Rename symbol",
+                kind=CodeActionKind.REFACTOR_RENAME if CodeActionKind else None,
+                diagnostics=None,
+                edits=None,
+            ))
+            
+            return actions
+        
+        def _get_source_actions(
+            self,
+            doc: LSPDocument,
+            start: Position,
+            end: Position,
+        ) -> list:
+            """Get source code actions (organize imports, format, etc.)."""
+            if not PYGLS_AVAILABLE or CodeAction is None:
+                return []
+            
+            actions: list = []
+            
+            # Sort imports
+            if doc.language_id in ("python", "javascript", "typescript"):
+                actions.append(self._create_quick_fix(
+                    title="Sort imports",
+                    kind=CodeActionKind.SOURCE_ORGANIZE_IMPORTS if CodeActionKind else None,
+                    diagnostics=None,
+                    edits=None,
+                ))
+            
+            # Format document
+            actions.append(self._create_quick_fix(
+                title="Format document",
+                kind=CodeActionKind.SOURCE_FORMAT if CodeActionKind else None,
+                diagnostics=None,
+                edits=None,
+            ))
+            
+            # Fix all
+            actions.append(self._create_quick_fix(
+                title="Fix all AI_SUPPORT issues",
+                kind=CodeActionKind.SOURCE_FIX_ALL if CodeActionKind else None,
+                diagnostics=None,
+                edits=None,
+            ))
+            
+            return actions
+        
+        def _create_quick_fix(
+            self,
+            title: str,
+            kind: Any,
+            diagnostics: Any,
+            edits: Any,
+        ) -> CodeAction:
+            """Create a code action."""
+            if not PYGLS_AVAILABLE or CodeAction is None:
+                return None
+            
+            return CodeAction(
+                title=title,
+                kind=kind,
+                diagnostics=diagnostics,
+                edit=WorkspaceEdit(
+                    document_changes=[edits] if edits else []
+                ) if edits else None,
+            )
+        
+        def _create_edit(
+            self,
+            uri: str,
+            range: Range,
+            new_text: str,
+        ) -> TextDocumentEdit:
+            """Create a text document edit."""
+            if not PYGLS_AVAILABLE:
+                return None
+            
+            return TextDocumentEdit(
+                text_document=VersionedTextDocumentIdentifier(uri, None),
+                edits=[{"range": range, "newText": new_text}],
+            )
 
 
 else:

@@ -3,10 +3,18 @@
 This tool supports both:
 - Legacy Fix objects (from src.core.fix_engine.models)
 - Unified FixOption objects (from src.domain.models.review_issue)
+
+Features:
+- Automatic backup before applying fixes
+- Multi-file batch operations
+- Conflict detection and resolution
+- Interactive apply with preview
 """
 
 import hashlib
 import logging
+import shutil
+from datetime import datetime
 from pathlib import Path
 from typing import Optional, Union
 
@@ -17,6 +25,7 @@ from src.infrastructure.patching.diff_parser import ApplyResult
 logger = logging.getLogger(__name__)
 
 BACKUP_DIR = Path(".cursor/ai_support/backups")
+AUTO_BACKUP_DIR = Path(".cursor/ai_support/auto_backups")
 
 # Type alias for supported fix types
 FixInput = Union[Fix, "FixOption", "ReviewIssue"]
@@ -56,6 +65,61 @@ class ApplyFixTool:
             logger.error("Restore failed: %s", exc)
             return False
 
+    def _auto_backup(self, file_path: Path) -> Path:
+        """Create automatic backup before applying fix.
+        
+        Creates a timestamped backup in the auto_backups directory.
+        Keeps only the last 100 backups per file.
+        
+        Args:
+            file_path: Path to the file to backup
+            
+        Returns:
+            Path to the backup file
+        """
+        backup_dir = self._workspace_root / AUTO_BACKUP_DIR
+        backup_dir.mkdir(parents=True, exist_ok=True)
+        
+        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S_%f")
+        backup_path = backup_dir / f"{file_path.name}.{timestamp}.bak"
+        
+        try:
+            if file_path.exists():
+                shutil.copy2(file_path, backup_path)
+                logger.debug("Auto-backup created: %s", backup_path)
+            else:
+                # Create empty marker for new files
+                backup_path.write_text("", encoding='utf-8')
+                logger.debug("Auto-backup created (new file): %s", backup_path)
+            
+            # Cleanup old backups (keep last 100)
+            self._cleanup_old_backups(file_path.name, backup_dir)
+            
+        except Exception as e:
+            logger.warning("Auto-backup failed for %s: %s", file_path, e)
+        
+        return backup_path
+
+    def _cleanup_old_backups(self, file_name: str, backup_dir: Path) -> None:
+        """Remove old automatic backups, keeping only the most recent 100.
+        
+        Args:
+            file_name: Base file name to match
+            backup_dir: Directory containing backups
+        """
+        try:
+            pattern = f"{file_name}.*.bak"
+            backups = sorted(backup_dir.glob(pattern), key=lambda p: p.stat().st_mtime)
+            
+            # Remove oldest backups beyond the limit
+            for old_backup in backups[:-100]:
+                try:
+                    old_backup.unlink()
+                except OSError:
+                    pass
+        except Exception as e:
+            logger.debug("Backup cleanup failed: %s", e)
+
     def validate_fix(
         self, file_path: str, old_text: str, new_text: str
     ) -> tuple[bool, str]:
@@ -75,6 +139,7 @@ class ApplyFixTool:
         """Apply a single fix with backup and validation.
 
         Stores original content in _rollback_store for in-memory rollback.
+        Creates automatic backup before applying.
         """
         result = FixResult(fix_id=fix.id, success=False)
 
@@ -93,6 +158,10 @@ class ApplyFixTool:
 
             # Store original for in-memory rollback
             self._rollback_store[fix.id] = current
+
+            # Create automatic backup before applying
+            auto_backup_path = self._auto_backup(full_path)
+            result.backup_path = str(auto_backup_path)
 
             backup_path = self._create_backup(fix.file_path, current)
             result.backup_path = backup_path
@@ -361,7 +430,11 @@ class ApplyFixTool:
                 # No old_code, just use new_code directly
                 new_content = fix_option.new_code
 
-            # Create backup before applying
+            # Create automatic backup before applying
+            auto_backup_path = self._auto_backup(full_path)
+            result.backup_path = str(auto_backup_path)
+
+            # Create named backup
             backup_path = self._create_backup(target_file, current)
             result.backup_path = backup_path
 
