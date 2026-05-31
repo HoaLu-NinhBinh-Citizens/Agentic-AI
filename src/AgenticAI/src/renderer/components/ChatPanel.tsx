@@ -1,10 +1,20 @@
-import React, { useState, useRef, useEffect } from 'react';
+import React, { useState, useRef, useEffect, createContext, useContext } from 'react';
 import { useAppStore } from '../store/useAppStore';
 import { FiSend, FiTrash2, FiSettings, FiAlertCircle } from 'react-icons/fi';
 import ReactMarkdown from 'react-markdown';
 import { SettingsPanel } from './SettingsPanel';
+import { ElectronBridge, electronBridge } from '../../services/electronBridge';
 
-export const ChatPanel: React.FC = () => {
+// Context for dependency injection
+const ElectronBridgeContext = createContext<ElectronBridge>(electronBridge);
+export const useElectronBridge = () => useContext(ElectronBridgeContext);
+
+export interface ChatPanelProps {
+  bridge?: ElectronBridge;
+}
+
+export const ChatPanel: React.FC<ChatPanelProps> = ({ bridge }) => {
+  const api = bridge || useElectronBridge();
   const { messages, addMessage, clearMessages, steeringContext, activeFile } = useAppStore();
   const [input, setInput] = useState('');
   const [isLoading, setIsLoading] = useState(false);
@@ -22,10 +32,8 @@ export const ChatPanel: React.FC = () => {
   }, [messages]);
 
   const checkAIInitialization = async () => {
-    if (window.electronAPI?.ai) {
-      const initialized = await window.electronAPI.ai.isInitialized();
-      setIsAIInitialized(initialized);
-    }
+    const initialized = await api.ai.isInitialized();
+    setIsAIInitialized(initialized);
   };
 
   const sendMessage = async () => {
@@ -44,11 +52,7 @@ export const ChatPanel: React.FC = () => {
     setError(null);
 
     try {
-      if (!window.electronAPI?.ai) {
-        throw new Error('AI service not available');
-      }
-
-      const isInitialized = await window.electronAPI.ai.isInitialized();
+      const isInitialized = await api.ai.isInitialized();
       
       if (!isInitialized) {
         setShowSettings(true);
@@ -62,11 +66,7 @@ export const ChatPanel: React.FC = () => {
 
       chatMessages.push({ role: 'user' as const, content: input });
 
-      if (steeringContext && Object.keys(steeringContext).length > 0) {
-        // System prompt can be retrieved if needed
-      }
-
-      const response = await window.electronAPI.ai.chat(chatMessages as any);
+      const response = await api.ai.chat(chatMessages);
 
       if (response.error) {
         throw new Error(response.error);
@@ -84,7 +84,7 @@ export const ChatPanel: React.FC = () => {
       const errorMessage = err instanceof Error ? err.message : 'Failed to get AI response';
       setError(errorMessage);
       
-      if (err instanceof Error && err.message.includes('not configured')) {
+      if (err instanceof Error && errorMessage.includes('not configured')) {
         setShowSettings(true);
       }
     } finally {

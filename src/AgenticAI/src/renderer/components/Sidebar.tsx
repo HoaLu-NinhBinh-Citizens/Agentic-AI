@@ -1,9 +1,19 @@
-import React, { useEffect, useCallback } from 'react';
+import React, { useEffect, useCallback, createContext, useContext } from 'react';
 import { FiFolder, FiFolderPlus, FiFile, FiChevronRight, FiChevronDown, FiFilePlus } from 'react-icons/fi';
 import { useAppStore } from '../store/useAppStore';
 import { FileNode } from '../../shared/types';
+import { ElectronBridge, electronBridge } from '../../services/electronBridge';
 
-export const Sidebar: React.FC = () => {
+// Context for dependency injection
+const ElectronBridgeContext = createContext<ElectronBridge>(electronBridge);
+export const useElectronBridge = () => useContext(ElectronBridgeContext);
+
+export interface SidebarProps {
+  bridge?: ElectronBridge;
+}
+
+export const Sidebar: React.FC<SidebarProps> = ({ bridge }) => {
+  const api = bridge || useElectronBridge();
   const { 
     workspacePath, 
     setWorkspacePath, 
@@ -16,28 +26,24 @@ export const Sidebar: React.FC = () => {
   } = useAppStore();
 
   const openDirectory = async () => {
-    if (window.electronAPI) {
-      const path = await window.electronAPI.openDirectory();
-      if (path) {
-        setWorkspacePath(path);
-        await window.electronAPI.storage.setWorkspace(path);
-        loadDirectory(path);
-        loadSteeringContext(path);
-      }
+    const path = await api.openDirectory();
+    if (path) {
+      setWorkspacePath(path);
+      await api.storage.setWorkspace(path);
+      loadDirectory(path);
+      loadSteeringContext(path);
     }
   };
 
   const loadDirectory = async (dirPath: string) => {
-    if (window.electronAPI) {
-      const entries = await window.electronAPI.readDirectory(dirPath);
-      const fileTree = buildFileTree(entries, dirPath);
-      setFiles(fileTree);
-    }
+    const entries = await api.readDirectory(dirPath);
+    const fileTree = buildFileTree(entries, dirPath);
+    setFiles(fileTree);
   };
 
   const loadSteeringContext = async (dirPath: string) => {
-    if (window.electronAPI?.steering) {
-      const result = await window.electronAPI.steering.load(dirPath);
+    if (api.steering) {
+      const result = await api.steering.load(dirPath);
       if (result.success && result.context) {
         useAppStore.getState().setSteeringContext(result.context);
       }
@@ -66,37 +72,33 @@ export const Sidebar: React.FC = () => {
     
     if (node.isDirectory) {
       if (willBeOpen && (!node.children || node.children.length === 0)) {
-        const entries = await window.electronAPI?.readDirectory(node.path);
+        const entries = await api.readDirectory(node.path);
         const children = buildFileTree(entries || [], node.path);
         setFiles(updateChildren(files, node.path, children));
       }
       
       toggleFolder(node.path);
       
-      if (window.electronAPI?.storage) {
-        if (willBeOpen) {
-          window.electronAPI.storage.updateUIState({
-            expandedFolders: [...expandedFolders, node.path]
-          });
-        } else {
-          window.electronAPI.storage.updateUIState({
-            expandedFolders: expandedFolders.filter(p => p !== node.path)
-          });
-        }
+      if (willBeOpen) {
+        api.storage.updateUIState({
+          expandedFolders: [...expandedFolders, node.path]
+        });
+      } else {
+        api.storage.updateUIState({
+          expandedFolders: expandedFolders.filter(p => p !== node.path)
+        });
       }
     } else {
       setActiveFile(node.path);
       addOpenFile(node.path);
       
-      if (window.electronAPI?.storage) {
-        const openFiles = useAppStore.getState().openFiles;
-        window.electronAPI.storage.updateOpenFiles({
-          files: openFiles,
-          activeFile: node.path
-        });
-      }
+      const openFiles = useAppStore.getState().openFiles;
+      api.storage.updateOpenFiles({
+        files: openFiles,
+        activeFile: node.path
+      });
     }
-  }, [files, expandedFolders, toggleFolder, setFiles, setActiveFile, addOpenFile]);
+  }, [files, expandedFolders, toggleFolder, setFiles, setActiveFile, addOpenFile, api]);
 
   const updateChildren = (nodes: FileNode[], parentPath: string, children: FileNode[]): FileNode[] => {
     return nodes.map(node => {
@@ -111,22 +113,22 @@ export const Sidebar: React.FC = () => {
   };
 
   const createNewFile = async () => {
-    if (workspacePath && window.electronAPI) {
+    if (workspacePath) {
       const name = prompt('Enter file name:');
       if (name) {
         const filePath = `${workspacePath}/${name}`;
-        await window.electronAPI.createFile(filePath);
+        await api.createFile(filePath);
         loadDirectory(workspacePath);
       }
     }
   };
 
   const createNewFolder = async () => {
-    if (workspacePath && window.electronAPI) {
+    if (workspacePath) {
       const name = prompt('Enter folder name:');
       if (name) {
         const folderPath = `${workspacePath}/${name}`;
-        await window.electronAPI.createDirectory(folderPath);
+        await api.createDirectory(folderPath);
         loadDirectory(workspacePath);
       }
     }
@@ -134,13 +136,11 @@ export const Sidebar: React.FC = () => {
 
   useEffect(() => {
     const restoreWorkspace = async () => {
-      if (window.electronAPI?.storage) {
-        const workspace = await window.electronAPI.storage.getWorkspace();
-        if (workspace?.path) {
-          setWorkspacePath(workspace.path);
-          loadDirectory(workspace.path);
-          loadSteeringContext(workspace.path);
-        }
+      const workspace = await api.storage.getWorkspace();
+      if (workspace?.path) {
+        setWorkspacePath(workspace.path);
+        loadDirectory(workspace.path);
+        loadSteeringContext(workspace.path);
       }
     };
     restoreWorkspace();
@@ -177,7 +177,13 @@ export const Sidebar: React.FC = () => {
   );
 };
 
-const FileTreeNode: React.FC<{node: FileNode; depth: number; onClick: (node: FileNode) => void}> = ({ node, depth, onClick }) => {
+interface FileTreeNodeProps {
+  node: FileNode;
+  depth: number;
+  onClick: (node: FileNode) => void;
+}
+
+const FileTreeNode: React.FC<FileTreeNodeProps> = ({ node, depth, onClick }) => {
   return (
     <div>
       <div 
@@ -201,3 +207,5 @@ const FileTreeNode: React.FC<{node: FileNode; depth: number; onClick: (node: Fil
     </div>
   );
 };
+
+export { FileTreeNode };
