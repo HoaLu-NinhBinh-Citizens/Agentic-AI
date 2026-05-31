@@ -22,6 +22,7 @@ from src.core.multi_agent.agent import (
     DevOpsAgent,
     UnifiedAgent,
 )
+from src.shared.utils import detect_language, get_language_display_name
 
 logger = logging.getLogger(__name__)
 
@@ -47,6 +48,8 @@ class ChatResponse(BaseModel):
     message: str
     success: bool
     agent_version: str = "unified"
+    detected_language: Optional[str] = None
+    language_display: Optional[str] = None
     context: Optional[Dict[str, Any]] = None
 
 
@@ -67,6 +70,10 @@ def register_chat_endpoints(app, get_agent_fn=None):
         Send a message to the AI Agent and get response.
         """
         try:
+            # Detect language from user input
+            detected_lang = detect_language(request.message)
+            lang_display = get_language_display_name(detected_lang)
+            
             user_message = ChatMessage(
                 role="user",
                 content=request.message,
@@ -84,7 +91,7 @@ def register_chat_endpoints(app, get_agent_fn=None):
                     detail="Agent not initialized."
                 )
 
-            response_text = await _process_with_agent(request.message, request.context, agent)
+            response_text = await _process_with_agent(request.message, request.context, agent, detected_lang)
             
             assistant_message = ChatMessage(
                 role="assistant",
@@ -101,6 +108,8 @@ def register_chat_endpoints(app, get_agent_fn=None):
                 message=response_text,
                 success=True,
                 agent_version="unified",
+                detected_language=detected_lang,
+                language_display=lang_display,
                 context={"history_size": len(chat_history)}
             )
             
@@ -156,18 +165,45 @@ def register_chat_endpoints(app, get_agent_fn=None):
         }
 
 
-async def _process_with_agent(message: str, context: Optional[Dict] = None, agent=None) -> str:
+async def _process_with_agent(
+    message: str,
+    context: Optional[Dict] = None,
+    agent=None,
+    detected_lang: str = "en"
+) -> str:
     """
     Process message with AI Agent.
+    
+    Args:
+        message: User message to process
+        context: Optional context dictionary
+        agent: Agent instance to use
+        detected_lang: Detected language code
+        
+    Returns:
+        Response text from the agent
     """
     try:
+        # Add language-specific instruction to the message
+        from src.shared.utils import get_language_system_prompt_suffix
+        lang_suffix = get_language_system_prompt_suffix(detected_lang)
+        
         if agent is not None:
+            # Check if agent supports language context
+            if hasattr(agent, 'process_message'):
+                return await agent.process_message(message, context, detected_lang=detected_lang)
             return await agent.process_message(message, context)
 
-        # Fallback: use simple Ollama LLM
+        # Fallback: use simple Ollama LLM with language instruction
         from src.infrastructure.llm.ollama import OllamaLLM
         llm = OllamaLLM()
-        response = await llm.generate(message)
+        
+        # Prepend language instruction if not English
+        full_message = message
+        if lang_suffix:
+            full_message = f"{message}\n{lang_suffix}"
+        
+        response = await llm.generate(full_message)
         return response
     except Exception as e:
         logger.error(f"LLM error: {e}")
