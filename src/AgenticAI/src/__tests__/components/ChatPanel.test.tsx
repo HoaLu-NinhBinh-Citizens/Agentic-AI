@@ -14,8 +14,11 @@ import React from 'react';
 import { render, screen, fireEvent, waitFor, act } from '@testing-library/react';
 import { ChatPanel } from '../../renderer/components/ChatPanel';
 import { useAppStore } from '../../renderer/store/useAppStore';
+import { MockElectronBridge, createMockBridge } from '../../../tests/__mocks__/electronBridge';
 
 describe('ChatPanel', () => {
+  let bridge: MockElectronBridge;
+
   beforeEach(() => {
     useAppStore.setState({
       messages: [],
@@ -23,33 +26,35 @@ describe('ChatPanel', () => {
       activeFile: null,
     });
     jest.clearAllMocks();
+    // Create a fresh mock bridge for each test
+    bridge = createMockBridge();
   });
 
   it('should render chat header', async () => {
-    window.electronAPI.ai.isInitialized.mockResolvedValueOnce(true);
+    bridge.setAIInitialized(true);
     
     await act(async () => {
-      render(<ChatPanel />);
+      render(<ChatPanel bridge={bridge} />);
     });
     
     expect(screen.getByText('AI Assistant')).toBeInTheDocument();
   });
 
   it('should render welcome message when no messages', async () => {
-    window.electronAPI.ai.isInitialized.mockResolvedValueOnce(true);
+    bridge.setAIInitialized(true);
     
     await act(async () => {
-      render(<ChatPanel />);
+      render(<ChatPanel bridge={bridge} />);
     });
     
     expect(screen.getByText('Welcome to AgenticAI')).toBeInTheDocument();
   });
 
   it('should render Configure AI button when AI is not initialized', async () => {
-    window.electronAPI.ai.isInitialized.mockResolvedValueOnce(false);
+    bridge.setAIInitialized(false);
     
     await act(async () => {
-      render(<ChatPanel />);
+      render(<ChatPanel bridge={bridge} />);
     });
     
     // Check that the warning icon is shown
@@ -57,10 +62,10 @@ describe('ChatPanel', () => {
   });
 
   it('should render textarea for input', async () => {
-    window.electronAPI.ai.isInitialized.mockResolvedValueOnce(true);
+    bridge.setAIInitialized(true);
     
     await act(async () => {
-      render(<ChatPanel />);
+      render(<ChatPanel bridge={bridge} />);
     });
     
     const textarea = screen.getByRole('textbox');
@@ -68,40 +73,40 @@ describe('ChatPanel', () => {
   });
 
   it('should render send button', async () => {
-    window.electronAPI.ai.isInitialized.mockResolvedValueOnce(true);
+    bridge.setAIInitialized(true);
     
     await act(async () => {
-      render(<ChatPanel />);
+      render(<ChatPanel bridge={bridge} />);
     });
     
     expect(screen.getByText('FiSend')).toBeInTheDocument();
   });
 
   it('should have clear chat button', async () => {
-    window.electronAPI.ai.isInitialized.mockResolvedValueOnce(true);
+    bridge.setAIInitialized(true);
     
     await act(async () => {
-      render(<ChatPanel />);
+      render(<ChatPanel bridge={bridge} />);
     });
     
     expect(screen.getByText('FiTrash2')).toBeInTheDocument();
   });
 
   it('should have settings button', async () => {
-    window.electronAPI.ai.isInitialized.mockResolvedValueOnce(true);
+    bridge.setAIInitialized(true);
     
     await act(async () => {
-      render(<ChatPanel />);
+      render(<ChatPanel bridge={bridge} />);
     });
     
     expect(screen.getByText('FiSettings')).toBeInTheDocument();
   });
 
   it('should update input value when typing', async () => {
-    window.electronAPI.ai.isInitialized.mockResolvedValueOnce(true);
+    bridge.setAIInitialized(true);
     
     await act(async () => {
-      render(<ChatPanel />);
+      render(<ChatPanel bridge={bridge} />);
     });
     
     const textarea = screen.getByRole('textbox') as HTMLTextAreaElement;
@@ -111,14 +116,11 @@ describe('ChatPanel', () => {
   });
 
   it('should send message on button click', async () => {
-    window.electronAPI.ai.isInitialized.mockResolvedValue(true);
-    window.electronAPI.ai.chat.mockResolvedValue({
-      content: 'Hello! How can I help?',
-      error: null,
-    });
+    bridge.setAIInitialized(true);
+    bridge.setAIResponse({ content: 'Hello! How can I help?', error: null });
 
     await act(async () => {
-      render(<ChatPanel />);
+      render(<ChatPanel bridge={bridge} />);
     });
 
     const textarea = screen.getByRole('textbox') as HTMLTextAreaElement;
@@ -128,19 +130,16 @@ describe('ChatPanel', () => {
     fireEvent.click(sendButton);
 
     await waitFor(() => {
-      expect(window.electronAPI.ai.chat).toHaveBeenCalled();
+      expect(bridge.ai.chat).toHaveBeenCalled();
     });
   });
 
   it('should add user message to chat', async () => {
-    window.electronAPI.ai.isInitialized.mockResolvedValue(true);
-    window.electronAPI.ai.chat.mockResolvedValue({
-      content: 'Response',
-      error: null,
-    });
+    bridge.setAIInitialized(true);
+    bridge.setAIResponse({ content: 'Response', error: null });
 
     await act(async () => {
-      render(<ChatPanel />);
+      render(<ChatPanel bridge={bridge} />);
     });
 
     const textarea = screen.getByRole('textbox') as HTMLTextAreaElement;
@@ -160,7 +159,7 @@ describe('ChatPanel', () => {
   });
 
   it('should clear messages when clear button is clicked', async () => {
-    window.electronAPI.ai.isInitialized.mockResolvedValueOnce(true);
+    bridge.setAIInitialized(true);
     useAppStore.setState({
       messages: [
         {
@@ -173,7 +172,7 @@ describe('ChatPanel', () => {
     });
 
     await act(async () => {
-      render(<ChatPanel />);
+      render(<ChatPanel bridge={bridge} />);
     });
 
     const clearButton = screen.getByText('FiTrash2').closest('button')!;
@@ -183,14 +182,11 @@ describe('ChatPanel', () => {
   });
 
   it('should display error message and dismiss', async () => {
-    window.electronAPI.ai.isInitialized.mockResolvedValue(true);
-    window.electronAPI.ai.chat.mockResolvedValue({
-      content: '',
-      error: 'API error occurred',
-    });
+    bridge.setAIInitialized(true);
+    bridge.setAIResponse({ content: '', error: 'API error occurred' });
 
     await act(async () => {
-      render(<ChatPanel />);
+      render(<ChatPanel bridge={bridge} />);
     });
 
     const textarea = screen.getByRole('textbox') as HTMLTextAreaElement;
@@ -208,11 +204,11 @@ describe('ChatPanel', () => {
       resolveChat = resolve;
     });
     
-    window.electronAPI.ai.isInitialized.mockResolvedValue(true);
-    window.electronAPI.ai.chat.mockImplementation(() => chatPromise);
+    bridge.setAIInitialized(true);
+    bridge.ai.chat = jest.fn().mockImplementation(() => chatPromise);
 
     await act(async () => {
-      render(<ChatPanel />);
+      render(<ChatPanel bridge={bridge} />);
     });
 
     const textarea = screen.getByRole('textbox') as HTMLTextAreaElement;
@@ -230,14 +226,11 @@ describe('ChatPanel', () => {
   });
 
   it('should send message on Enter key press', async () => {
-    window.electronAPI.ai.isInitialized.mockResolvedValue(true);
-    window.electronAPI.ai.chat.mockResolvedValue({
-      content: 'Response',
-      error: null,
-    });
+    bridge.setAIInitialized(true);
+    bridge.setAIResponse({ content: 'Response', error: null });
 
     await act(async () => {
-      render(<ChatPanel />);
+      render(<ChatPanel bridge={bridge} />);
     });
 
     const textarea = screen.getByRole('textbox') as HTMLTextAreaElement;
@@ -245,15 +238,15 @@ describe('ChatPanel', () => {
     fireEvent.keyDown(textarea, { key: 'Enter' });
 
     await waitFor(() => {
-      expect(window.electronAPI.ai.chat).toHaveBeenCalled();
+      expect(bridge.ai.chat).toHaveBeenCalled();
     });
   });
 
   it('should not send empty message', async () => {
-    window.electronAPI.ai.isInitialized.mockResolvedValue(true);
+    bridge.setAIInitialized(true);
 
     await act(async () => {
-      render(<ChatPanel />);
+      render(<ChatPanel bridge={bridge} />);
     });
 
     const sendButton = screen.getByText('FiSend').closest('button') as HTMLButtonElement;
@@ -261,10 +254,10 @@ describe('ChatPanel', () => {
   });
 
   it('should not send message when AI is not initialized', async () => {
-    window.electronAPI.ai.isInitialized.mockResolvedValue(false);
+    bridge.setAIInitialized(false);
 
     await act(async () => {
-      render(<ChatPanel />);
+      render(<ChatPanel bridge={bridge} />);
     });
 
     const textarea = screen.getByRole('textbox') as HTMLTextAreaElement;
@@ -272,22 +265,22 @@ describe('ChatPanel', () => {
   });
 
   it('should show context hint when file is open', async () => {
-    window.electronAPI.ai.isInitialized.mockResolvedValue(true);
+    bridge.setAIInitialized(true);
     useAppStore.setState({ activeFile: '/workspace/src/index.ts' });
 
     await act(async () => {
-      render(<ChatPanel />);
+      render(<ChatPanel bridge={bridge} />);
     });
 
     expect(screen.getByText(/Currently viewing: index\.ts/i)).toBeInTheDocument();
   });
 
   it('should show no file context hint when no file is open', async () => {
-    window.electronAPI.ai.isInitialized.mockResolvedValue(true);
+    bridge.setAIInitialized(true);
     useAppStore.setState({ activeFile: null });
 
     await act(async () => {
-      render(<ChatPanel />);
+      render(<ChatPanel bridge={bridge} />);
     });
 
     expect(screen.getByText(/No file currently open/i)).toBeInTheDocument();

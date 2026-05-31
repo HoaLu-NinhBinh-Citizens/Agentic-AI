@@ -22,37 +22,37 @@ __pycache__/
 **/.pytest_cache/
 
 # AI agent source should be versioned; runtime/cache artifacts should not.
-AI_support/**/__pycache__/
-AI_support/**/.pytest_cache/
-AI_support/ai_agent_memory/
-AI_support/ai_generated/
-AI_support/rag_index/
-AI_support/retrieval_reports/
-AI_support/outputs/
-AI_support/archive/
-AI_support/.ruff_cache/
-AI_support/tests/.pytest_cache/
+Agentic-AI/**/__pycache__/
+Agentic-AI/**/.pytest_cache/
+Agentic-AI/ai_agent_memory/
+Agentic-AI/ai_generated/
+Agentic-AI/rag_index/
+Agentic-AI/retrieval_reports/
+Agentic-AI/outputs/
+Agentic-AI/archive/
+Agentic-AI/.ruff_cache/
+Agentic-AI/tests/.pytest_cache/
 
 # Consolidated data directory (Phase 16)
-AI_support/data/rag_index/
-AI_support/data/retrieval/
-AI_support/data/memory/
-AI_support/data/outputs/
-AI_support/data/ai_generated/
+Agentic-AI/data/rag_index/
+Agentic-AI/data/retrieval/
+Agentic-AI/data/memory/
+Agentic-AI/data/outputs/
+Agentic-AI/data/ai_generated/
 
 # Legacy locations (redirect to data/)
 rag_index/
 retrieval_reports/
 
 # Benchmarking reports (runtime artifacts)
-AI_support/benchmarking/reports/
-AI_support/benchmark/stress_results/
-AI_support/benchmarking/ground_truth/
+Agentic-AI/benchmarking/reports/
+Agentic-AI/benchmark/stress_results/
+Agentic-AI/benchmarking/ground_truth/
 
 # Archived modules (use git rm -r --cached to remove from tracking)
-AI_support/ide/
-AI_support/optimization/
-AI_support/benchmarking/
+Agentic-AI/ide/
+Agentic-AI/optimization/
+Agentic-AI/benchmarking/
 
 *.log
 node_modules/

@@ -16,6 +16,7 @@ import React from 'react';
 import { render, screen, fireEvent, waitFor } from '@testing-library/react';
 import { Sidebar } from '../../renderer/components/Sidebar';
 import { useAppStore } from '../../renderer/store/useAppStore';
+import { MockElectronBridge, createMockBridge } from '../../../tests/__mocks__/electronBridge';
 
 describe('Sidebar', () => {
   beforeEach(() => {
@@ -30,26 +31,42 @@ describe('Sidebar', () => {
   });
 
   it('should render Open Folder button when no workspace is open', () => {
-    render(<Sidebar />);
+    const bridge = createMockBridge();
+    bridge.setOpenDirectoryResult(null);
+    bridge.setStorageWorkspaceResult(null);
+    
+    render(<Sidebar bridge={bridge} />);
     
     expect(screen.getByText('Open Folder')).toBeInTheDocument();
   });
 
   it('should show Explorer header', () => {
-    render(<Sidebar />);
+    const bridge = createMockBridge();
+    bridge.setOpenDirectoryResult(null);
+    bridge.setStorageWorkspaceResult(null);
+    
+    render(<Sidebar bridge={bridge} />);
     
     expect(screen.getByText('Explorer')).toBeInTheDocument();
   });
 
   it('should have New File button', () => {
-    render(<Sidebar />);
+    const bridge = createMockBridge();
+    bridge.setOpenDirectoryResult(null);
+    bridge.setStorageWorkspaceResult(null);
+    
+    render(<Sidebar bridge={bridge} />);
     
     const newFileButton = screen.getByTitle('New File');
     expect(newFileButton).toBeInTheDocument();
   });
 
   it('should have New Folder button', () => {
-    render(<Sidebar />);
+    const bridge = createMockBridge();
+    bridge.setOpenDirectoryResult(null);
+    bridge.setStorageWorkspaceResult(null);
+    
+    render(<Sidebar bridge={bridge} />);
     
     const newFolderButton = screen.getByTitle('New Folder');
     expect(newFolderButton).toBeInTheDocument();
@@ -61,10 +78,11 @@ describe('Sidebar', () => {
       { name: 'index.ts', path: '/workspace/index.ts', isDirectory: false }
     ];
 
-    useAppStore.setState({ workspacePath: '/workspace' });
-    window.electronAPI.readDirectory.mockResolvedValueOnce(mockEntries);
+    const bridge = createMockBridge();
+    bridge.setStorageWorkspaceResult({ path: '/workspace' });
+    bridge.setReadDirectoryResult(mockEntries);
 
-    render(<Sidebar />);
+    render(<Sidebar bridge={bridge} />);
 
     await waitFor(() => {
       expect(screen.getByText('src')).toBeInTheDocument();
@@ -77,10 +95,11 @@ describe('Sidebar', () => {
       { name: 'src', path: '/workspace/src', isDirectory: true }
     ];
 
-    useAppStore.setState({ workspacePath: '/workspace' });
-    window.electronAPI.readDirectory.mockResolvedValueOnce(mockEntries);
+    const bridge = createMockBridge();
+    bridge.setStorageWorkspaceResult({ path: '/workspace' });
+    bridge.setReadDirectoryResult(mockEntries);
 
-    render(<Sidebar />);
+    render(<Sidebar bridge={bridge} />);
 
     await waitFor(() => {
       expect(screen.getByText('src')).toBeInTheDocument();
@@ -92,10 +111,11 @@ describe('Sidebar', () => {
       { name: 'index.ts', path: '/workspace/index.ts', isDirectory: false }
     ];
 
-    useAppStore.setState({ workspacePath: '/workspace' });
-    window.electronAPI.readDirectory.mockResolvedValueOnce(mockEntries);
+    const bridge = createMockBridge();
+    bridge.setStorageWorkspaceResult({ path: '/workspace' });
+    bridge.setReadDirectoryResult(mockEntries);
 
-    render(<Sidebar />);
+    render(<Sidebar bridge={bridge} />);
 
     await waitFor(() => {
       expect(screen.getByText('index.ts')).toBeInTheDocument();
@@ -110,12 +130,15 @@ describe('Sidebar', () => {
       { name: 'index.ts', path: '/workspace/src/index.ts', isDirectory: false }
     ];
 
-    useAppStore.setState({ workspacePath: '/workspace' });
-    window.electronAPI.readDirectory
+    const bridge = createMockBridge();
+    bridge.setStorageWorkspaceResult({ path: '/workspace' });
+    bridge.setReadDirectoryResult(mockEntries);
+    // For the nested read, we need to track calls
+    bridge.readDirectory = jest.fn()
       .mockResolvedValueOnce(mockEntries)
       .mockResolvedValueOnce(nestedEntries);
 
-    render(<Sidebar />);
+    render(<Sidebar bridge={bridge} />);
 
     await waitFor(() => {
       const folder = screen.getByText('src');
@@ -132,10 +155,11 @@ describe('Sidebar', () => {
       { name: 'index.ts', path: '/workspace/index.ts', isDirectory: false }
     ];
 
-    useAppStore.setState({ workspacePath: '/workspace' });
-    window.electronAPI.readDirectory.mockResolvedValueOnce(mockEntries);
+    const bridge = createMockBridge();
+    bridge.setStorageWorkspaceResult({ path: '/workspace' });
+    bridge.setReadDirectoryResult(mockEntries);
 
-    render(<Sidebar />);
+    render(<Sidebar bridge={bridge} />);
 
     await waitFor(() => {
       const file = screen.getByText('index.ts');
@@ -147,15 +171,17 @@ describe('Sidebar', () => {
   });
 
   it('should call openDirectory when Open Folder is clicked', async () => {
-    window.electronAPI.openDirectory.mockResolvedValueOnce('/workspace');
+    const bridge = createMockBridge();
+    bridge.setOpenDirectoryResult('/workspace');
+    bridge.setStorageWorkspaceResult(null);
 
-    render(<Sidebar />);
+    render(<Sidebar bridge={bridge} />);
 
     const openFolderButton = screen.getByText('Open Folder');
     fireEvent.click(openFolderButton);
 
     await waitFor(() => {
-      expect(window.electronAPI.openDirectory).toHaveBeenCalled();
+      expect(bridge.openDirectory).toHaveBeenCalled();
     });
   });
 
@@ -165,10 +191,11 @@ describe('Sidebar', () => {
       { name: 'visible.ts', path: '/workspace/visible.ts', isDirectory: false }
     ];
 
-    useAppStore.setState({ workspacePath: '/workspace' });
-    window.electronAPI.readDirectory.mockResolvedValueOnce(mockEntries);
+    const bridge = createMockBridge();
+    bridge.setStorageWorkspaceResult({ path: '/workspace' });
+    bridge.setReadDirectoryResult(mockEntries);
 
-    render(<Sidebar />);
+    render(<Sidebar bridge={bridge} />);
 
     await waitFor(() => {
       expect(screen.getByText('visible.ts')).toBeInTheDocument();
@@ -182,10 +209,11 @@ describe('Sidebar', () => {
       { name: 'src', path: '/workspace/src', isDirectory: true }
     ];
 
-    useAppStore.setState({ workspacePath: '/workspace' });
-    window.electronAPI.readDirectory.mockResolvedValueOnce(mockEntries);
+    const bridge = createMockBridge();
+    bridge.setStorageWorkspaceResult({ path: '/workspace' });
+    bridge.setReadDirectoryResult(mockEntries);
 
-    render(<Sidebar />);
+    render(<Sidebar bridge={bridge} />);
 
     await waitFor(() => {
       expect(screen.getByText('src')).toBeInTheDocument();
@@ -199,10 +227,11 @@ describe('Sidebar', () => {
       { name: 'folder', path: '/workspace/folder', isDirectory: true }
     ];
 
-    useAppStore.setState({ workspacePath: '/workspace' });
-    window.electronAPI.readDirectory.mockResolvedValueOnce(mockEntries);
+    const bridge = createMockBridge();
+    bridge.setStorageWorkspaceResult({ path: '/workspace' });
+    bridge.setReadDirectoryResult(mockEntries);
 
-    render(<Sidebar />);
+    render(<Sidebar bridge={bridge} />);
 
     await waitFor(() => {
       const items = screen.getAllByText((content, element) => {
