@@ -196,6 +196,44 @@ interface GitAPI {
   gitStage: (path: string, files: string[]) => Promise<boolean>;
   gitCommit: (path: string, message: string) => Promise<boolean>;
   gitCheckout: (path: string, branch: string) => Promise<boolean>;
+  // Phase 3 Git operations
+  info: (workspacePath: string) => Promise<{
+    isRepo: boolean;
+    branch: string;
+    branches: string[];
+    status: {
+      modified: string[];
+      staged: string[];
+      created: string[];
+      deleted: string[];
+      not_added: string[];
+      current: string;
+      tracking: string | null;
+    } | null;
+    remotes: string[];
+  }>;
+  status: () => Promise<{
+    modified: string[];
+    staged: string[];
+    created: string[];
+    deleted: string[];
+    not_added: string[];
+    current: string;
+    tracking: string | null;
+  } | null>;
+  log: (workspacePath: string, limit?: number) => Promise<Array<{
+    hash: string;
+    message: string;
+    author: string;
+    date: string;
+  }>>;
+  stage: (workspacePath: string, files: string[]) => Promise<boolean>;
+  unstage: (workspacePath: string, files: string[]) => Promise<boolean>;
+  commit: (workspacePath: string, message: string) => Promise<boolean>;
+  checkout: (workspacePath: string, branch: string) => Promise<boolean>;
+  branch: (workspacePath: string, name?: string, create?: boolean) => Promise<string | null>;
+  diff: (workspacePath: string, file?: string) => Promise<string>;
+  discard: (workspacePath: string, files: string[]) => Promise<boolean>;
 }
 
 interface SearchAPI {

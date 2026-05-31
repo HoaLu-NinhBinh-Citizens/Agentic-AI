@@ -730,6 +730,42 @@ ipcMain.handle('git:diff', async (_, { workspacePath, file }) => {
   }
 });
 
+ipcMain.handle('git:unstage', async (_, { workspacePath, files }) => {
+  if (!gitIntegration) return false;
+  try {
+    await gitIntegration.openRepository(workspacePath);
+    return await gitIntegration.unstage(files);
+  } catch (error) {
+    console.error('Git unstage error:', error);
+    return false;
+  }
+});
+
+ipcMain.handle('git:branch', async (_, { workspacePath, name, create }) => {
+  if (!gitIntegration) return null;
+  try {
+    await gitIntegration.openRepository(workspacePath);
+    if (create && name) {
+      return await gitIntegration.createBranch(name);
+    }
+    return await gitIntegration.getCurrentBranch();
+  } catch (error) {
+    console.error('Git branch error:', error);
+    return null;
+  }
+});
+
+ipcMain.handle('git:discard', async (_, { workspacePath, files }) => {
+  if (!gitIntegration) return false;
+  try {
+    await gitIntegration.openRepository(workspacePath);
+    return await gitIntegration.discard(files);
+  } catch (error) {
+    console.error('Git discard error:', error);
+    return false;
+  }
+});
+
 // ============================================================================
 // IPC Handlers - Search (Phase 3)
 // ============================================================================

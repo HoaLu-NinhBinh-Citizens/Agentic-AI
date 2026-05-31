@@ -7,15 +7,15 @@ import { TaskPanel } from './components/TaskPanel';
 import { ChatPanel } from './components/ChatPanel';
 import { StatusBar } from './components/StatusBar';
 import { CommandPalette } from './components/CommandPalette';
-import { SettingsModal } from './components/SettingsModal';
+import { SettingsPanel } from './components/SettingsPanel';
 import { TerminalPanel } from './components/TerminalPanel';
 import { GitPanel } from './components/GitPanel';
 import { SearchPanel } from './components/SearchPanel';
 import { useAppStore } from './store/useAppStore';
 
 const App: React.FC = () => {
-  const { 
-    activeSidebarView, 
+  const {
+    activeSidebarView,
     setActiveSidebarView,
     isTerminalOpen,
     setTerminalOpen,
@@ -66,29 +66,25 @@ const App: React.FC = () => {
 
   return (
     <div className="app-container">
-      <div className="app-main">
-        <ActivityBar />
-        <div className="app-content">
-          <div className="sidebar-container">
-            {renderSidebarContent()}
-          </div>
-          <div className="editor-area">
-            <EditorPanel />
-            {isTerminalOpen && (
-              <TerminalPanel 
-                isOpen={isTerminalOpen} 
-                onClose={() => setTerminalOpen(false)} 
-                onMinimize={() => setTerminalOpen(false)} 
-              />
-            )}
-          </div>
-          <div className="right-panels">
-            <TaskPanel />
-            <ChatPanel />
-          </div>
-        </div>
-        <StatusBar />
+      <ActivityBar />
+      <div className="sidebar-container">
+        {renderSidebarContent()}
       </div>
+      <div className="editor-area">
+        <EditorPanel />
+        {isTerminalOpen && (
+          <TerminalPanel
+            isOpen={isTerminalOpen}
+            onClose={() => setTerminalOpen(false)}
+            onMinimize={() => setTerminalOpen(false)}
+          />
+        )}
+      </div>
+      <div className="right-panels">
+        <TaskPanel />
+        <ChatPanel />
+      </div>
+      <StatusBar />
 
       {/* Modals */}
       <CommandPalette
@@ -120,7 +116,7 @@ const App: React.FC = () => {
         }}
       />
 
-      <SettingsModal 
+      <SettingsPanel 
         isOpen={isSettingsOpen} 
         onClose={() => setSettingsOpen(false)} 
       />

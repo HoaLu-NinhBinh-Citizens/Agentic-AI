@@ -7,6 +7,7 @@ class AIService {
   constructor() {
     this.openai = null;
     this.anthropic = null;
+    this.ollamaClient = null;
     this.config = null;
   }
 
@@ -17,21 +18,43 @@ class AIService {
       this.openai = new OpenAI({ apiKey: config.apiKey });
     } else if (config.provider === 'anthropic') {
       this.anthropic = new Anthropic({ apiKey: config.apiKey });
+    } else if (config.provider === 'ollama') {
+      // Ollama client will be loaded separately
+      try {
+        const { ollamaClient } = require('./ollamaClient.cjs');
+        this.ollamaClient = ollamaClient;
+        if (config.endpoint) {
+          this.ollamaClient.setEndpoint(config.endpoint);
+        }
+      } catch (e) {
+        console.error('[AIService] Failed to load Ollama client:', e);
+      }
     }
   }
 
   isInitialized() {
-    return this.config !== null && this.config.apiKey && this.config.apiKey.length > 0;
+    if (!this.config) return false;
+    
+    if (this.config.provider === 'ollama') {
+      // Ollama just needs a model to be selected
+      return !!this.config.model;
+    }
+    
+    return this.config.apiKey && this.config.apiKey.length > 0;
   }
 
   getConfig() {
     if (!this.config) return null;
-    return { ...this.config, apiKey: '***' };
+    return { ...this.config, apiKey: this.config.apiKey ? '***' : undefined };
   }
 
   async chat(messages, systemPrompt, onChunk) {
     if (!this.config) {
       throw new Error('AI service not initialized. Call initialize() first.');
+    }
+
+    if (this.config.provider === 'ollama') {
+      return this._chatOllama(messages, systemPrompt, onChunk);
     }
 
     if (!this.config.apiKey) {
@@ -52,6 +75,26 @@ class AIService {
     }
 
     throw new Error(`Unknown provider: ${this.config.provider}`);
+  }
+
+  async _chatOllama(messages, systemPrompt, onChunk) {
+    if (!this.ollamaClient) {
+      throw new Error('Ollama client not available');
+    }
+
+    const options = {
+      model: this.config.model || 'codellama',
+      prompt: messages.filter(m => m.role !== 'system').map(m => m.content).join('\n'),
+      system: systemPrompt || messages.find(m => m.role === 'system')?.content,
+      stream: !!onChunk,
+      options: {
+        temperature: this.config.temperature ?? 0.7,
+        num_predict: this.config.maxTokens ?? 2048,
+      },
+    };
+
+    const content = await this.ollamaClient.generate(options, onChunk);
+    return { content, model: this.config.model || 'codellama' };
   }
 
   async _chatOpenAI(messages, onChunk) {

@@ -90,6 +90,36 @@ class GitIntegration {
     }
   }
 
+  async unstage(files) {
+    if (!this.git) return false;
+    try {
+      await this.git.reset(['HEAD', '--', ...files]);
+      return true;
+    } catch {
+      return false;
+    }
+  }
+
+  async discard(files) {
+    if (!this.git) return false;
+    try {
+      await this.git.checkout(['--', ...files]);
+      return true;
+    } catch {
+      return false;
+    }
+  }
+
+  async getCurrentBranch() {
+    if (!this.git) return null;
+    try {
+      const branch = await this.git.branchLocal();
+      return branch.current;
+    } catch {
+      return null;
+    }
+  }
+
   async commit(message) {
     if (!this.git) return false;
     try {

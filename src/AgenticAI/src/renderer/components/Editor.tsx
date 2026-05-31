@@ -1,16 +1,22 @@
 import React, { useEffect, useState } from 'react';
 import Editor from '@monaco-editor/react';
 import { useAppStore } from '../store/useAppStore';
-import { FiX } from 'react-icons/fi';
+import { FiX, FiFolder } from 'react-icons/fi';
 
-export const EditorPanel: React.FC = () => {
-  const { 
-    activeFile, 
-    openFiles, 
-    setActiveFile, 
-    removeOpenFile
+interface EditorPanelProps {
+  onMount?: (editor: any) => void;
+}
+
+export const EditorPanel: React.FC<EditorPanelProps> = ({ onMount }) => {
+  const {
+    activeFile,
+    openFiles,
+    setActiveFile,
+    removeOpenFile,
+    setCursorPosition,
+    recentWorkspaces,
   } = useAppStore();
-  
+
   const [content, setContent] = useState<string>('');
   const [isDirty, setIsDirty] = useState(false);
 
@@ -30,6 +36,18 @@ export const EditorPanel: React.FC = () => {
     setIsDirty(true);
   };
 
+  const handleEditorMount = (editor: any) => {
+    editor.onDidChangeCursorPosition((e: any) => {
+      setCursorPosition({
+        line: e.position.lineNumber,
+        column: e.position.column,
+      });
+    });
+    if (onMount) {
+      onMount(editor);
+    }
+  };
+
   const handleSave = async () => {
     if (activeFile && window.electronAPI) {
       await window.electronAPI.writeFile(activeFile, content);
@@ -37,8 +55,20 @@ export const EditorPanel: React.FC = () => {
     }
   };
 
+  const handleOpenFolder = () => {
+    window.electronAPI?.openDirectory();
+  };
+
+  const handleOpenRecent = (path: string): void => {
+    if (window.electronAPI) {
+      window.electronAPI.openDirectory().then(() => {
+        console.log('Opened directory:', path);
+      });
+    }
+  };
+
   const getFileName = (path: string) => path.split(/[/\\]/).pop() || path;
-  
+
   const getLanguage = (path: string) => {
     const ext = path.split('.').pop()?.toLowerCase();
     const langMap: Record<string, string> = {
@@ -66,14 +96,14 @@ export const EditorPanel: React.FC = () => {
       {openFiles.length > 0 && (
         <div className="editor-tabs">
           {openFiles.map(file => (
-            <div 
+            <div
               key={file}
               className={`editor-tab ${file === activeFile ? 'active' : ''}`}
               onClick={() => setActiveFile(file)}
             >
               <span>{getFileName(file)}</span>
               {file === activeFile && isDirty && <span className="dirty-indicator">●</span>}
-              <button 
+              <button
                 className="close-tab"
                 onClick={(e) => { e.stopPropagation(); removeOpenFile(file); }}
               >
@@ -83,7 +113,7 @@ export const EditorPanel: React.FC = () => {
           ))}
         </div>
       )}
-      
+
       <div className="editor-content">
         {activeFile ? (
           <Editor
@@ -91,6 +121,7 @@ export const EditorPanel: React.FC = () => {
             language={getLanguage(activeFile)}
             value={content}
             onChange={handleEditorChange}
+            onMount={handleEditorMount}
             theme="vs-dark"
             options={{
               fontSize: 14,
@@ -98,13 +129,46 @@ export const EditorPanel: React.FC = () => {
               minimap: { enabled: true },
               lineNumbers: 'on',
               scrollBeyondLastLine: false,
-              automaticLayout: true
+              automaticLayout: true,
+              domReadOnly: false,
+              cursorBlinking: 'smooth',
+              cursorStyle: 'line',
+              wordWrap: 'on',
+              folding: true,
+              renderLineHighlight: 'all',
+              scrollbar: {
+                vertical: 'visible',
+                horizontal: 'visible',
+                useShadows: false,
+                verticalScrollbarSize: 10,
+                horizontalScrollbarSize: 10
+              }
             }}
           />
         ) : (
-          <div className="no-file-open">
-            <h2>AgenticAI</h2>
-            <p>Open a folder and select a file to start editing</p>
+          <div className="welcome-screen">
+            <div className="welcome-content">
+              <h1 className="welcome-title">AgenticAI</h1>
+              <p className="welcome-subtitle">Open a folder to start coding</p>
+              <button className="open-folder-btn" onClick={handleOpenFolder}>
+                <FiFolder />
+                <span>Open Folder</span>
+              </button>
+
+              {recentWorkspaces && recentWorkspaces.length > 0 && (
+                <div className="recent-workspaces">
+                  <h3>Recent Workspaces</h3>
+                  <ul>
+                    {recentWorkspaces.slice(0, 5).map((ws: string, idx: number) => (
+                      <li key={idx} onClick={() => handleOpenRecent(ws)}>
+                        <FiFolder />
+                        <span>{ws}</span>
+                      </li>
+                    ))}
+                  </ul>
+                </div>
+              )}
+            </div>
           </div>
         )}
       </div>

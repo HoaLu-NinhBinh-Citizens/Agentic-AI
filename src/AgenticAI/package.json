@@ -55,6 +55,11 @@
     ],
     "directories": {
       "output": "release"
-    }
+    },
+    "npmRebuild": false,
+    "nodeGypRebuild": false,
+    "buildDependenciesFromSource": false,
+    "asar": true,
+    "compression": "maximum"
   }
 }

@@ -12,7 +12,9 @@ interface AppStore {
   // Workspace
   workspacePath: string | null;
   setWorkspacePath: (path: string | null) => void;
-  
+  recentWorkspaces: string[];
+  addRecentWorkspace: (path: string) => void;
+
   // Files
   files: FileNode[];
   setFiles: (files: FileNode[]) => void;
@@ -70,12 +72,33 @@ interface AppStore {
   setOllamaHealth: (status: OllamaHealthStatus | null) => void;
   ollamaModels: OllamaModel[];
   setOllamaModels: (models: OllamaModel[]) => void;
+
+  // Git State
+  gitBranch: string;
+  setGitBranch: (branch: string) => void;
+  gitStatus: GitFileChange[];
+  setGitStatus: (status: GitFileChange[]) => void;
+  gitLoading: boolean;
+  setGitLoading: (loading: boolean) => void;
+  commitMessage: string;
+  setCommitMessage: (message: string) => void;
+}
+
+export interface GitFileChange {
+  path: string;
+  status: 'modified' | 'added' | 'deleted' | 'renamed' | 'untracked';
+  staged: boolean;
+  oldPath?: string;
 }
 
 export const useAppStore = create<AppStore>((set) => ({
   workspacePath: null,
   setWorkspacePath: (path) => set({ workspacePath: path }),
-  
+  recentWorkspaces: [],
+  addRecentWorkspace: (path) => set((state) => ({
+    recentWorkspaces: [path, ...state.recentWorkspaces.filter(p => p !== path)].slice(0, 10)
+  })),
+
   files: [],
   setFiles: (files) => set({ files }),
   toggleFolder: (path) => set((state) => ({
@@ -149,6 +172,16 @@ export const useAppStore = create<AppStore>((set) => ({
   setOllamaHealth: (status) => set({ ollamaHealth: status }),
   ollamaModels: [],
   setOllamaModels: (models) => set({ ollamaModels: models }),
+
+  // Git State
+  gitBranch: 'main',
+  setGitBranch: (branch) => set({ gitBranch: branch }),
+  gitStatus: [],
+  setGitStatus: (status) => set({ gitStatus: status }),
+  gitLoading: false,
+  setGitLoading: (loading) => set({ gitLoading: loading }),
+  commitMessage: '',
+  setCommitMessage: (message) => set({ commitMessage: message }),
 }));
 
 function toggleFolderInTree(files: FileNode[], path: string): FileNode[] {

@@ -294,3 +294,20 @@ export interface AIProviderConfig {
   anthropicApiKey?: string;
   anthropicModel?: string;
 }
+
+// ============================================================================
+// Git API Types (Phase 3)
+// ============================================================================
+
+export interface GitAPI {
+  info: (workspacePath: string) => Promise<GitInfo>;
+  status: () => Promise<GitStatus | null>;
+  log: (workspacePath: string, limit?: number) => Promise<CommitInfo[]>;
+  stage: (workspacePath: string, files: string[]) => Promise<boolean>;
+  unstage: (workspacePath: string, files: string[]) => Promise<boolean>;
+  commit: (workspacePath: string, message: string) => Promise<boolean>;
+  checkout: (workspacePath: string, branch: string) => Promise<boolean>;
+  branch: (workspacePath: string, name?: string, create?: boolean) => Promise<string | null>;
+  diff: (workspacePath: string, file?: string) => Promise<string>;
+  discard: (workspacePath: string, files: string[]) => Promise<boolean>;
+}
