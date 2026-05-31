@@ -177,24 +177,37 @@ class CircuitBreaker:
             CircuitBreakerOpenError: If circuit is open.
         """
         last_exception = None
+        failure_recorded = False
         
         for attempt in range(self.max_retries + 1):
             try:
                 return await self._execute(func, *args, **kwargs)
             except CircuitBreakerOpenError:
-                # Circuit is open, don't retry
+                # Circuit is open or half-open, don't retry
                 raise
             except Exception as e:
                 last_exception = e
-                is_transient = self._is_transient_failure(e)
+                
+                # Check current state (may have changed during execution)
+                async with self._lock:
+                    current_state = self._state
+                
+                # In HALF_OPEN state, no retries - probe must execute exactly once
+                if current_state == CircuitBreakerState.HALF_OPEN:
+                    if not failure_recorded:
+                        await self._record_failure(e)
+                        failure_recorded = True
+                    raise
                 
                 # Only retry if transient and haven't exhausted retries
-                if is_transient and attempt < self.max_retries:
+                if self._is_transient_failure(e) and attempt < self.max_retries:
                     continue
                 else:
                     # Non-transient or max retries reached
-                    # Record failure only ONCE per call (after retries exhausted)
-                    await self._record_failure(e)
+                    # Record failure only ONCE per call (regardless of retries)
+                    if not failure_recorded:
+                        await self._record_failure(e)
+                        failure_recorded = True
                     raise
         
         # Should not reach here, but just in case

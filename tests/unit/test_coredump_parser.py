@@ -3,6 +3,8 @@
 Unit tests for ARM core dump parsing and analysis.
 """
 
+import struct
+
 import pytest
 from src.domain.hardware.coredump.coredump_parser import (
     CoreDumpFormat,
@@ -155,7 +157,7 @@ class TestCoreDumpInfo:
     def test_coredump_info_to_dict(self):
         """UT6.11: Convert to dict."""
         info = CoreDumpInfo(
-            format=CoreDumpFormat.RAW_MEMORY,
+            format=CoreDumpFormat.ELF_CORE,
             timestamp=1000.0,
             exception_type=ExceptionType.HARD_FAULT,
             exception_address=0x08001000,

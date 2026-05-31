@@ -1319,22 +1319,28 @@ result = value
         assert "d.py" in str(resolved.file_path)
 
     def test_chained_alias_resolution(self):
-        """Test chained alias: A -> B -> C (each with alias)."""
-        files = {
-            Path("c.py"): "data = {'key': 'value'}",
-            Path("b.py"): "from c import data as d",
-            Path("a.py"): "from b import d as data",
-        }
-
+        """Test chained alias: A -> B -> C (each with alias).
+        
+        In this test:
+        - c.py defines: data
+        - b.py imports: from c import data as d
+        - a.py imports: from b import d as data
+        
+        The AliasResolver only handles single-file aliases, not cross-file chains.
+        """
         alias_resolver = AliasResolver()
-        alias_resolver.parse_import("a.py", files[Path("a.py")])
-        alias_resolver.parse_import("b.py", files[Path("b.py")])
-
-        # a.py has alias d -> data
-        assert alias_resolver.resolve_symbol("a.py", "d") == "data"
-
-        # b.py has alias d -> data (from c)
-        assert alias_resolver.resolve_symbol("b.py", "d") == "data"
+        
+        # Parse b.py: "from c import data as d"
+        # This creates alias: d -> data
+        alias_resolver.parse_import("b.py", "from c import data as d")
+        result_b = alias_resolver.resolve_symbol("b.py", "d")
+        assert result_b == "data", f"b.py: Expected 'data', got {result_b}"
+        
+        # Parse a.py: "from b import d as data"
+        # This creates alias: data -> d
+        alias_resolver.parse_import("a.py", "from b import d as data")
+        result_a = alias_resolver.resolve_symbol("a.py", "data")
+        assert result_a == "d", f"a.py: Expected 'd', got {result_a}"
 
     def test_alias_impact_on_call_graph(self):
         """Test that aliases affect call graph edges correctly."""

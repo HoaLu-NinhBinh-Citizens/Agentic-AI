@@ -29,14 +29,14 @@ class TestErasePolicy:
         policy = ErasePolicy(mode=EraseMode.MINIMAL)
         
         sectors = policy.get_sectors_to_erase(
-            firmware_address=0x08010000,
-            firmware_size=0x10000,  # 64KB
-            sector_size=0x800,      # 2KB sectors
+            firmware_address=0x0,       # Relative offset from flash base
+            firmware_size=0x10000,      # 64KB
+            sector_size=0x800,           # 2KB sectors
             total_sectors=128,
         )
         
         # Should only erase sectors needed for firmware
-        assert len(sectors) == 32  # 0x10000 / 0x800
+        assert len(sectors) == 32  # 0x10000 / 0x800 = 32 sectors
     
     def test_balanced_mode(self):
         """Test balanced erase mode."""
@@ -47,21 +47,22 @@ class TestErasePolicy:
         )
         
         sectors = policy.get_sectors_to_erase(
-            firmware_address=0x08010800,  # Offset by 1 sector
+            firmware_address=0x800,       # Offset by 1 sector (relative)
             firmware_size=0x10000,
             sector_size=0x800,
             total_sectors=128,
         )
         
-        # Should include guards
+        # Should include guards: sectors 0-33 (34 total)
         assert len(sectors) > 32
+        assert len(sectors) == 34  # 32 + 2 guards
     
     def test_full_mode(self):
         """Test full erase mode."""
         policy = ErasePolicy(mode=EraseMode.FULL)
         
         sectors = policy.get_sectors_to_erase(
-            firmware_address=0x08010000,
+            firmware_address=0x0,
             firmware_size=0x10000,
             sector_size=0x800,
             total_sectors=128,
@@ -174,7 +175,7 @@ class TestWearLevelingMonitor:
     @pytest.mark.asyncio
     async def test_wear_warning(self, monitor):
         """Test wear warning generation."""
-        # Simulate high wear
+        # Simulate high wear (85% of 100000 cycles)
         for _ in range(85000):
             await monitor.record_erase(7)
         
@@ -185,7 +186,7 @@ class TestWearLevelingMonitor:
     @pytest.mark.asyncio
     async def test_critical_wear_warning(self, monitor):
         """Test critical wear warning."""
-        # Simulate critical wear
+        # Simulate critical wear (96% of 100000 cycles)
         for _ in range(96000):
             await monitor.record_erase(8)
         

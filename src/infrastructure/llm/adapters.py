@@ -5,10 +5,13 @@ This module provides:
 - OpenAIAdapter using official openai SDK
 - ClaudeAdapter using official anthropic SDK
 - Environment variable based provider detection
+- Retry logic with exponential backoff
+- Cost tracking utilities
 """
 
 from __future__ import annotations
 
+import asyncio
 import logging
 import os
 from abc import ABC, abstractmethod
@@ -16,6 +19,80 @@ from dataclasses import dataclass, field
 from typing import Optional
 
 logger = logging.getLogger(__name__)
+
+
+class RateLimitError(Exception):
+    """Raised when rate limit is exceeded."""
+
+    def __init__(self, retry_after: float = 60.0):
+        self.retry_after = retry_after
+        super().__init__(f"Rate limited, retry after {retry_after}s")
+
+
+class ServiceUnavailableError(Exception):
+    """Raised when service is temporarily unavailable."""
+
+    def __init__(self, message: str = "Service unavailable"):
+        self.message = message
+        super().__init__(message)
+
+
+@dataclass
+class CostEstimate:
+    """Cost estimation for LLM calls.
+    
+    Attributes:
+        input_cost: Cost for input tokens in USD
+        output_cost: Cost for output tokens in USD
+        total_cost: Total cost in USD
+        currency: Currency code (USD)
+    """
+    input_cost: float = 0.0
+    output_cost: float = 0.0
+    total_cost: float = 0.0
+    currency: str = "USD"
+
+
+# Pricing per 1M tokens (as of 2025)
+LLM_PRICING = {
+    "openai": {
+        "gpt-4o": CostEstimate(input_cost=2.5, output_cost=10.0),
+        "gpt-4o-mini": CostEstimate(input_cost=0.15, output_cost=0.6),
+        "gpt-4-turbo": CostEstimate(input_cost=10.0, output_cost=30.0),
+        "gpt-3.5-turbo": CostEstimate(input_cost=0.5, output_cost=1.5),
+    },
+    "anthropic": {
+        "claude-opus-4-5": CostEstimate(input_cost=3.0, output_cost=15.0),
+        "claude-sonnet-4-20250514": CostEstimate(input_cost=3.0, output_cost=15.0),
+        "claude-haiku-4-20250714": CostEstimate(input_cost=0.8, output_cost=4.0),
+    },
+}
+
+
+def calculate_cost(
+    model: str,
+    input_tokens: int,
+    output_tokens: int,
+    provider: str = "openai",
+) -> float:
+    """Calculate cost for an LLM call.
+    
+    Args:
+        model: Model name
+        input_tokens: Number of input tokens
+        output_tokens: Number of output tokens
+        provider: Provider name (openai, anthropic)
+    
+    Returns:
+        Total cost in USD
+    """
+    pricing = LLM_PRICING.get(provider, {})
+    cost_info = pricing.get(model, CostEstimate(input_cost=0.0, output_cost=0.0))
+    
+    return (
+        (input_tokens / 1_000_000) * cost_info.input_cost +
+        (output_tokens / 1_000_000) * cost_info.output_cost
+    )
 
 
 @dataclass
@@ -312,6 +389,78 @@ def create_llm_provider_from_env() -> Optional[LLMProvider]:
 
     logger.debug("No LLM API keys found in environment")
     return None
+
+
+async def generate_with_retry(
+    provider: LLMProvider,
+    prompt: str,
+    system_prompt: Optional[str] = None,
+    temperature: float = 0.7,
+    max_tokens: int = 2048,
+    max_retries: int = 3,
+    backoff_base: float = 2.0,
+) -> LLMResponse:
+    """Generate response with retry logic and exponential backoff.
+
+    Args:
+        provider: LLM provider instance
+        prompt: User prompt
+        system_prompt: Optional system prompt
+        temperature: Sampling temperature
+        max_tokens: Maximum response tokens
+        max_retries: Maximum retry attempts
+        backoff_base: Base for exponential backoff (2^attempt seconds)
+
+    Returns:
+        LLMResponse from provider
+
+    Raises:
+        RateLimitError: If rate limited after all retries
+        ServiceUnavailableError: If service unavailable after all retries
+    """
+    last_error: Exception | None = None
+    retryable_error: bool = False
+
+    for attempt in range(max_retries):
+        try:
+            return await provider.generate(
+                prompt=prompt,
+                system_prompt=system_prompt,
+                temperature=temperature,
+                max_tokens=max_tokens,
+            )
+        except RateLimitError as e:
+            wait_time = backoff_base ** attempt
+            logger.warning(
+                "Rate limit hit on attempt %d/%d, waiting %.1fs",
+                attempt + 1, max_retries, wait_time
+            )
+            await asyncio.sleep(wait_time)
+            last_error = e
+            retryable_error = True
+        except ServiceUnavailableError as e:
+            wait_time = backoff_base ** attempt
+            logger.warning(
+                "Service unavailable on attempt %d/%d, waiting %.1fs",
+                attempt + 1, max_retries, wait_time
+            )
+            await asyncio.sleep(wait_time)
+            last_error = e
+            retryable_error = True
+        except Exception as e:
+            logger.error("Unexpected error during LLM call: %s", e)
+            last_error = e
+            retryable_error = False
+            break
+
+    if retryable_error:
+        if isinstance(last_error, RateLimitError):
+            raise RateLimitError(retry_after=60.0)
+        if isinstance(last_error, ServiceUnavailableError):
+            raise ServiceUnavailableError()
+    if last_error:
+        raise last_error
+    raise RuntimeError("LLM call failed after all retries")
 
 
 def create_llm_provider(

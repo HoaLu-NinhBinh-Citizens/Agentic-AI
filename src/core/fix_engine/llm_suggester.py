@@ -6,6 +6,7 @@ rule-based fixes, using code context to generate appropriate solutions.
 
 from __future__ import annotations
 
+import asyncio
 import logging
 import os
 import re
@@ -17,6 +18,9 @@ from src.infrastructure.llm.adapters import (
     LLMProvider,
     create_llm_provider_from_env,
     create_llm_provider,
+    RateLimitError,
+    ServiceUnavailableError,
+    calculate_cost,
 )
 
 logger = logging.getLogger(__name__)
@@ -83,6 +87,59 @@ class LLMFixSuggestion:
             "confidence": self.confidence,
             "alternatives": self.alternative_suggestions,
             "rule_id": self.rule_id,
+        }
+
+
+@dataclass
+class LLMSuggestionStats:
+    """Statistics for LLM suggestion calls.
+
+    Attributes:
+        total_calls: Total number of LLM calls made
+        successful_calls: Number of successful calls
+        failed_calls: Number of failed calls
+        total_tokens: Total tokens consumed
+        total_cost: Total cost in USD
+    """
+    total_calls: int = 0
+    successful_calls: int = 0
+    failed_calls: int = 0
+    total_tokens: int = 0
+    total_cost: float = 0.0
+
+    def record_success(self, tokens: int, cost: float) -> None:
+        """Record a successful call.
+
+        Args:
+            tokens: Number of tokens used
+            cost: Cost in USD
+        """
+        self.total_calls += 1
+        self.successful_calls += 1
+        self.total_tokens += tokens
+        self.total_cost += cost
+
+    def record_failure(self) -> None:
+        """Record a failed call."""
+        self.total_calls += 1
+        self.failed_calls += 1
+
+    @property
+    def success_rate(self) -> float:
+        """Calculate success rate."""
+        if self.total_calls == 0:
+            return 0.0
+        return self.successful_calls / self.total_calls
+
+    def to_dict(self) -> dict[str, Any]:
+        """Convert to dictionary."""
+        return {
+            "total_calls": self.total_calls,
+            "successful_calls": self.successful_calls,
+            "failed_calls": self.failed_calls,
+            "total_tokens": self.total_tokens,
+            "total_cost": round(self.total_cost, 6),
+            "success_rate": round(self.success_rate, 2),
         }
 
 
@@ -287,6 +344,11 @@ class LLMSuggester:
     - Real LLM providers (OpenAI, Anthropic) via SDK adapters
     - Existing LLM infrastructure (LLMManager from infrastructure/llm)
     - Fallback to template-based suggestions when LLM unavailable
+
+    Features:
+    - Retry logic with exponential backoff for rate limits
+    - Cost tracking and statistics
+    - Configurable retry behavior
     """
 
     def __init__(
@@ -295,6 +357,8 @@ class LLMSuggester:
         llm_manager: Any = None,
         enable_llm: bool = True,
         max_context_lines: int = 20,
+        max_retries: int = 3,
+        backoff_base: float = 2.0,
     ) -> None:
         """Initialize the LLM suggester.
 
@@ -303,11 +367,16 @@ class LLMSuggester:
             llm_manager: LLMManager instance from infrastructure/llm
             enable_llm: Whether to attempt LLM calls
             max_context_lines: Maximum context lines for prompts
+            max_retries: Maximum retry attempts for rate limits
+            backoff_base: Base for exponential backoff
         """
         self._provider = provider
         self._llm_manager = llm_manager
         self.enable_llm = enable_llm
         self.max_context_lines = max_context_lines
+        self.max_retries = max_retries
+        self.backoff_base = backoff_base
+        self.stats = LLMSuggestionStats()
 
         if enable_llm and provider is None and llm_manager is None:
             self._provider = create_llm_provider_from_env()
@@ -316,6 +385,11 @@ class LLMSuggester:
     def provider(self) -> Optional[LLMProvider]:
         """Get the LLM provider if configured."""
         return self._provider
+
+    @property
+    def stats_summary(self) -> LLMSuggestionStats:
+        """Get current statistics."""
+        return self.stats
 
     @property
     def is_llm_enabled(self) -> bool:
@@ -356,13 +430,101 @@ class LLMSuggester:
 
         try:
             if self._provider is not None:
-                response = await self._call_provider(self._provider, prompt)
+                response = await self._call_provider_with_retry(
+                    self._provider, prompt
+                )
             else:
                 response = await self._call_llm_manager(prompt)
+            
+            self.stats.record_success(
+                tokens=response.tokens_used,
+                cost=self._estimate_cost(response)
+            )
             return self._parse_llm_response(response, finding, context)
+        except RateLimitError:
+            logger.warning("Rate limit exceeded after retries, falling back to template")
+            self.stats.record_failure()
+            return self._template_suggestion(finding, context)
+        except ServiceUnavailableError:
+            logger.warning("Service unavailable after retries, falling back to template")
+            self.stats.record_failure()
+            return self._template_suggestion(finding, context)
         except Exception as e:
             logger.warning("LLM call failed: %s, falling back to template", e)
+            self.stats.record_failure()
             return self._template_suggestion(finding, context)
+
+    def _estimate_cost(self, response: Any) -> float:
+        """Estimate cost for a response.
+
+        Args:
+            response: LLMResponse or similar object
+
+        Returns:
+            Estimated cost in USD
+        """
+        provider_name = getattr(self._provider, "provider_name", "openai")
+        model = getattr(self._provider, "model", "gpt-4o-mini")
+        tokens_used = getattr(response, "tokens_used", 0)
+        
+        return calculate_cost(model, tokens_used, 0, provider_name)
+
+    async def _call_provider_with_retry(
+        self,
+        provider: LLMProvider,
+        prompt: str,
+    ) -> Any:
+        """Call LLM provider with retry logic.
+
+        Args:
+            provider: LLM provider instance
+            prompt: User prompt
+
+        Returns:
+            LLMResponse from provider
+
+        Raises:
+            RateLimitError: If rate limited after all retries
+            ServiceUnavailableError: If service unavailable after retries
+        """
+        last_error: Exception | None = None
+
+        for attempt in range(self.max_retries):
+            try:
+                return await provider.generate(
+                    prompt=prompt,
+                    system_prompt=SYSTEM_PROMPT,
+                    temperature=0.3,
+                    max_tokens=2048,
+                )
+            except RateLimitError:
+                wait_time = self.backoff_base ** attempt
+                logger.warning(
+                    "Rate limit hit on attempt %d/%d, waiting %.1fs",
+                    attempt + 1, self.max_retries, wait_time
+                )
+                await asyncio.sleep(wait_time)
+                last_error = RateLimitError()
+            except ServiceUnavailableError:
+                wait_time = self.backoff_base ** attempt
+                logger.warning(
+                    "Service unavailable on attempt %d/%d, waiting %.1fs",
+                    attempt + 1, self.max_retries, wait_time
+                )
+                await asyncio.sleep(wait_time)
+                last_error = ServiceUnavailableError()
+            except Exception as e:
+                logger.error("Unexpected error during LLM call: %s", e)
+                last_error = e
+                break
+
+        if isinstance(last_error, RateLimitError):
+            raise RateLimitError()
+        if isinstance(last_error, ServiceUnavailableError):
+            raise ServiceUnavailableError()
+        if last_error:
+            raise last_error
+        raise RuntimeError("LLM call failed after all retries")
 
     async def _call_provider(self, provider: LLMProvider, prompt: str) -> str:
         """Call LLM provider directly using SDK adapter."""
@@ -453,26 +615,27 @@ class LLMSuggester:
 
     def _parse_llm_response(
         self,
-        response: str,
+        response: Any,
         finding: Any,
         context: CodeContext,
     ) -> LLMFixSuggestion:
         """Parse LLM response into structured suggestion.
 
         Args:
-            response: Raw LLM response
+            response: LLMResponse object or raw string
             finding: Original finding
             context: Code context
 
         Returns:
             LLMFixSuggestion
         """
+        content = getattr(response, "content", str(response))
         explanation = ""
         suggested_code = ""
         alternatives: list[str] = []
         confidence = 0.8
 
-        for line in response.split("\n"):
+        for line in content.split("\n"):
             line = line.strip()
             if line.startswith("EXPLANATION:"):
                 explanation = line[12:].strip()

@@ -11,7 +11,12 @@ from src.infrastructure.models import ExperienceEntry
 
 
 class AgentMemory:
-    """Persistent memory that stores lessons from previous runs."""
+    """Persistent memory that stores lessons from previous runs.
+    
+    Performance optimizations:
+    - Lazy loading for large data structures
+    - On-demand data access with caching
+    """
 
     CRITICAL_FIELDS = ("voltage", "current", "pinout", "footprint", "power", "protocol", "wiring")
     PROMOTABLE_LAYERS = {"project_kb", "pattern_kb", "failure_memory"}
@@ -20,42 +25,95 @@ class AgentMemory:
         r"act as|you are now|copy this|paste this)\b",
         re.IGNORECASE,
     )
+    
+    # Lazy loading thresholds
+    _LAZY_THRESHOLD = 100  # Items before lazy loading
 
     def __init__(self, project_root: str = "."):
         self.project_root = Path(project_root).resolve()
         self.memory_path = self.project_root / AGENT_MEMORY_FILE
         self.memory_path.parent.mkdir(parents=True, exist_ok=True)
-        self.data = self._load()
+        
+        # Lazy loading state
+        self._lazy_loaded = False
+        self._data_loaded = False
+        self._data: Dict = {}
+        
+        # Lazy caches
+        self._experience_cache: List[Dict] | None = None
+        self._proposal_cache: List[Dict] | None = None
+        
+        # Conflict detector
         self._conflict_detector = ConflictDetector()
-
-    def _load(self) -> Dict:
+        
+        # Load only metadata initially
+        self._load_metadata()
+    
+    def _load_metadata(self) -> None:
+        """Load only metadata without full data."""
         if not self.memory_path.exists():
-            return self.empty_memory()
+            self._data = self.empty_memory()
+            self._lazy_loaded = True
+            return
+        
         try:
-            data = json.loads(self.memory_path.read_text(encoding="utf-8"))
-            data.setdefault("experiences", [])
-            data.setdefault("knowledge", [])
-            data.setdefault("rules", [])
-            data.setdefault("feedback", [])
-            data.setdefault("policy_scores", {})
-            data.setdefault("learning_proposals", [])
-            data.setdefault("source_kb_refs", [])
-            data.setdefault("project_kb", [])
-            data.setdefault("pattern_kb", [])
-            data.setdefault("failure_memory", [])
-            data.setdefault("memory_approvals", [])
-            data.setdefault("memory_versions", [])
-            data.setdefault("memory_conflicts", [])
-            data.setdefault("memory_compactions", [])
-            if not data.get("learning_proposals") and not data.get("knowledge"):
-                data["learning_proposals"] = [
-                    self._proposal_from_record(record, source="legacy_migration")
-                    for record in self._migrate_legacy_knowledge(data.get("experiences", []))
-                ]
-            return data
+            with open(self.memory_path, 'r', encoding="utf-8") as f:
+                first_char = f.read(1)
+            if first_char == '{':
+                self._lazy_loaded = True
+                self._data = self._lazy_load()
+            else:
+                self._data = self._load()
+                self._lazy_loaded = False
+        except (OSError, json.JSONDecodeError):
+            self._data = self.empty_memory()
+            self._lazy_loaded = True
+    
+    def _lazy_load(self) -> Dict:
+        """Lazily load memory data on demand."""
+        if self._data_loaded:
+            return self._data
+        
+        try:
+            with open(self.memory_path, 'r', encoding="utf-8") as f:
+                data = json.load(f)
         except (OSError, json.JSONDecodeError):
             return self.empty_memory()
+        
+        data.setdefault("experiences", [])
+        data.setdefault("knowledge", [])
+        data.setdefault("rules", [])
+        data.setdefault("feedback", [])
+        data.setdefault("policy_scores", {})
+        data.setdefault("learning_proposals", [])
+        data.setdefault("source_kb_refs", [])
+        data.setdefault("project_kb", [])
+        data.setdefault("pattern_kb", [])
+        data.setdefault("failure_memory", [])
+        data.setdefault("memory_approvals", [])
+        data.setdefault("memory_versions", [])
+        data.setdefault("memory_conflicts", [])
+        data.setdefault("memory_compactions", [])
+        
+        self._data_loaded = True
+        return data
+    
+    @property
+    def data(self) -> Dict:
+        """Lazy property to access data."""
+        if not self._data_loaded:
+            self._data = self._lazy_load()
+        return self._data
+    
+    @data.setter
+    def data(self, value: Dict) -> None:
+        self._data = value
+        self._data_loaded = True
 
+    def _load(self) -> Dict:
+        """Legacy load method - now redirects to lazy load."""
+        return self._lazy_load()
+    
     def empty_memory(self) -> Dict:
         return {
             "experiences": [],

@@ -12,6 +12,16 @@ llm:
   temperature: 0.3  # Lower for more deterministic code fixes
   max_tokens: 2048
 
+  # Retry settings for production resilience
+  retry:
+    max_attempts: 3  # Maximum retry attempts
+    backoff_base: 2.0  # Exponential backoff base (2^attempt seconds)
+
+  # Cost tracking
+  cost_tracking:
+    enabled: true  # Track token usage and cost
+    budget_alert_threshold: 10.0  # Alert threshold in USD
+
   # Fallback behavior
   fallback_to_template: true
 
@@ -21,11 +31,20 @@ providers:
     api_key_env: OPENAI_API_KEY
     default_model: gpt-4o-mini  # Cost-effective default
     # Available models: gpt-4, gpt-4o, gpt-4o-mini, gpt-3.5-turbo
+    # Pricing per 1M tokens (input/output):
+    #   gpt-4o: $2.50 / $10.00
+    #   gpt-4o-mini: $0.15 / $0.60
+    #   gpt-4-turbo: $10.00 / $30.00
+    #   gpt-3.5-turbo: $0.50 / $1.50
 
   anthropic:
     api_key_env: ANTHROPIC_API_KEY
     default_model: claude-sonnet-4-20250514
     # Available models: claude-opus-4-5, claude-sonnet-4-20250514, claude-haiku-4-20250714
+    # Pricing per 1M tokens (input/output):
+    #   claude-opus-4-5: $3.00 / $15.00
+    #   claude-sonnet-4: $3.00 / $15.00
+    #   claude-haiku-4: $0.80 / $4.00
 
   ollama:
     base_url_env: OLLAMA_BASE_URL

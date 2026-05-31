@@ -7,6 +7,11 @@ Architecture:
 
 For watch mode: file watcher triggers mark_dirty() per changed path,
 then a background task re-indexes lazily without blocking startup.
+
+Performance optimizations:
+    - ThreadPoolExecutor for parallel file hashing
+    - Async batch processing with controlled concurrency
+    - LRU cache for content hashes
 """
 
 from __future__ import annotations
@@ -15,7 +20,9 @@ import asyncio
 import logging
 import sqlite3
 import time
-from dataclasses import dataclass
+from concurrent.futures import ThreadPoolExecutor, as_completed
+from dataclasses import dataclass, field
+from functools import lru_cache
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Callable, Coroutine, Sequence
 
@@ -41,15 +48,66 @@ EXCLUDE_PATTERNS = {
     "*.pyc", "*.pyo", ".DS_Store",
 }
 
+# Maximum number of hash entries to cache
+_MAX_HASH_CACHE_SIZE = 10000
+
+
+# =============================================================================
+# CACHED HASH FUNCTIONS
+# =============================================================================
+
+
+@lru_cache(maxsize=_MAX_HASH_CACHE_SIZE)
+def cached_content_hash(content: str) -> str:
+    """LRU-cached content hash for repeated lookups."""
+    return compute_short_hash(content)
+
+
+def compute_file_hash_parallel(
+    files: list[Path],
+    max_workers: int = 4,
+) -> dict[str, tuple[str, float]]:
+    """Compute content hashes for multiple files in parallel.
+    
+    Args:
+        files: List of file paths to hash
+        max_workers: Number of parallel workers
+        
+    Returns:
+        Dict mapping path_str -> (content_hash, mtime)
+    """
+    results: dict[str, tuple[str, float]] = {}
+    
+    def hash_one(path: Path) -> tuple[str, tuple[str, float]]:
+        try:
+            mtime = path.stat().st_mtime
+            content = path.read_text(encoding="utf-8", errors="replace")
+            content_hash = cached_content_hash(content)
+            return str(path), (content_hash, mtime)
+        except OSError:
+            return str(path), ("", 0.0)
+    
+    with ThreadPoolExecutor(max_workers=max_workers) as executor:
+        futures = {executor.submit(hash_one, f): f for f in files}
+        for future in as_completed(futures):
+            try:
+                path_str, (content_hash, mtime) = future.result()
+                results[path_str] = (content_hash, mtime)
+            except Exception:
+                pass
+    
+    return results
+
 
 # =============================================================================
 # STATE DB
 # =============================================================================
 
 
-@dataclass
+@dataclass(slots=True)
 class FileState:
     """State record for one tracked file."""
+    
     path: str
     mtime: float
     content_hash: str
@@ -205,6 +263,7 @@ class IncrementalIndexer:
         embed_svc: "EmbeddingService",
         state_db: Path | str = ".ai_support/index_state.db",
         concurrency: int = 4,
+        hash_workers: int = 4,
     ):
         """
         Args:
@@ -212,11 +271,14 @@ class IncrementalIndexer:
             embed_svc:   EmbeddingService instance for generating vectors.
             state_db:    Path to SQLite state database.
             concurrency: Max parallel embedding/indexing tasks.
+            hash_workers: Number of workers for parallel file hashing.
         """
         self._kb = kb
         self._embed = embed_svc
         self._db = IndexStateDB(state_db)
         self._sem = asyncio.Semaphore(concurrency)
+        self._hash_workers = hash_workers
+        self._hash_executor = ThreadPoolExecutor(max_workers=hash_workers)
         self._running = False
         self._watch_task: asyncio.Task | None = None
         self._dirty_paths: set[str] = set()
@@ -231,6 +293,7 @@ class IncrementalIndexer:
         if self._watch_task:
             self._watch_task.cancel()
             self._watch_task = None
+        self._hash_executor.shutdown(wait=False)
         self._db.close()
 
     # ── main sync API ─────────────────────────────────────────────────────────
@@ -247,15 +310,21 @@ class IncrementalIndexer:
         disk_files = {str(p): p for p in discover_files(project_root)}
         stats.total_files = len(disk_files)
 
-        # 2. Find changed (new / modified / deleted) files
+        # 2. Find changed (new / modified / deleted) files using PARALLEL hashing
         db_states = self._db.get_all()
         changed: list[tuple[Path, str]] = []  # (path, content_hash)
 
+        # Parallel hash computation for all files
+        loop = asyncio.get_event_loop()
+        file_paths = list(disk_files.values())
+        hash_results = await loop.run_in_executor(
+            None,
+            lambda: compute_file_hash_parallel(file_paths, max_workers=self._hash_workers)
+        )
+
         for path_str, path in disk_files.items():
-            try:
-                mtime = path.stat().st_mtime
-                content_hash = IndexStateDB.content_hash_from_path(path)
-            except OSError:
+            content_hash, mtime = hash_results.get(path_str, ("", 0.0))
+            if not content_hash:  # Failed to read
                 stats.failed_files += 1
                 continue
 
@@ -407,19 +476,33 @@ class IncrementalIndexer:
         except Exception as exc:
             logger.warning("kb_delete_failed", path=path, exc=str(exc))
 
-    async def _reindex_batch(self, paths: Sequence[str]) -> None:
-        """Re-index a batch of dirty paths."""
-        for path_str in paths:
-            path = Path(path_str)
-            if not path.exists():
-                self._db.delete(path_str)
-                await self._delete_from_kb(path_str)
-                continue
-            try:
-                content_hash = IndexStateDB.content_hash_from_path(path)
-                await self._index_file(path, content_hash)
-            except Exception as exc:
-                logger.error("reindex_batch_failed", path=path_str, exc=str(exc))
+    async def _reindex_batch(self, paths: Sequence[str], batch_size: int = 10) -> None:
+        """Re-index a batch of dirty paths with batch processing optimization.
+        
+        Args:
+            paths: List of file paths to reindex
+            batch_size: Number of files to process in each batch
+        """
+        # Process in batches for better memory management
+        for i in range(0, len(paths), batch_size):
+            batch = paths[i:i + batch_size]
+            
+            # Process batch in parallel
+            async def index_path(path_str: str) -> None:
+                path = Path(path_str)
+                if not path.exists():
+                    self._db.delete(path_str)
+                    await self._delete_from_kb(path_str)
+                    return
+                try:
+                    content_hash = cached_content_hash(
+                        path.read_text(encoding="utf-8", errors="replace")
+                    )
+                    await self._index_file(path, content_hash)
+                except Exception as exc:
+                    logger.error("reindex_batch_failed", path=path_str, exc=str(exc))
+            
+            await asyncio.gather(*[index_path(p) for p in batch], return_exceptions=True)
 
     @staticmethod
     def _chunk_content(content: str, source: str) -> list[dict[str, Any]]:

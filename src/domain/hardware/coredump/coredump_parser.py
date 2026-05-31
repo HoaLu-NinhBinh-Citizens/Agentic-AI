@@ -146,7 +146,7 @@ class CoreDumpInfo:
     stack_usage: dict[str, Any] = field(default_factory=dict)
     
     # Raw data
-    raw_data: bytes = field(default_factory=b"")
+    raw_data: bytes = field(default=b"")
     
     def to_dict(self) -> dict[str, Any]:
         """Convert to dictionary for JSON serialization."""
@@ -455,7 +455,7 @@ class CoreDumpParser:
         
         # Print registers
         regs = info.registers
-        for i in range(4):
+        for i in range(3):
             r0 = getattr(regs, f"r{i*4}")
             r1 = getattr(regs, f"r{i*4+1}")
             r2 = getattr(regs, f"r{i*4+2}")

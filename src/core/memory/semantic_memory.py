@@ -24,7 +24,7 @@ from typing import Any
 
 import numpy as np
 
-from infrastructure.embeddings.embedding_service import EmbeddingService, EmbeddingErrorCode
+from src.infrastructure.embeddings.embedding_service import EmbeddingService, EmbeddingErrorCode
 from .chunker import Chunker
 from .deduplication import DeduplicationEngine
 

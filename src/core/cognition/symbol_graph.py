@@ -14,6 +14,7 @@ import hashlib
 import logging
 from dataclasses import dataclass, field
 from enum import Enum, auto
+from functools import lru_cache
 from typing import Any
 
 from .ast_engine import (
@@ -22,6 +23,10 @@ from .ast_engine import (
 )
 
 logger = logging.getLogger(__name__)
+
+# Maximum LRU cache sizes
+_MAX_RESOLUTION_CACHE = 2000
+_MAX_REFERENCE_CACHE = 1000
 
 
 # =============================================================================
@@ -154,6 +159,10 @@ class SymbolResolver:
     - Type system
     - Symbol resolution rules
     - Forward references
+    
+    Performance optimizations:
+    - LRU cache for symbol resolution
+    - Cached reference lookups
     """
     
     def __init__(self, indexer: CodebaseIndexer):
@@ -163,8 +172,11 @@ class SymbolResolver:
         self._scopes: dict[str, Scope] = {}
         self._scope_stack: list[str] = []  # Current scope stack
         
-        # Resolution cache
+        # Resolution cache with LRU
         self._resolution_cache: dict[str, ResolvedSymbol] = {}
+        
+        # Reference lookup cache
+        self._reference_cache: dict[str, tuple[str, ...]] = {}
         
         # Build scope hierarchy from symbols
         self._build_scopes()
@@ -325,7 +337,15 @@ class SymbolResolver:
         return depth
     
     def find_references(self, uid: str) -> list[Symbol]:
-        """Find all references to a symbol."""
+        """Find all references to a symbol with caching."""
+        # Check cache first
+        if uid in self._reference_cache:
+            cached_uids = self._reference_cache[uid]
+            return [
+                sym for uid_ref in cached_uids
+                if (sym := self.indexer.get_symbol(uid_ref)) is not None
+            ]
+        
         symbol = self.indexer.get_symbol(uid)
         if not symbol:
             return []
@@ -338,7 +358,16 @@ class SymbolResolver:
                 if sym.uid != uid and sym.name == symbol.name:
                     references.append(sym)
         
+        # Cache results (limit cache size)
+        if len(self._reference_cache) < _MAX_REFERENCE_CACHE:
+            self._reference_cache[uid] = tuple(sym.uid for sym in references)
+        
         return references
+    
+    def clear_caches(self) -> None:
+        """Clear all internal caches."""
+        self._resolution_cache.clear()
+        self._reference_cache.clear()
 
 
 # =============================================================================
