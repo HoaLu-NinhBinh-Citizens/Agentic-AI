@@ -8,32 +8,48 @@
     "dev:vite": "vite",
     "dev:electron": "wait-on http://localhost:5173 && electron .",
     "build": "tsc && vite build && electron-builder",
-    "build:vite": "vite build"
+    "build:vite": "vite build",
+    "build:services": "tsc -p tsconfig.services.json"
   },
   "dependencies": {
+    "@anthropic-ai/sdk": "^0.10.0",
+    "@babel/generator": "^7.29.7",
+    "@babel/parser": "^7.29.7",
+    "@babel/traverse": "^7.29.7",
+    "@babel/types": "^7.29.7",
+    "@monaco-editor/react": "^4.6.0",
+    "@xterm/addon-fit": "^0.9.0",
+    "@xterm/addon-web-links": "^0.10.0",
+    "@xterm/xterm": "^5.4.0",
+    "clsx": "^2.0.0",
+    "electron-store": "^8.1.0",
+    "openai": "^4.20.0",
     "react": "^18.2.0",
     "react-dom": "^18.2.0",
-    "@monaco-editor/react": "^4.6.0",
-    "zustand": "^4.4.7",
-    "react-markdown": "^9.0.1",
     "react-icons": "^5.0.1",
-    "clsx": "^2.0.0"
+    "react-markdown": "^9.0.1",
+    "simple-git": "^3.22.0",
+    "zustand": "^4.4.7"
   },
   "devDependencies": {
     "@types/react": "^18.2.43",
     "@types/react-dom": "^18.2.17",
     "@vitejs/plugin-react": "^4.2.1",
-    "typescript": "^5.3.3",
-    "vite": "^5.0.10",
+    "concurrently": "^8.2.2",
     "electron": "^28.1.0",
     "electron-builder": "^24.9.1",
-    "concurrently": "^8.2.2",
+    "typescript": "^5.3.3",
+    "vite": "^5.0.10",
     "wait-on": "^7.2.0"
   },
   "build": {
     "appId": "com.agentic.ai",
     "productName": "AgenticAI",
-    "files": ["dist/**/*", "electron/**/*"],
+    "files": [
+      "dist/**/*",
+      "electron/**/*",
+      "src/main-process/**/*"
+    ],
     "directories": {
       "output": "release"
     }

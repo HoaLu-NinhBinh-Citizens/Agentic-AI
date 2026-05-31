@@ -40,6 +40,196 @@ export interface SteeringContext {
   structure?: string;
 }
 
+// ============================================================================
+// Code Analysis Types
+// ============================================================================
+
+export interface CodeIssue {
+  id: string;
+  severity: 'error' | 'warning' | 'info';
+  rule: string;
+  message: string;
+  line: number;
+  column?: number;
+  fix?: FixSuggestion;
+}
+
+export interface FixSuggestion {
+  original: string;
+  replacement: string;
+  description: string;
+}
+
+export interface FunctionInfo {
+  name: string;
+  startLine: number;
+  endLine: number;
+  params: string[];
+  async: boolean;
+  complexity: number;
+}
+
+export interface ImportInfo {
+  source: string;
+  imported: string[];
+  startLine: number;
+}
+
+export interface ExportInfo {
+  name: string;
+  type: 'function' | 'class' | 'variable' | 'default';
+  startLine: number;
+}
+
+export interface AnalysisResult {
+  functions: FunctionInfo[];
+  imports: ImportInfo[];
+  exports: ExportInfo[];
+  complexity: number;
+  issues: CodeIssue[];
+}
+
+export interface CodeReviewResult {
+  filePath: string;
+  analysis: AnalysisResult;
+  securityIssues: CodeIssue[];
+  totalIssues: number;
+  errorCount: number;
+  warningCount: number;
+  infoCount: number;
+}
+
+// ============================================================================
+// Command Palette Types
+// ============================================================================
+
+export interface Command {
+  id: string;
+  label: string;
+  shortcut?: string;
+  category: string;
+  icon?: string;
+}
+
+export interface CommandExecutionResult {
+  success: boolean;
+  error?: string;
+  output?: unknown;
+}
+
+// ============================================================================
+// Fix Types
+// ============================================================================
+
+export interface Fix {
+  file: string;
+  original: string;
+  replacement: string;
+  explanation: string;
+}
+
+export interface FixResult {
+  success: boolean;
+  applied: Fix[];
+  failed: Fix[];
+  errors: string[];
+}
+
+// ============================================================================
+// Git Types (Phase 3)
+// ============================================================================
+
+export interface GitStatus {
+  modified: string[];
+  staged: string[];
+  created: string[];
+  deleted: string[];
+  not_added: string[];
+  current: string;
+  tracking: string | null;
+}
+
+export interface GitInfo {
+  isRepo: boolean;
+  branch: string;
+  branches: string[];
+  status: GitStatus | null;
+  remotes: string[];
+}
+
+export interface CommitInfo {
+  hash: string;
+  message: string;
+  author: string;
+  date: string;
+}
+
+// ============================================================================
+// Search Types (Phase 3)
+// ============================================================================
+
+export interface SearchResult {
+  file: string;
+  line: number;
+  column: number;
+  match: string;
+  context: string;
+}
+
+export interface SearchOptions {
+  query: string;
+  path: string;
+  caseSensitive?: boolean;
+  wholeWord?: boolean;
+  regex?: boolean;
+  include?: string[];
+  exclude?: string[];
+  maxResults?: number;
+}
+
+// ============================================================================
+// Extension Types (Phase 3)
+// ============================================================================
+
+export interface Extension {
+  id: string;
+  name: string;
+  version: string;
+  description?: string;
+  author?: string;
+  main: string;
+  contributions?: ExtensionContributions;
+}
+
+export interface ExtensionContributions {
+  commands?: Array<{
+    command: string;
+    title: string;
+    category?: string;
+  }>;
+  menus?: Array<{
+    command: string;
+    where: string;
+  }>;
+  detectors?: Array<{
+    id: string;
+    name: string;
+    pattern: string;
+  }>;
+  views?: Array<{
+    id: string;
+    name: string;
+    type: 'list' | 'webview';
+  }>;
+}
+
+export interface DetectorResult {
+  severity: 'error' | 'warning' | 'info';
+  message: string;
+  line: number;
+  rule: string;
+}
+
 export interface AppState {
   workspacePath: string | null;
   files: FileNode[];

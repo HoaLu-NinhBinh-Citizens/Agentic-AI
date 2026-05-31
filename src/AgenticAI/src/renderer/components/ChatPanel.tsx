@@ -1,20 +1,32 @@
 import React, { useState, useRef, useEffect } from 'react';
 import { useAppStore } from '../store/useAppStore';
-import { FiSend, FiTrash2 } from 'react-icons/fi';
+import { FiSend, FiTrash2, FiSettings, FiAlertCircle } from 'react-icons/fi';
+import ReactMarkdown from 'react-markdown';
+import { SettingsPanel } from './SettingsPanel';
 
 export const ChatPanel: React.FC = () => {
-  const { messages, addMessage, clearMessages, steeringContext } = useAppStore();
+  const { messages, addMessage, clearMessages, steeringContext, activeFile } = useAppStore();
   const [input, setInput] = useState('');
   const [isLoading, setIsLoading] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const [isAIInitialized, setIsAIInitialized] = useState(false);
+  const [showSettings, setShowSettings] = useState(false);
   const messagesEndRef = useRef<HTMLDivElement>(null);
 
-  const scrollToBottom = () => {
-    messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
-  };
+  useEffect(() => {
+    checkAIInitialization();
+  }, []);
 
   useEffect(() => {
-    scrollToBottom();
+    messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
   }, [messages]);
+
+  const checkAIInitialization = async () => {
+    if (window.electronAPI?.ai) {
+      const initialized = await window.electronAPI.ai.isInitialized();
+      setIsAIInitialized(initialized);
+    }
+  };
 
   const sendMessage = async () => {
     if (!input.trim() || isLoading) return;
@@ -29,75 +41,56 @@ export const ChatPanel: React.FC = () => {
     addMessage(userMessage);
     setInput('');
     setIsLoading(true);
+    setError(null);
 
-    setTimeout(() => {
-      const aiResponse = generateAIResponse(input, steeringContext);
+    try {
+      if (!window.electronAPI?.ai) {
+        throw new Error('AI service not available');
+      }
+
+      const isInitialized = await window.electronAPI.ai.isInitialized();
+      
+      if (!isInitialized) {
+        setShowSettings(true);
+        throw new Error('AI not configured. Please set up your API key in settings.');
+      }
+
+      const chatMessages = messages.map(m => ({
+        role: m.role === 'user' ? 'user' : 'assistant',
+        content: m.content,
+      }));
+
+      chatMessages.push({ role: 'user', content: input });
+
+      let systemPrompt = '';
+      if (steeringContext && Object.keys(steeringContext).length > 0) {
+        systemPrompt = await window.electronAPI.steering?.getSystemPrompt() || '';
+      }
+
+      const response = await window.electronAPI.ai.chat(chatMessages, systemPrompt);
+
+      if (response.error) {
+        throw new Error(response.error);
+      }
+
       addMessage({
         id: (Date.now() + 1).toString(),
         role: 'assistant',
-        content: aiResponse,
+        content: response.content || 'No response from AI',
         timestamp: new Date().toISOString()
       });
+
+      setIsAIInitialized(true);
+    } catch (err) {
+      const errorMessage = err instanceof Error ? err.message : 'Failed to get AI response';
+      setError(errorMessage);
+      
+      if (err instanceof Error && err.message.includes('not configured')) {
+        setShowSettings(true);
+      }
+    } finally {
       setIsLoading(false);
-    }, 1000);
-  };
-
-  const generateAIResponse = (userInput: string, context: any): string => {
-    const input = userInput.toLowerCase();
-    
-    if (input.includes('create') || input.includes('new') || input.includes('add')) {
-      return `I'll help you create that. Based on the current steering context, let me analyze the requirements:
-
-1. **Analyze requirements** - I've reviewed the existing codebase structure
-2. **Create implementation plan** - Breaking down into tasks:
-   - Create the main component
-   - Add necessary imports
-   - Implement core functionality
-   - Add tests
-
-Should I proceed with creating the code?`;
     }
-    
-    if (input.includes('task') || input.includes('todo')) {
-      return `Here are your current tasks:
-
-**To Do:**
-- Implement feature X
-- Write tests for Y
-
-**In Progress:**
-- Refactor component Z
-
-**Done:**
-- Set up project structure
-
-Would you like me to update any task status?`;
-    }
-
-    if (input.includes('review') || input.includes('check')) {
-      return `I've analyzed the current code. Here are some findings:
-
-**Security:**
-- SEC001: Potential SQL injection in query string
-- SEC003: Command injection risk detected
-
-**Quality:**
-- QUAL001: Function too long (85 lines, max recommended: 50)
-- QUAL002: High cognitive complexity
-
-Would you like me to apply fixes for these issues?`;
-    }
-
-    return `I understand you want to: "${userInput}"
-
-I'm an AI assistant powered by AgenticAI. I can help you with:
-
-- **Code Review**: Analyze code for issues, security vulnerabilities
-- **Task Management**: Create, update, and track tasks
-- **Code Generation**: Write new code based on your specifications
-- **Refactoring**: Improve existing code structure
-
-What would you like me to do?`;
   };
 
   const handleKeyDown = (e: React.KeyboardEvent) => {
@@ -107,18 +100,54 @@ What would you like me to do?`;
     }
   };
 
+  const getContextSnippet = (): string => {
+    if (activeFile) {
+      return `Currently viewing: ${activeFile.split(/[/\\]/).pop()}`;
+    }
+    return 'No file currently open';
+  };
+
   return (
     <div className="chat-panel">
       <div className="chat-header">
         <h3>AI Assistant</h3>
-        <button onClick={clearMessages} title="Clear chat"><FiTrash2 /></button>
+        <div className="header-actions">
+          {!isAIInitialized && (
+            <button 
+              className="config-warning"
+              onClick={() => setShowSettings(true)}
+              title="Configure AI"
+            >
+              <FiAlertCircle />
+            </button>
+          )}
+          <button onClick={clearMessages} title="Clear chat"><FiTrash2 /></button>
+          <button onClick={() => setShowSettings(true)} title="Settings"><FiSettings /></button>
+        </div>
       </div>
+
+      {error && (
+        <div className="chat-error">
+          <FiAlertCircle />
+          <span>{error}</span>
+          <button onClick={() => setError(null)}>Dismiss</button>
+        </div>
+      )}
 
       <div className="chat-messages">
         {messages.length === 0 ? (
           <div className="chat-welcome">
             <h4>Welcome to AgenticAI</h4>
-            <p>I can help you with:</p>
+            {!isAIInitialized ? (
+              <div className="setup-prompt">
+                <p>To get started, please configure your AI provider:</p>
+                <button onClick={() => setShowSettings(true)}>
+                  <FiSettings /> Configure AI
+                </button>
+              </div>
+            ) : (
+              <p>I can help you with:</p>
+            )}
             <ul>
               <li>Create new files and components</li>
               <li>Review code for issues</li>
@@ -126,12 +155,15 @@ What would you like me to do?`;
               <li>Refactor and optimize code</li>
             </ul>
             <p className="hint">Try asking: "Create a new React component"</p>
+            <p className="context-hint">{getContextSnippet()}</p>
           </div>
         ) : (
           messages.map(msg => (
             <div key={msg.id} className={`message ${msg.role}`}>
               <div className="message-role">{msg.role === 'user' ? 'You' : 'AI'}</div>
-              <div className="message-content">{msg.content}</div>
+              <div className="message-content">
+                <ReactMarkdown>{msg.content}</ReactMarkdown>
+              </div>
               <div className="message-time">
                 {new Date(msg.timestamp).toLocaleTimeString()}
               </div>
@@ -151,16 +183,28 @@ What would you like me to do?`;
 
       <div className="chat-input">
         <textarea
-          placeholder="Ask me anything..."
+          placeholder={isAIInitialized ? "Ask me anything..." : "Configure AI first..."}
           value={input}
           onChange={(e) => setInput(e.target.value)}
           onKeyDown={handleKeyDown}
           rows={2}
+          disabled={!isAIInitialized}
         />
-        <button onClick={sendMessage} disabled={!input.trim() || isLoading}>
+        <button 
+          onClick={sendMessage} 
+          disabled={!input.trim() || isLoading || !isAIInitialized}
+        >
           <FiSend />
         </button>
       </div>
+
+      <SettingsPanel 
+        isOpen={showSettings} 
+        onClose={() => {
+          setShowSettings(false);
+          checkAIInitialization();
+        }} 
+      />
     </div>
   );
 };

@@ -34,6 +34,11 @@ interface AppStore {
   // Steering
   steeringContext: SteeringContext;
   setSteeringContext: (context: SteeringContext) => void;
+  
+  // UI State
+  expandedFolders: string[];
+  addExpandedFolder: (path: string) => void;
+  removeExpandedFolder: (path: string) => void;
 }
 
 export const useAppStore = create<AppStore>((set) => ({
@@ -43,7 +48,10 @@ export const useAppStore = create<AppStore>((set) => ({
   files: [],
   setFiles: (files) => set({ files }),
   toggleFolder: (path) => set((state) => ({
-    files: toggleFolderInTree(state.files, path)
+    files: toggleFolderInTree(state.files, path),
+    expandedFolders: state.expandedFolders.includes(path)
+      ? state.expandedFolders.filter(p => p !== path)
+      : [...state.expandedFolders, path]
   })),
   
   activeFile: null,
@@ -54,7 +62,9 @@ export const useAppStore = create<AppStore>((set) => ({
   })),
   removeOpenFile: (path) => set((state) => ({
     openFiles: state.openFiles.filter(f => f !== path),
-    activeFile: state.activeFile === path ? state.openFiles[0] : state.activeFile
+    activeFile: state.activeFile === path 
+      ? state.openFiles.find(f => f !== path) || null 
+      : state.activeFile
   })),
   
   spec: null,
@@ -73,7 +83,17 @@ export const useAppStore = create<AppStore>((set) => ({
   clearMessages: () => set({ messages: [] }),
   
   steeringContext: {},
-  setSteeringContext: (context) => set({ steeringContext: context })
+  setSteeringContext: (context) => set({ steeringContext: context }),
+  
+  expandedFolders: [],
+  addExpandedFolder: (path) => set((state) => ({
+    expandedFolders: state.expandedFolders.includes(path) 
+      ? state.expandedFolders 
+      : [...state.expandedFolders, path]
+  })),
+  removeExpandedFolder: (path) => set((state) => ({
+    expandedFolders: state.expandedFolders.filter(p => p !== path)
+  })),
 }));
 
 function toggleFolderInTree(files: FileNode[], path: string): FileNode[] {

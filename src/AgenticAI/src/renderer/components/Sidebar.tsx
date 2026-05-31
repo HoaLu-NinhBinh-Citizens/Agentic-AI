@@ -1,4 +1,4 @@
-import React from 'react';
+import React, { useEffect, useCallback } from 'react';
 import { FiFolder, FiFolderPlus, FiFile, FiChevronRight, FiChevronDown, FiFilePlus } from 'react-icons/fi';
 import { useAppStore } from '../store/useAppStore';
 import { FileNode } from '../../shared/types';
@@ -11,7 +11,8 @@ export const Sidebar: React.FC = () => {
     setFiles, 
     toggleFolder,
     setActiveFile,
-    addOpenFile 
+    addOpenFile,
+    expandedFolders 
   } = useAppStore();
 
   const openDirectory = async () => {
@@ -19,7 +20,9 @@ export const Sidebar: React.FC = () => {
       const path = await window.electronAPI.openDirectory();
       if (path) {
         setWorkspacePath(path);
+        await window.electronAPI.storage.setWorkspace(path);
         loadDirectory(path);
+        loadSteeringContext(path);
       }
     }
   };
@@ -29,6 +32,15 @@ export const Sidebar: React.FC = () => {
       const entries = await window.electronAPI.readDirectory(dirPath);
       const fileTree = buildFileTree(entries, dirPath);
       setFiles(fileTree);
+    }
+  };
+
+  const loadSteeringContext = async (dirPath: string) => {
+    if (window.electronAPI?.steering) {
+      const result = await window.electronAPI.steering.load(dirPath);
+      if (result.success && result.context) {
+        useAppStore.getState().setSteeringContext(result.context);
+      }
     }
   };
 
@@ -45,23 +57,46 @@ export const Sidebar: React.FC = () => {
         path: entry.path,
         isDirectory: entry.isDirectory,
         children: entry.isDirectory ? [] : undefined,
-        isOpen: false
+        isOpen: expandedFolders.includes(entry.path)
       }));
   };
 
-  const handleFileClick = async (node: FileNode) => {
+  const handleFileClick = useCallback(async (node: FileNode) => {
+    const willBeOpen = !node.isOpen;
+    
     if (node.isDirectory) {
-      toggleFolder(node.path);
-      if (!node.children || node.children.length === 0) {
+      if (willBeOpen && (!node.children || node.children.length === 0)) {
         const entries = await window.electronAPI?.readDirectory(node.path);
         const children = buildFileTree(entries || [], node.path);
         setFiles(updateChildren(files, node.path, children));
       }
+      
+      toggleFolder(node.path);
+      
+      if (window.electronAPI?.storage) {
+        if (willBeOpen) {
+          window.electronAPI.storage.updateUIState({
+            expandedFolders: [...expandedFolders, node.path]
+          });
+        } else {
+          window.electronAPI.storage.updateUIState({
+            expandedFolders: expandedFolders.filter(p => p !== node.path)
+          });
+        }
+      }
     } else {
       setActiveFile(node.path);
       addOpenFile(node.path);
+      
+      if (window.electronAPI?.storage) {
+        const openFiles = useAppStore.getState().openFiles;
+        window.electronAPI.storage.updateOpenFiles({
+          files: openFiles,
+          activeFile: node.path
+        });
+      }
     }
-  };
+  }, [files, expandedFolders, toggleFolder, setFiles, setActiveFile, addOpenFile]);
 
   const updateChildren = (nodes: FileNode[], parentPath: string, children: FileNode[]): FileNode[] => {
     return nodes.map(node => {
@@ -96,6 +131,20 @@ export const Sidebar: React.FC = () => {
       }
     }
   };
+
+  useEffect(() => {
+    const restoreWorkspace = async () => {
+      if (window.electronAPI?.storage) {
+        const workspace = await window.electronAPI.storage.getWorkspace();
+        if (workspace?.path) {
+          setWorkspacePath(workspace.path);
+          loadDirectory(workspace.path);
+          loadSteeringContext(workspace.path);
+        }
+      }
+    };
+    restoreWorkspace();
+  }, []);
 
   return (
     <div className="sidebar">
