@@ -9,6 +9,7 @@ Features:
 - Graceful fallback to regex when AST unavailable
 - Code examples in suggestions (before/after)
 - Integration with SafeTreeSitterIndexer
+- Extended rules (ML016-ML025)
 
 Usage:
     from src.infrastructure.analysis.ml_detectors import MLDetector
@@ -35,6 +36,7 @@ from src.shared.enums.severity import Severity
 
 from .ast_based import MLDetectorAST
 from .data_flow import DataFlowAnalyzer
+from .extended_rules import check_extended_rules, get_extended_rules
 
 logger = logging.getLogger(__name__)
 
@@ -283,6 +285,9 @@ class MLDetector:
         findings.extend(self._detect_ml013(content, language))
         findings.extend(self._detect_ml014(content, language))
         findings.extend(self._detect_ml015(content, language))
+
+        # Run extended ML016-ML025 detectors
+        findings.extend(self._detect_extended_rules(content, language))
 
         # Apply confidence boosts based on context
         findings = self._boost_confidence(findings, content, language)
@@ -694,6 +699,63 @@ class MLDetector:
 
         return findings
 
+    def _detect_extended_rules(
+        self,
+        content: str,
+        language: str,
+    ) -> list[MLFinding]:
+        """Detect issues using extended ML016-ML025 rules."""
+        # Extended rules are Python-specific
+        if language != "python":
+            return []
+        
+        findings: list[MLFinding] = []
+
+        raw_findings = check_extended_rules(content, language)
+
+        for raw in raw_findings:
+            # Map severity string to MLSeverity
+            sev_str = raw.get("severity", "MEDIUM")
+            try:
+                severity = MLSeverity(sev_str.lower())
+            except ValueError:
+                severity = MLSeverity.MEDIUM
+
+            # Find line number from pattern
+            line = self._find_line_for_pattern(content, raw.get("rule_id", ""))
+
+            finding = MLFinding(
+                rule_id=raw["rule_id"],
+                severity=severity,
+                line=line,
+                message=raw["message"] if "message" in raw else raw["name"],
+                confidence=raw.get("confidence", 0.85),
+                old_code="",
+                new_code=raw.get("fix", ""),
+                explanation=raw.get("explanation", ""),
+                detection_method="extended_regex",
+            )
+            findings.append(finding)
+
+        return findings
+
+    def _find_line_for_pattern(self, content: str, rule_id: str) -> int:
+        """Find the line number for a pattern match."""
+        import re
+        from .extended_rules import get_rule_by_id
+
+        rule = get_rule_by_id(rule_id)
+        if not rule:
+            return 1
+
+        lines = content.split('\n')
+        for i, line in enumerate(lines, 1):
+            for pattern in rule.patterns:
+                if re.search(pattern, line, re.IGNORECASE):
+                    return i
+
+        return 1
+
     def _boost_confidence(
         self,
         findings: list[MLFinding],
@@ -767,13 +829,14 @@ class MLDetector:
             "CRITICAL": 0,
             "HIGH": 0,
             "MEDIUM": 0,
+            "LOW": 0,
         }
         by_rule: dict[str, int] = {}
-        by_method: dict[str, int] = {"ast": 0, "regex": 0, "data_flow": 0}
+        by_method: dict[str, int] = {"ast": 0, "regex": 0, "data_flow": 0, "extended_regex": 0}
         total_confidence = 0.0
 
         for f in findings:
-            by_severity[f.severity.value] += 1
+            by_severity[f.severity.value.upper()] += 1
             by_rule[f.rule_id] = by_rule.get(f.rule_id, 0) + 1
             by_method[f.detection_method] = by_method.get(f.detection_method, 0) + 1
             total_confidence += f.confidence
@@ -809,13 +872,14 @@ class MLDetector:
         """
         filtered = []
 
-        # Use Severity comparison directly
         for f in findings:
             if f.confidence < min_confidence:
                 continue
 
             if min_severity is not None:
-                if f.severity.weight < min_severity.weight:
+                # Handle both MLSeverity enum and severity value comparison
+                f_severity_weight = f.severity.weight if hasattr(f.severity, 'weight') else 25
+                if f_severity_weight < min_severity.weight:
                     continue
 
             if rule_ids is not None and f.rule_id not in rule_ids:

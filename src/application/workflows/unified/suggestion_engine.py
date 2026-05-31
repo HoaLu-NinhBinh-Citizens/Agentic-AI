@@ -6,6 +6,7 @@ This module provides multi-option fix generation with:
 - Alternative fix generation
 - Risk assessment
 - Validation
+- Fix confidence scoring
 
 Usage:
     engine = SuggestionEngine(fix_engine)
@@ -593,3 +594,131 @@ class SuggestionEngine:
             lineterm="",
         )
         return "".join(diff)
+
+    def calculate_fix_confidence(
+        self,
+        fix: FixOption,
+        context: Optional[CodeContext],
+        finding: Finding,
+    ) -> float:
+        """Calculate confidence score for a fix suggestion.
+        
+        The confidence score is based on:
+        - Context quality (line count, imports present)
+        - Fix source (template vs LLM)
+        - Finding severity
+        - Risk level
+        - Impact size (lines changed)
+        
+        Args:
+            fix: The fix option
+            context: Code context
+            finding: The finding being fixed
+            
+        Returns:
+            Confidence score between 0 and 1
+        """
+        confidence = 0.5  # Base confidence
+        
+        # Boost based on context quality
+        if context:
+            # Check line count from content
+            line_count = len(context.content.split('\n')) if context.content else 0
+            if line_count > 10:
+                confidence += 0.1  # Good context
+            # Check for imports
+            if 'import' in context.content:
+                confidence += 0.1  # Can resolve dependencies
+        
+        # Boost based on fix type/source
+        if hasattr(fix, 'source'):
+            source = getattr(fix, 'source', 'template')
+            if source == 'template':
+                confidence += 0.2  # Rule templates are well-tested
+            elif source == 'llm':
+                confidence += 0.15  # LLM suggestions are context-aware
+        else:
+            # Default: template-based fix
+            confidence += 0.15
+        
+        # Boost based on severity (critical fixes should be more confident)
+        if finding.severity == Severity.CRITICAL:
+            confidence += 0.1
+        elif finding.severity == Severity.HIGH:
+            confidence += 0.05
+        
+        # Reduce confidence for high-risk fixes
+        if fix.risk == Severity.CRITICAL:
+            confidence -= 0.2
+        elif fix.risk == Severity.HIGH:
+            confidence -= 0.15
+        elif fix.risk == Severity.MEDIUM:
+            confidence -= 0.05
+        
+        # Reduce confidence for large changes
+        if hasattr(fix, 'impact_lines'):
+            impact_lines = getattr(fix, 'impact_lines', 0)
+            if impact_lines > 20:
+                confidence -= 0.1
+            elif impact_lines > 10:
+                confidence -= 0.05
+        
+        # Boost if fix has explanation
+        if hasattr(fix, 'tradeoff') and fix.tradeoff:
+            confidence += 0.05
+        
+        # Boost if fix has test recommendation
+        if hasattr(fix, 'test_recommendation') and fix.test_recommendation:
+            confidence += 0.05
+        
+        return max(0.0, min(1.0, confidence))
+
+    def rank_fixes(
+        self,
+        fixes: list[FixOption],
+        context: Optional[CodeContext],
+        finding: Finding,
+    ) -> list[FixOption]:
+        """Rank fixes by confidence score.
+        
+        Args:
+            fixes: List of fix options
+            context: Code context
+            finding: The finding being fixed
+            
+        Returns:
+            Sorted list of fixes (highest confidence first)
+        """
+        for fix in fixes:
+            fix.confidence = self.calculate_fix_confidence(fix, context, finding)
+        
+        return sorted(fixes, key=lambda f: f.confidence, reverse=True)
+
+    def generate_smart_fix_description(
+        self,
+        fix: FixOption,
+        finding: Finding,
+    ) -> str:
+        """Generate an enhanced description for a fix.
+        
+        Args:
+            fix: The fix option
+            finding: The finding
+            
+        Returns:
+            Enhanced description with confidence and risk info
+        """
+        confidence_pct = int(fix.confidence * 100)
+        risk_str = fix.risk.name.lower()
+        
+        desc = f"{fix.description}"
+        
+        if hasattr(fix, 'tradeoff') and fix.tradeoff:
+            desc += f"\n\n**Trade-off:** {fix.tradeoff}"
+        
+        desc += f"\n\n**Confidence:** {confidence_pct}% | **Risk:** {risk_str}"
+        
+        if hasattr(fix, 'test_recommendation') and fix.test_recommendation:
+            desc += f"\n\n**Testing:** {fix.test_recommendation}"
+        
+        return desc

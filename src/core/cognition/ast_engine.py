@@ -768,6 +768,226 @@ class CallGraph:
 
 
 # =============================================================================
+# CROSS-FILE REFERENCE RESOLVER
+# =============================================================================
+
+
+class CrossFileReferenceResolver:
+    """AST-based cross-file reference resolution.
+    
+    Resolves symbol references across files using:
+    - Import tracking
+    - Call graph analysis
+    - Type inference
+    - Module resolution
+    """
+
+    def __init__(self, indexer: CodebaseIndexer):
+        self.indexer = indexer
+        self._import_cache: dict[str, dict[str, str]] = {}  # file -> {alias -> original}
+        self._symbol_definitions: dict[str, Symbol] = {}  # name -> Symbol
+        self._file_imports: dict[str, set[str]] = {}  # file -> set of imported modules
+
+    def find_references(
+        self,
+        symbol_name: str,
+        file_path: str | None = None,
+    ) -> list[Symbol]:
+        """Find all references to a symbol using AST-based analysis.
+        
+        Args:
+            symbol_name: Name of the symbol to find
+            file_path: Optional file to limit search
+            
+        Returns:
+            List of Symbol objects representing references
+        """
+        references = []
+        
+        # Build index if not already done
+        self._build_symbol_index()
+        
+        # Get direct definitions
+        for uid, sym in self._symbol_definitions.items():
+            if sym.name == symbol_name:
+                if file_path is None or sym.location.file_path == file_path:
+                    references.append(sym)
+        
+        # Find usages in call graph
+        if self.indexer is not None:
+            try:
+                from src.core.cognition.call_graph import CallGraph
+                
+                # Build call graph for cross-file analysis
+                project_root = getattr(self.indexer, 'root_path', '.')
+                
+                # Get all indexed files
+                indexed_files = {}
+                for fp, uids in self.indexer._symbols_by_file.items():
+                    if file_path and fp != file_path:
+                        continue
+                    symbols = []
+                    for uid in uids:
+                        sym = self.indexer._symbols.get(uid)
+                        if sym:
+                            symbols.append({
+                                "name": sym.name,
+                                "kind": sym.kind.name.lower(),
+                                "line": sym.location.line,
+                            })
+                    indexed_files[fp] = symbols
+                
+                if indexed_files:
+                    cg = CallGraph(project_root)
+                    cg.build(indexed_files)
+                    
+                    # Find callers
+                    callers = cg.get_callers(symbol_name)
+                    for caller_name in callers:
+                        for uid, sym in self._symbol_definitions.items():
+                            if sym.name == caller_name:
+                                references.append(sym)
+                                
+            except Exception:
+                # Fallback to simple name matching
+                pass
+        
+        return references
+
+    def _build_symbol_index(self) -> None:
+        """Build symbol index from indexer."""
+        if not self._symbol_definitions and self.indexer is not None:
+            for uid, sym in self.indexer._symbols.items():
+                if sym.name:
+                    self._symbol_definitions[f"{sym.name}:{uid}"] = sym
+
+    def resolve_import(
+        self,
+        file_path: str,
+        module_name: str,
+    ) -> str | None:
+        """Resolve an imported module to its file path.
+        
+        Args:
+            file_path: File containing the import
+            module_name: Module name being imported
+            
+        Returns:
+            Resolved file path or None
+        """
+        if file_path in self._import_cache:
+            return self._import_cache[file_path].get(module_name)
+        
+        self._parse_imports(file_path)
+        return self._import_cache.get(file_path, {}).get(module_name)
+
+    def _parse_imports(self, file_path: str) -> None:
+        """Parse imports from a file."""
+        imports: dict[str, str] = {}
+        
+        try:
+            path = Path(file_path)
+            if not path.exists():
+                return
+                
+            content = path.read_text(encoding='utf-8', errors='ignore')
+            lines = content.split('\n')
+            
+            for line_num, line in enumerate(lines, 1):
+                line = line.strip()
+                
+                # import x
+                if line.startswith('import '):
+                    module = line.replace('import ', '').split()[0]
+                    imports[module] = module
+                
+                # from x import y
+                elif line.startswith('from '):
+                    parts = line.replace('from ', '').split()
+                    if len(parts) >= 2 and parts[1] == 'import':
+                        module = parts[0]
+                        imports[module] = module
+                
+                # #include "x.h" or #include <x.h>
+                elif line.startswith('#include'):
+                    if '"' in line:
+                        inc = line.split('"')[1]
+                    elif '<' in line:
+                        inc = line.split('<')[1].rstrip('>')
+                    else:
+                        continue
+                    if inc.endswith('.h'):
+                        inc = inc[:-2]
+                    imports[inc] = inc
+                    
+        except Exception:
+            pass
+        
+        self._import_cache[file_path] = imports
+
+    def get_symbol_type(self, symbol_name: str, file_path: str) -> SymbolKind | None:
+        """Get the type of a symbol.
+        
+        Args:
+            symbol_name: Symbol name
+            file_path: File context
+            
+        Returns:
+            SymbolKind or None
+        """
+        self._build_symbol_index()
+        
+        for uid, sym in self._symbol_definitions.items():
+            if sym.name == symbol_name:
+                return sym.kind
+        
+        return None
+
+    def find_callers(self, func_name: str) -> list[Symbol]:
+        """Find all functions that call a given function.
+        
+        Args:
+            func_name: Function name
+            
+        Returns:
+            List of Symbol objects for calling functions
+        """
+        callers = []
+        
+        if self.indexer is not None:
+            try:
+                from src.core.cognition.call_graph import CallGraph
+                
+                indexed_files = {}
+                for fp, uids in self.indexer._symbols_by_file.items():
+                    symbols = []
+                    for uid in uids:
+                        sym = self.indexer._symbols.get(uid)
+                        if sym:
+                            symbols.append({
+                                "name": sym.name,
+                                "kind": sym.kind.name.lower(),
+                                "line": sym.location.line,
+                            })
+                    indexed_files[fp] = symbols
+                
+                if indexed_files:
+                    cg = CallGraph(self.indexer.root_path)
+                    cg.build(indexed_files)
+                    
+                    caller_names = cg.get_callers(func_name)
+                    for name in caller_names:
+                        for uid, sym in self.indexer._symbols.items():
+                            if sym.name == name:
+                                callers.append(sym)
+                                
+            except Exception:
+                pass
+        
+        return callers
+
+
+# =============================================================================
 # GLOBAL INDEXER
 # =============================================================================
 

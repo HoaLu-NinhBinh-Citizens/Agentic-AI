@@ -823,11 +823,6 @@ class AISupportTUI:
 
         self.render()
 
-        except KeyboardInterrupt:
-            pass
-        finally:
-            self.console.print("\n[dim]Goodbye![/dim]\n")
-
     def _handle_slash_command(self, cmd: str) -> None:
         """Handle a slash command."""
         self.terminal.add_command(cmd)
