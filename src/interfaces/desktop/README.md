@@ -1,159 +1,179 @@
-# AI_SUPPORT Desktop
+# AgenticAI
 
-A Cursor-like Electron desktop application for Windows, built from the AI_SUPPORT embedded engineering platform.
+AI-powered coding assistant like Cursor + Kiro - một ứng dụng desktop được xây dựng với Electron + React + TypeScript.
 
-## Features
+## Tính năng
 
-- **Score Tile UI**: App tiles with percentage scores (60, 45, 72, etc.) - click to select and view score
-- **Workspace Explorer**: File tree navigation with syntax highlighting
-- **Code Editor**: Read-only file viewer with syntax highlighting via highlight.js
-- **Backend Integration**: Connects to FastAPI backend for scores and data
-- **Dark Theme**: GitHub-inspired dark theme matching Cursor/VS Code aesthetics
+### 🖥️ Giao diện giống Cursor
+- **Sidebar**: Cây thư mục dự án với icon cho từng loại file
+- **Editor**: Syntax highlighting với highlight.js (Python, TypeScript, Markdown, JSON, v.v.)
+- **Task Panel**: Quản lý Spec, Task list, và Implementation Plan
+- **Chat Panel**: Tương tác với AI Agent
 
-## Architecture
+### 🤖 AI Agent
+- Đọc và hiểu các steering files (`AGENTS.md`, `CLAUDE.md`, `product.md`, v.v.)
+- Tạo Spec và tự động sinh Task list
+- Chat với AI để hỏi đáp, viết code, phân tích yêu cầu
+- Đề xuất cải thiện code
+
+### 📋 Task Management
+- Tạo, sửa, xóa tasks với 3 trạng thái: Todo, Doing, Done
+- Priority levels: Low, Medium, High, Critical
+- Progress bar cho Implementation Plan
+
+### 🎨 Dark Mode UI
+- Font chữ lập trình: Fira Code / Consolas
+- Màu sắc theo phong cách GitHub Dark
+- Responsive layout với collapsible panels
+
+## Công nghệ
+
+- **Desktop**: Electron 28
+- **Frontend**: React 18 + TypeScript
+- **State**: Zustand
+- **Styling**: Tailwind CSS
+- **Syntax Highlighting**: highlight.js
+- **Markdown**: react-markdown
+- **Build**: electron-vite + electron-builder
+
+## Cài đặt
+
+```bash
+# Di chuyển vào thư mục desktop
+cd src/interfaces/desktop
+
+# Cài đặt dependencies
+npm install
+
+# Chạy development mode
+npm run dev
+
+# Build cho Windows
+npm run build:win
+```
+
+## Cấu trúc thư mục
 
 ```
 src/interfaces/desktop/
-├── package.json              # Dependencies and scripts
-├── electron-builder.json      # Build configuration
-├── electron.vite.config.ts    # Vite + Electron bundler config
-├── tailwind.config.js         # TailwindCSS configuration
-├── tsconfig.json              # TypeScript configuration
+├── package.json
+├── electron.vite.config.ts
+├── tailwind.config.js
+├── postcss.config.js
+├── tsconfig.json
+├── electron-builder.json
 ├── src/
 │   ├── main/
 │   │   └── index.ts          # Electron main process
 │   ├── preload/
-│   │   └── index.ts          # Context bridge API
-│   └── renderer/
-│       ├── index.html
-│       ├── index.tsx          # React entry point
-│       ├── index.css          # Global styles
-│       ├── App.tsx            # Main application layout
-│       └── components/
-│           ├── ScoreTile.tsx  # Score display tiles
-│           ├── WorkspaceTree.tsx  # File explorer
-│           ├── EditorPanel.tsx    # Code viewer
-│           └── StatusBar.tsx      # Status bar
+│   │   └── index.ts          # Preload bridge (IPC)
+│   ├── renderer/
+│   │   ├── App.tsx           # Main app component
+│   │   ├── index.tsx         # React entry
+│   │   ├── index.html        # HTML template
+│   │   ├── index.css         # Global styles
+│   │   ├── components/
+│   │   │   ├── WorkspaceTree.tsx   # File explorer
+│   │   │   ├── EditorPanel.tsx     # Code editor
+│   │   │   ├── TaskPanel.tsx       # Spec & task management
+│   │   │   ├── ChatPanel.tsx       # AI chat interface
+│   │   │   ├── StatusBar.tsx       # Status bar
+│   │   │   └── ScoreTile.tsx       # App selector
+│   │   └── store/
+│   │       └── useAgenticStore.ts  # Zustand store
+│   └── shared/
+│       └── types.ts          # Shared TypeScript types
+└── public/
 ```
 
-## Requirements
+## Phím tắt
 
-- Node.js 18+ 
-- Python 3.9+
-- Windows 10/11
+| Phím | Chức năng |
+|------|-----------|
+| `Ctrl+B` | Toggle Sidebar |
+| `Ctrl+Shift+P` | Mở Command Palette |
+| `Ctrl+S` | Lưu file |
+| `Ctrl+T` | Tạo Task mới |
+| `Ctrl+Shift+T` | Toggle Task Panel |
+| `Ctrl+Shift+C` | Toggle Chat Panel |
+| `Double-click` | Bật chế độ Edit trong Editor |
 
-## Installation
+## Steering Files
 
-1. Navigate to the desktop folder:
+AgenticAI tự động đọc các steering files sau khi khởi động:
 
-```bash
-cd src/interfaces/desktop
+- `AGENTS.md` - Agent instructions
+- `CLAUDE.md` - Claude behavior rules
+- `product.md` - Product specifications
+- `tech.md` - Technical documentation
+- `structure.md` - Project structure
+- `requirements.md` - Requirements
+
+Các files này được đặt trong:
+- Thư mục gốc workspace
+- `.ai_support/`
+- `.cursor/`
+- `.kiro/`
+
+## AI Integration
+
+AI Agent hiện tại là **mock implementation** - trả về responses mẫu dựa trên message của user.
+
+Để tích hợp với LLM thật (OpenAI/Claude), thay đổi hàm `processAIMessage` trong `src/main/index.ts`:
+
+```typescript
+// Thay thế mock response bằng:
+const response = await fetch('https://api.openai.com/v1/chat/completions', {
+  method: 'POST',
+  headers: {
+    'Content-Type': 'application/json',
+    'Authorization': `Bearer ${process.env.OPENAI_API_KEY}`
+  },
+  body: JSON.stringify({
+    model: 'gpt-4',
+    messages: [
+      { role: 'system', content: buildSystemPrompt(context) },
+      { role: 'user', content: message }
+    ]
+  })
+});
 ```
 
-2. Install Node.js dependencies:
+## Spec & Task Storage
 
-```bash
-npm install
+Tasks và Specs được lưu trong `.kiro/` directory của workspace:
+
+```
+.kiro/
+├── spec.json   # Current spec
+└── tasks.json  # Task list
 ```
 
 ## Development
 
-Run the application in development mode:
-
 ```bash
+# Run in dev mode with hot reload
 npm run dev
+
+# Build for production
+npm run build
+
+# Package as .exe
+npm run package
 ```
 
-This will:
-1. Start the Python FastAPI backend on port 8001
-2. Start the Electron app with hot reload
-3. Open the desktop window
+## TODO
 
-## Building for Windows
-
-Build the application and create a Windows executable:
-
-```bash
-npm run build:win
-```
-
-Output files:
-- `release/` - Build output directory
-- `release/win-unpacked/` - Unpacked application
-- `release/*.exe` - Installer or portable executable
-
-## Usage
-
-### Score Tiles
-
-The top bar displays app tiles with scores:
-- Click a tile to select it (highlighted with dotted border)
-- Scores are fetched from the backend API (`/api/score`)
-- Default score for Cursor app is 60
-
-### Workspace Explorer
-
-- Left sidebar shows the workspace file tree
-- Click folders to expand/collapse
-- Click files to open in the editor panel
-- Files are filtered to exclude common development artifacts
-
-### Code Editor
-
-- Displays selected file content with syntax highlighting
-- Supports Python, TypeScript, JavaScript, Rust, Go, C/C++, and more
-- Shows line numbers
-- Read-only mode for viewing
-
-### Status Bar
-
-- Shows backend connection status
-- Displays current file path and language
-- Shows cursor position (line, column)
-
-## Backend API
-
-The desktop app connects to the FastAPI backend:
-
-- `GET /health` - Health check
-- `GET /api/score` - Returns score data
-- `GET /api/fs/read?path=<filepath>` - Read file content
-- `GET /api/fs/dir?path=<dirpath>` - List directory
-
-## Configuration
-
-### Environment Variables
-
-- `BACKEND_PORT` - Backend server port (default: 8001)
-- `PYTHONUNBUFFERED=1` - Ensure Python output is not buffered
-
-### Customization
-
-Edit `tailwind.config.js` to modify colors and styling.
-
-## Troubleshooting
-
-### Backend not starting
-
-Ensure Python and uvicorn are installed:
-
-```bash
-pip install uvicorn fastapi
-```
-
-### Build fails
-
-Ensure you have the correct Node.js version and all dependencies installed:
-
-```bash
-node -v  # Should be 18+
-npm -v
-npm install
-```
-
-### App not displaying files
-
-The workspace is set to the project root. File system access requires proper permissions.
+- [ ] Monaco Editor thay thế highlight.js
+- [ ] Tích hợp OpenAI/Claude API thật
+- [ ] Auto-save khi edit
+- [ ] Multi-file tabs với close button
+- [ ] Search trong workspace
+- [ ] Git integration
+- [ ] Terminal panel
+- [ ] Settings panel
+- [ ] Code review automation
+- [ ] Auto-completion
 
 ## License
 

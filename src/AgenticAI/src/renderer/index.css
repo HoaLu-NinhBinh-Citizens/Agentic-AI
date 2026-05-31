@@ -1,0 +1,38 @@
+* {
+  margin: 0;
+  padding: 0;
+  box-sizing: border-box;
+}
+
+:root {
+  --bg-primary: #1e1e1e;
+  --bg-secondary: #252526;
+  --bg-tertiary: #2d2d2d;
+  --bg-hover: #3c3c3c;
+  --text-primary: #cccccc;
+  --text-secondary: #858585;
+  --accent: #0078d4;
+  --accent-hover: #1e8ad4;
+  --border: #3c3c3c;
+  --success: #4ec9b0;
+  --warning: #dcdcaa;
+  --error: #f14c4c;
+}
+
+body {
+  font-family: 'Fira Code', Consolas, monospace;
+  background: var(--bg-primary);
+  color: var(--text-primary);
+  overflow: hidden;
+}
+
+#root {
+  height: 100vh;
+  width: 100vw;
+}
+
+.app {
+  display: grid;
+  grid-template-columns: 240px 1fr 300px 320px;
+  height: 100vh;
+}

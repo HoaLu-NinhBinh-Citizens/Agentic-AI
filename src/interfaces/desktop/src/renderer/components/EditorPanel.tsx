@@ -1,4 +1,4 @@
-import React, { useEffect, useRef } from 'react';
+import React, { useEffect, useRef, useCallback, useState } from 'react';
 import hljs from 'highlight.js/lib/core';
 import python from 'highlight.js/lib/languages/python';
 import typescript from 'highlight.js/lib/languages/typescript';
@@ -34,6 +34,8 @@ interface EditorPanelProps {
   filePath?: string;
   content?: string;
   language?: string;
+  onChange?: (content: string) => void;
+  onSave?: () => void;
 }
 
 function getLanguageFromPath(path: string): string {
@@ -62,15 +64,62 @@ function getLanguageFromPath(path: string): string {
   return langMap[ext] || 'plaintext';
 }
 
-export function EditorPanel({ filePath, content = '', language }: EditorPanelProps) {
+export function EditorPanel({ filePath, content = '', language, onChange, onSave }: EditorPanelProps) {
   const codeRef = useRef<HTMLElement>(null);
+  const textareaRef = useRef<HTMLTextAreaElement>(null);
+  const [isEditing, setIsEditing] = useState(false);
+  const [editContent, setEditContent] = useState(content);
 
+  // Update highlight when content changes
   useEffect(() => {
     if (codeRef.current && content) {
       codeRef.current.removeAttribute('data-highlighted');
       codeRef.current.innerHTML = hljs.highlightAuto(content).value;
     }
   }, [content]);
+
+  // Sync edit content
+  useEffect(() => {
+    setEditContent(content);
+  }, [content]);
+
+  // Keyboard shortcuts
+  useEffect(() => {
+    const handleKeyDown = (e: KeyboardEvent) => {
+      if ((e.ctrlKey || e.metaKey) && e.key === 's') {
+        e.preventDefault();
+        if (isEditing && onSave) {
+          onSave();
+        }
+      }
+    };
+
+    window.addEventListener('keydown', handleKeyDown);
+    return () => window.removeEventListener('keydown', handleKeyDown);
+  }, [isEditing, onSave]);
+
+  const handleDoubleClick = useCallback(() => {
+    if (filePath) {
+      setIsEditing(true);
+    }
+  }, [filePath]);
+
+  const handleBlur = useCallback(() => {
+    if (isEditing && editContent !== content) {
+      onChange?.(editContent);
+    }
+    setIsEditing(false);
+  }, [isEditing, editContent, content, onChange]);
+
+  const handleTextareaChange = (e: React.ChangeEvent<HTMLTextAreaElement>) => {
+    const newContent = e.target.value;
+    setEditContent(newContent);
+    
+    // Update highlighted code
+    if (codeRef.current) {
+      codeRef.current.innerHTML = hljs.highlightAuto(newContent).value;
+    }
+  };
 
   if (!filePath) {
     return (
@@ -98,32 +147,71 @@ export function EditorPanel({ filePath, content = '', language }: EditorPanelPro
             {displayLang}
           </span>
         </div>
-        <span className="text-xs text-app-text-dim">{lines.length} lines</span>
+        <div className="flex items-center gap-3">
+          <span className="text-xs text-app-text-dim">{lines.length} lines</span>
+          {onChange && (
+            <button
+              onClick={() => setIsEditing(!isEditing)}
+              className="text-xs text-app-accent hover:underline"
+            >
+              {isEditing ? 'Preview' : 'Edit'}
+            </button>
+          )}
+        </div>
       </div>
 
       {/* Content */}
-      <div className="flex-1 overflow-auto">
-        <div className="flex min-h-full font-mono text-sm">
-          {/* Line numbers */}
-          <div className="flex-shrink-0 py-3 pr-4 pl-4 text-right select-none bg-app-bg border-r border-app-border">
-            <pre className="text-app-text-dim leading-6">
-              {lines.map((_, i) => (
-                <div key={i}>{i + 1}</div>
-              ))}
+      <div className="flex-1 overflow-auto relative">
+        {isEditing ? (
+          // Editable textarea
+          <div className="h-full flex">
+            <div className="flex-shrink-0 py-3 pr-4 pl-4 text-right select-none bg-app-bg border-r border-app-border">
+              <pre className="text-app-text-dim leading-6">
+                {editContent.split('\n').map((_, i) => (
+                  <div key={i}>{i + 1}</div>
+                ))}
+              </pre>
+            </div>
+            <textarea
+              ref={textareaRef}
+              value={editContent}
+              onChange={handleTextareaChange}
+              onBlur={handleBlur}
+              className="flex-1 py-3 pl-4 pr-4 bg-app-bg text-app-text font-mono text-sm leading-6 resize-none focus:outline-none"
+              spellCheck={false}
+            />
+          </div>
+        ) : (
+          // Read-only with syntax highlighting
+          <div 
+            className="flex min-h-full font-mono text-sm cursor-text"
+            onDoubleClick={handleDoubleClick}
+          >
+            <div className="flex-shrink-0 py-3 pr-4 pl-4 text-right select-none bg-app-bg border-r border-app-border">
+              <pre className="text-app-text-dim leading-6">
+                {lines.map((_, i) => (
+                  <div key={i}>{i + 1}</div>
+                ))}
+              </pre>
+            </div>
+            <pre className="flex-1 py-3 pl-4 pr-4 overflow-x-auto bg-app-bg">
+              <code
+                ref={codeRef}
+                className={`language-${displayLang} text-app-text leading-6`}
+              >
+                {content}
+              </code>
             </pre>
           </div>
-
-          {/* Code */}
-          <pre className="flex-1 py-3 pl-4 pr-4 overflow-x-auto bg-app-bg">
-            <code
-              ref={codeRef}
-              className={`language-${displayLang} text-app-text leading-6`}
-            >
-              {content}
-            </code>
-          </pre>
-        </div>
+        )}
       </div>
+
+      {/* Edit Mode Indicator */}
+      {isEditing && (
+        <div className="px-4 py-2 bg-app-accent/20 border-t border-app-accent text-xs text-app-accent">
+          Editing mode - Press ESC or click outside to save • Ctrl+S to save
+        </div>
+      )}
     </div>
   );
 }

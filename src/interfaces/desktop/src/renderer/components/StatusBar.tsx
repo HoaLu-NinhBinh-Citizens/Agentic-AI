@@ -44,8 +44,8 @@ export function StatusBar({
 
       {/* Center section */}
       <div className="flex items-center gap-1 text-white/80">
-        <Circle className={clsx('w-2 h-2', backendConnected ? 'fill-green-400' : 'fill-red-400')} />
-        <span>AI_SUPPORT Desktop v1.0</span>
+          <Circle className={clsx('w-2 h-2', backendConnected ? 'fill-green-400' : 'fill-red-400')} />
+        <span>AgenticAI v1.0</span>
       </div>
 
       {/* Right section */}

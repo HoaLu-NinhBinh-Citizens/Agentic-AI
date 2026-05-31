@@ -1,7 +1,7 @@
 {
-  "name": "ai-support-desktop",
+  "name": "agentic-ai",
   "version": "1.0.0",
-  "description": "AI_SUPPORT Desktop - Cursor-like Electron app for embedded engineering",
+  "description": "AgenticAI - AI-powered coding assistant like Cursor + Kiro",
   "main": "dist/main/index.js",
   "author": "AI_SUPPORT",
   "license": "MIT",
@@ -15,13 +15,18 @@
   "dependencies": {
     "react": "^18.2.0",
     "react-dom": "^18.2.0",
-    "highlight.js": "^11.9.0",
+    "zustand": "^4.4.7",
+    "react-markdown": "^9.0.1",
+    "remark-gfm": "^3.0.1",
+    "lucide-react": "^0.294.0",
     "clsx": "^2.0.0",
-    "lucide-react": "^0.294.0"
+    "highlight.js": "^11.9.0",
+    "uuid": "^9.0.1"
   },
   "devDependencies": {
     "@types/react": "^18.2.0",
     "@types/react-dom": "^18.2.0",
+    "@types/uuid": "^9.0.7",
     "@vitejs/plugin-react": "^4.2.0",
     "typescript": "^5.3.0",
     "electron": "^28.0.0",
