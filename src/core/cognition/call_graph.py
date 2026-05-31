@@ -12,10 +12,13 @@ from __future__ import annotations
 
 import ast
 import logging
+import os
 import re
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Optional
+
+from src.core.cognition.import_resolver import ImportResolver
 
 logger = logging.getLogger(__name__)
 
@@ -38,6 +41,42 @@ class CallSite:
     line: int
     col: int = 0
     is_method: bool = False
+    arguments: list[str] = field(default_factory=list)
+    
+    @classmethod
+    def create(
+        cls,
+        caller: str,
+        callee: str,
+        file: str,
+        line: int,
+        col: int = 0,
+        is_method: bool = False,
+        arguments: list[str] | None = None,
+    ) -> CallSite:
+        """Create a CallSite with optional arguments.
+        
+        Args:
+            caller: Name of the function making the call
+            callee: Name of the function being called
+            file: File path where the call occurs
+            line: Line number of the call
+            col: Column offset of the call
+            is_method: Whether this is a method call
+            arguments: List of argument names/variables passed
+            
+        Returns:
+            New CallSite instance
+        """
+        return cls(
+            caller=caller,
+            callee=callee,
+            file=file,
+            line=line,
+            col=col,
+            is_method=is_method,
+            arguments=arguments or [],
+        )
 
 
 @dataclass
@@ -78,6 +117,10 @@ class CallGraph:
         # Call sites
         self._call_sites: list[CallSite] = []
         
+        # Reverse index: callee -> list of CallSite (callers)
+        # This enables fast "find references" lookups
+        self._callers: dict[str, list[CallSite]] = {}
+        
         # Imports per file
         self._imports: dict[str, list[ImportEntry]] = {}
         
@@ -86,6 +129,12 @@ class CallGraph:
         
         # Build state
         self._is_built: bool = False
+        
+        # Incremental indexing: file path -> last modified timestamp
+        self._file_mtimes: dict[str, float] = {}
+        
+        # Import resolver for alias resolution
+        self._resolver: ImportResolver = ImportResolver()
         
         # Statistics
         self.stats: dict[str, int] = {
@@ -163,6 +212,159 @@ class CallGraph:
         
         self.build(indexed_files)
 
+    def build_content(self, content: str, file_path: str | Path) -> None:
+        """Build call graph for a single file from content.
+        
+        This is useful for incremental indexing or when you have
+        file content but don't want to read from disk.
+        
+        Args:
+            content: File content to parse
+            file_path: Path to associate with this content
+        """
+        file_path_str = str(file_path)
+        
+        # Parse imports for this file
+        self._parse_imports(Path(file_path), content)
+        
+        # Parse call sites directly from content using AST
+        if file_path_str.endswith(".py"):
+            try:
+                tree = ast.parse(content)
+            except SyntaxError:
+                self._parse_call_sites_regex(Path(file_path), content)
+            else:
+                # Use the visitor to collect call sites with arguments
+                visitor = CallSiteVisitor(file_path_str)
+                visitor.visit(tree)
+                self._call_sites.extend(visitor.call_sites)
+                
+                # Extract function definitions from AST
+                self._extract_functions_from_ast(tree, file_path_str)
+        else:
+            self._parse_call_sites_regex(Path(file_path), content)
+        
+        # Rebuild reverse index
+        self._build_name_index()
+        
+        # Update statistics
+        self.stats["functions"] = len(self._functions)
+        self.stats["call_sites"] = len(self._call_sites)
+        self._is_built = True
+    
+    def _extract_functions_from_ast(self, tree: ast.AST, file_path: str) -> None:
+        """Extract function definitions from AST.
+        
+        Args:
+            tree: Parsed AST tree
+            file_path: File path for the content
+        """
+        for node in ast.walk(tree):
+            if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
+                func = FunctionDef(
+                    name=node.name,
+                    file=file_path,
+                    line=node.lineno,
+                    end_line=node.end_lineno or node.lineno,
+                    params=[arg.arg for arg in node.args.args if hasattr(arg, 'arg')],
+                    is_method=isinstance(node, ast.FunctionDef) and len(node.decorator_list) == 0,
+                    is_async=isinstance(node, ast.AsyncFunctionDef),
+                )
+                self._add_function(func)
+            elif isinstance(node, ast.ClassDef):
+                for item in node.body:
+                    if isinstance(item, (ast.FunctionDef, ast.AsyncFunctionDef)):
+                        func = FunctionDef(
+                            name=item.name,
+                            file=file_path,
+                            line=item.lineno,
+                            end_line=item.end_lineno or item.lineno,
+                            params=[arg.arg for arg in item.args.args if hasattr(arg, 'arg')],
+                            is_method=True,
+                            class_name=node.name,
+                            is_async=isinstance(item, ast.AsyncFunctionDef),
+                        )
+                        self._add_function(func)
+    
+    def build_incremental(self, file_path: Path | str, content: str) -> bool:
+        """Build or update call graph for a single file.
+        
+        Only rebuilds if file is modified since last build.
+        
+        Args:
+            file_path: Path to the file
+            content: Current file content
+            
+        Returns:
+            True if file was indexed, False if skipped (no changes)
+        """
+        file_path_str = str(file_path)
+        
+        # Check modification time
+        path_obj = Path(file_path)
+        if path_obj.exists():
+            current_mtime = os.path.getmtime(path_obj)
+            last_mtime = self._file_mtimes.get(file_path_str, 0)
+            
+            if current_mtime <= last_mtime:
+                return False  # No changes, skip
+        
+        # Parse imports for this file first
+        self._resolver.parse_file(content, file_path_str)
+        
+        # Build the call graph for this file
+        self.build_content(content, file_path)
+        
+        # Update modification time
+        if path_obj.exists():
+            self._file_mtimes[file_path_str] = os.path.getmtime(path_obj)
+        
+        self._is_built = True
+        return True
+    
+    def get_file_mtime(self, file_path: str | Path) -> float:
+        """Get the last modified time tracked for a file.
+        
+        Args:
+            file_path: Path to check
+            
+        Returns:
+            Last modified time or 0 if not tracked
+        """
+        return self._file_mtimes.get(str(file_path), 0)
+    
+    def clear_file(self, file_path: str | Path) -> None:
+        """Remove all data for a specific file.
+        
+        Args:
+            file_path: Path to clear
+        """
+        file_path_str = str(file_path)
+        
+        # Remove call sites for this file
+        self._call_sites = [c for c in self._call_sites if c.file != file_path_str]
+        
+        # Remove function definitions for this file
+        for name in list(self._functions.keys()):
+            self._functions[name] = [f for f in self._functions[name] if f.file != file_path_str]
+            if not self._functions[name]:
+                del self._functions[name]
+        
+        # Remove imports
+        if file_path_str in self._imports:
+            del self._imports[file_path_str]
+        
+        # Remove from mtime tracking
+        if file_path_str in self._file_mtimes:
+            del self._file_mtimes[file_path_str]
+        
+        # Rebuild name index
+        self._build_name_index()
+        
+        # Update stats
+        self.stats["functions"] = len(self._functions)
+        self.stats["call_sites"] = len(self._call_sites)
+
     def _add_function(self, func: FunctionDef) -> None:
         """Add a function definition."""
         if func.name not in self._functions:
@@ -231,12 +433,20 @@ class CallGraph:
                     if callee in _BUILTINS:
                         continue
                     
-                    self._call_sites.append(CallSite(
+                    # Extract arguments from the match
+                    arguments = []
+                    if match.lastindex and match.lastindex >= 2:
+                        args_str = match.group(2)
+                        if args_str:
+                            arguments = [a.strip() for a in args_str.split(',') if a.strip()]
+                    
+                    self._call_sites.append(CallSite.create(
                         caller="<unknown>",
                         callee=callee,
                         file=str(file_path),
                         line=i,
                         col=match.start(),
+                        arguments=arguments,
                     ))
 
     def _parse_imports(self, file_path: Path, content: str) -> None:
@@ -269,11 +479,18 @@ class CallGraph:
         self._imports[str(file_path)] = imports
 
     def _build_name_index(self) -> None:
-        """Build reverse index for name lookups."""
+        """Build reverse index for name lookups and caller tracking."""
         self._defs_by_name.clear()
         
         for name, funcs in self._functions.items():
             self._defs_by_name[name] = funcs
+        
+        # Build reverse index: callee -> callers
+        self._callers.clear()
+        for site in self._call_sites:
+            if site.callee not in self._callers:
+                self._callers[site.callee] = []
+            self._callers[site.callee].append(site)
 
     def find_references(self, symbol_name: str, file_path: str | None = None) -> list[CallSite]:
         """Find all references to a symbol.
@@ -298,8 +515,19 @@ class CallGraph:
         return refs
 
     def get_callers(self, function_name: str, file_path: str | None = None) -> list[CallSite]:
-        """Get all callers of a function."""
-        return self.find_references(function_name, file_path)
+        """Get all callers of a function using reverse index.
+        
+        Args:
+            function_name: Name of the function
+            file_path: Optional file to limit search
+            
+        Returns:
+            List of CallSite where the function is called
+        """
+        callers = self._callers.get(function_name, [])
+        if file_path:
+            return [c for c in callers if c.file == file_path]
+        return callers
 
     def get_callees(self, function_name: str, file_path: str | None = None) -> list[CallSite]:
         """Get all call sites within a function."""
@@ -309,6 +537,51 @@ class CallGraph:
                 if file_path is None or site.file == file_path:
                     callees.append(site)
         return callees
+    
+    def add_call(
+        self,
+        caller: str,
+        callee: str,
+        file: str,
+        line: int,
+        col: int = 0,
+        is_method: bool = False,
+        arguments: list[str] | None = None
+    ) -> CallSite:
+        """Add a call site manually.
+        
+        Args:
+            caller: Name of the calling function
+            callee: Name of the function being called
+            file: File path
+            line: Line number
+            col: Column offset
+            is_method: Whether this is a method call
+            arguments: List of argument names passed
+            
+        Returns:
+            The created CallSite
+        """
+        site = CallSite.create(
+            caller=caller,
+            callee=callee,
+            file=file,
+            line=line,
+            col=col,
+            is_method=is_method,
+            arguments=arguments
+        )
+        self._call_sites.append(site)
+        
+        # Update reverse index
+        if callee not in self._callers:
+            self._callers[callee] = []
+        self._callers[callee].append(site)
+        
+        # Mark as built since we've added data
+        self._is_built = True
+        
+        return site
 
     def find_cycles(self) -> list[list[str]]:
         """Find circular dependencies in call graph using DFS.
@@ -379,6 +652,7 @@ class CallGraph:
                     "file": s.file,
                     "line": s.line,
                     "is_method": s.is_method,
+                    "arguments": s.arguments,
                 }
                 for s in self._call_sites
             ],
@@ -413,16 +687,41 @@ class CallSiteVisitor(ast.NodeVisitor):
         if callee_name and not callee_name.startswith('_'):
             # Skip builtins
             if callee_name not in _BUILTINS:
-                self.call_sites.append(CallSite(
+                # Extract argument names
+                arguments = self._extract_arguments(node)
+                
+                self.call_sites.append(CallSite.create(
                     caller=self.current_function or "<module>",
                     callee=callee_name,
                     file=self.file_path,
                     line=node.lineno or 0,
                     col=node.col_offset or 0,
                     is_method=is_method,
+                    arguments=arguments,
                 ))
 
         self.generic_visit(node)
+    
+    def _extract_arguments(self, node: ast.Call) -> list[str]:
+        """Extract argument names from a function call.
+        
+        Args:
+            node: AST Call node
+            
+        Returns:
+            List of argument names/variable names
+        """
+        arguments = []
+        for arg in node.args:
+            if isinstance(arg, ast.Name):
+                arguments.append(arg.id)
+            elif isinstance(arg, ast.Constant):
+                # Skip constants for data flow analysis
+                pass
+            elif isinstance(arg, ast.keyword):
+                if arg.arg:
+                    arguments.append(arg.arg)
+        return arguments
 
     def visit_Import(self, node: ast.Import) -> None:
         for alias in node.names:
@@ -462,6 +761,10 @@ class CallSiteVisitor(ast.NodeVisitor):
         self.current_class = node.name
         self.generic_visit(node)
         self.current_class = old_class
+
+
+# Backward compatibility alias
+_CallSiteVisitor = CallSiteVisitor
 
 
 def build_call_graph(

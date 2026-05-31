@@ -60,7 +60,7 @@ class MissingDocstringRule:
         return False
 
     def _get_node_type(self, node) -> str:
-        if isinstance(node, ast.FunctionDef:
+        if isinstance(node, ast.FunctionDef):
             return "Function"
         elif isinstance(node, ast.AsyncFunctionDef):
             return "Async function"

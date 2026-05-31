@@ -26,6 +26,21 @@ from .hardcoded_iv import HardcodedIVRule
 from .insecure_temp_file import InsecureTempFileRule
 from .unsafe_yaml_load import UnsafeYAMLLoadRule
 from .assert_statements import AssertStatementRule
+from .ssrf import SSRFRule
+from .xml_injection import XMLInjectionRule
+from .template_injection import TemplateInjectionRule
+from .missing_input_validation import MissingInputValidationRule
+from .insecure_password import InsecurePasswordRule
+from .mass_assignment import MassAssignmentRule
+from .missing_security_headers import MissingSecurityHeadersRule
+from .debug_mode import DebugModeRule
+from .insecure_file_upload import InsecureFileUploadRule
+from .missing_brute_force_protection import MissingBruteForceProtectionRule
+from .weak_session import WeakSessionRule
+from .path_traversal_enhanced import EnhancedPathTraversalRule
+from .missing_auth_check import MissingAuthCheckRule
+from .insecure_random_secure import InsecureRandomRule2
+from .type_confusion import TypeConfusionRule
 
 __all__ = [
     "SQLInjectionRule",
@@ -54,4 +69,19 @@ __all__ = [
     "InsecureTempFileRule",
     "UnsafeYAMLLoadRule",
     "AssertStatementRule",
+    "SSRFRule",
+    "XMLInjectionRule",
+    "TemplateInjectionRule",
+    "MissingInputValidationRule",
+    "InsecurePasswordRule",
+    "MassAssignmentRule",
+    "MissingSecurityHeadersRule",
+    "DebugModeRule",
+    "InsecureFileUploadRule",
+    "MissingBruteForceProtectionRule",
+    "WeakSessionRule",
+    "EnhancedPathTraversalRule",
+    "MissingAuthCheckRule",
+    "InsecureRandomRule2",
+    "TypeConfusionRule",
 ]

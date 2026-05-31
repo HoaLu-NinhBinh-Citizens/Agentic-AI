@@ -15,6 +15,21 @@ from .inefficient_dict import InefficientDictRule
 from .glob_instead_of_listdir import GlobVsListdirRule
 from .yield_vs_return import YieldVsReturnRule
 from .inefficient_set_ops import InefficientSetOpsRule
+from .inefficient_string_methods import InefficientStringMethodsRule
+from .inefficient_loop_var import InefficientLoopVarRule
+from .multiple_comparisons import MultipleComparisonsRule
+from .inefficient_copy import InefficientCopyRule
+from .inefficient_sorting import InefficientSortingRule
+from .inefficient_file_read import InefficientFileReadRule
+from .unnecessary_len_check import UnnecessaryLenCheckRule
+from .inefficient_dict_get import InefficientDictGetRule
+from .inefficient_dataclass import InefficientDataclassRule
+from .inefficient_subprocess import InefficientSubprocessRule
+from .inefficient_json import InefficientJSONRule
+from .inefficient_logging import InefficientLoggingRule
+from .inefficient_filter import InefficientFilterRule
+from .inefficient_map import InefficientMapRule
+from .inefficient_collections import InefficientCollectionsRule
 
 __all__ = [
     "InefficientStringConcatRule",
@@ -32,4 +47,19 @@ __all__ = [
     "GlobVsListdirRule",
     "YieldVsReturnRule",
     "InefficientSetOpsRule",
+    "InefficientStringMethodsRule",
+    "InefficientLoopVarRule",
+    "MultipleComparisonsRule",
+    "InefficientCopyRule",
+    "InefficientSortingRule",
+    "InefficientFileReadRule",
+    "UnnecessaryLenCheckRule",
+    "InefficientDictGetRule",
+    "InefficientDataclassRule",
+    "InefficientSubprocessRule",
+    "InefficientJSONRule",
+    "InefficientLoggingRule",
+    "InefficientFilterRule",
+    "InefficientMapRule",
+    "InefficientCollectionsRule",
 ]

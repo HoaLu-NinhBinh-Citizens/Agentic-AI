@@ -15,6 +15,12 @@ from src.infrastructure.indexing.incremental import (
     discover_files,
     is_indexable,
 )
+from src.infrastructure.indexing.file_watcher import (
+    FileWatcher,
+    FileChange,
+    IncrementalIndexer as WatcherIndexer,
+    WATCHDOG_AVAILABLE,
+)
 
 __all__ = [
     # Hash utilities
@@ -30,4 +36,9 @@ __all__ = [
     "is_indexable",
     "INDEXED_EXTENSIONS",
     "EXCLUDE_PATTERNS",
+    # File watcher
+    "FileWatcher",
+    "FileChange",
+    "WATCHDOG_AVAILABLE",
+    "WatcherIndexer",
 ]
