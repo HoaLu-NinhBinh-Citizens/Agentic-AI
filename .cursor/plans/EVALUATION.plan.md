@@ -1,3 +1,10 @@
+---
+name: ""
+overview: ""
+todos: []
+isProject: false
+---
+
 # BÁO CÁO ĐÁNH GIÁ AI_SUPPORT
 ## So sánh với Cursor AI cho tác vụ Code Review
 
@@ -209,7 +216,9 @@
 #### Strengths
 
 1. **AST-based analysis:** Sử dụng AST parsing thay vì regex đơn giản
-   ```python
+   
+
+```python
    # call_graph.py:32-41
    @dataclass
    class CallSite:
@@ -219,38 +228,56 @@
        line: int
        col: int = 0
        is_method: bool = False
-   ```
+   
+
+```
 
 2. **Confidence scoring:** Hệ thống điểm confidence rõ ràng
-   ```python
+   
+
+```python
    # detector.py:95-98
    @property
    def is_high_confidence(self) -> bool:
        """Check if finding has high confidence (>= 0.85)."""
        return self.confidence >= 0.85
-   ```
+   
+
+```
 
 3. **Built-in function filtering:** Tránh false positives
-   ```python
+   
+
+```python
    # call_graph.py:23-29
    _BUILTINS: set[str] = {
        "print", "len", "str", "int", "float", "bool",
        "list", "dict", "set", "tuple", "range", ...
    }
-   ```
+   
+
+```
 
 #### Weaknesses
 
 1. **Cross-file resolution limited:** Chỉ resolve imports cơ bản
-   ```python
+   
+
+```python
    # call_graph.py:82 - Imports per file
    self._imports: dict[str, list[ImportEntry]] = {}
-   ```
+   
+
+```
 
 2. **Không có data flow analysis đầy đủ:** Chỉ có fallback regex
-   ```python
+   
+
+```python
    # detector.py:9 - "Graceful fallback to regex when AST unavailable"
-   ```
+   
+
+```
 
 3. **ML detector thiếu context-aware detection:** Không track state across functions
 
@@ -271,7 +298,9 @@
 #### Strengths
 
 1. **Phạm vi đa dạng:** Security, Quality, ML, Embedded
-   ```python
+   
+
+```python
    # rule_engine.py:10-15
    Built-in rules cover:
    - Security: hardcoded secrets, SQL injection, command injection
@@ -279,19 +308,29 @@
    - Import Analysis: unused imports, circular imports
    - Naming Conventions: snake_case, PascalCase
    - Code Quality: long functions, broad except, TODO/FIXME
-   ```
+   
+
+```
 
 2. **Auto-fix templates:** Có sẵn fix suggestions
-   ```python
+   
+
+```python
    # rule_engine.py:6
    - Auto-fix templates for common issues
-   ```
+   
+
+```
 
 3. **External linter integration:** Merge từ pylint, ruff, eslint
-   ```python
+   
+
+```python
    # rule_engine.py:8
    - Merge findings from external linters (pylint, ruff, eslint, golangci-lint)
-   ```
+   
+
+```
 
 #### Weaknesses
 
@@ -318,16 +357,22 @@
 #### Strengths
 
 1. **Multiple output formats:** Markdown, JSON, CLI
-   ```python
+   
+
+```python
    # result_formatter.py:3-7
    Provides multiple output formats:
    - UnifiedMarkdownFormatter: Cursor-style markdown
    - UnifiedJsonFormatter: Structured JSON
    - UnifiedCLIFormatter: Terminal output
-   ```
+   
+
+```
 
 2. **Statistics tracking:** Chi tiết và có metadata
-   ```python
+   
+
+```python
    # result_formatter.py:28-43
    @dataclass
    class UnifiedPipelineStats:
@@ -339,10 +384,14 @@
        low_count: int = 0
        execution_time_ms: float = 0.0
        detectors_used: list[str] = field(default_factory=list)
-   ```
+   
+
+```
 
 3. **Diff preview:** Hiển thị thay đổi trước khi apply
-   ```python
+   
+
+```python
    # slash.py:640-650
    if show_diff:
        result = await applicator.apply_fix_ast(
@@ -353,8 +402,14 @@
            dry_run=True,
        )
        if result.get("diff"):
-           output_lines.append(f"\n```diff\n{result['diff']}\n```")
-   ```
+           output_lines.append(f"\n
+
+```diff\n{result['diff']}\n
+
+```")
+   
+
+```
 
 #### Weaknesses
 
@@ -382,7 +437,9 @@
 #### Strengths
 
 1. **Cursor-style slash commands:** `/fix`, `/review`, `/explain`
-   ```python
+   
+
+```python
    # slash.py:3-11
    Supports:
        /fix [@file[:line]] [--dry-run] [--apply] [--interactive]
@@ -391,25 +448,35 @@
        /review [--files=FILES] [--focus=AREA]
        /explain [@symbol]
        /stats
-   ```
+   
+
+```
 
 2. **Interactive mode:** Xác nhận trước khi apply
-   ```python
+   
+
+```python
    # slash.py:714-828
    async def cmd_fix_interactive(ctx: CommandContext) -> CommandResult:
        """Interactive fix mode with user confirmation."""
        # Options: [y] Yes, [n] No, [a] Yes to all, [q] Quit, [e] Edit, [s] Skip, [h] Help
-   ```
+   
+
+```
 
 3. **Rich command aliases:** Multiple ways to invoke
-   ```python
+   
+
+```python
    # slash.py:1413-1415
    "fix": Command(
        name="fix",
        aliases=["f"],
        ...
    )
-   ```
+   
+
+```
 
 #### Weaknesses
 
@@ -436,16 +503,22 @@
 #### Strengths
 
 1. **Plugin architecture:** Dễ thêm rules mới
-   ```python
+   
+
+```python
    # rule_engine.py:17-22
    Usage:
        from src.infrastructure.analysis.rule_engine import RuleEngine
        engine = RuleEngine(indexer=indexer)
        findings = engine.detect("path/to/file.py", "python")
-   ```
+   
+
+```
 
 2. **Dataclass-based findings:** Dễ extend
-   ```python
+   
+
+```python
    # detector.py:50-66
    @dataclass
    class MLFinding:
@@ -457,16 +530,22 @@
        old_code: str
        new_code: str
        explanation: str
-   ```
+   
+
+```
 
 3. **Indexer integration:** TreeSitter, SymbolGraph, ReferenceGraph
-   ```python
+   
+
+```python
    # slash.py:1016-1027
    from src.infrastructure.indexing.symbol_graph import SymbolGraph
    from src.infrastructure.indexing.reference_graph import ReferenceGraph
    symbol_graph = SymbolGraph()
    ref_graph = ReferenceGraph()
-   ```
+   
+
+```
 
 #### Weaknesses
 
