@@ -799,6 +799,10 @@ class AISupportTUI:
                         self.terminal.add_command(user_input)
                         self.terminal.add_output(f"Command not recognized. Type /help for available commands.")
                         self.render()
+        except KeyboardInterrupt:
+            pass
+        finally:
+            self.console.print("\n[dim]Goodbye![/dim]\n")
 
     async def _execute_in_terminal(self, command: str) -> None:
         """Execute command in real terminal."""
