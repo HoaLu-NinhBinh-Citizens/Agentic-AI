@@ -284,7 +284,7 @@ def _extract_symbols_regex(
         ("enum", "rust", re.compile(r"^\s*(?:pub\s+)?enum\s+([A-Za-z_][\w]*)\s*(?:<[^>]*>)?\s*\{", re.MULTILINE)),
         ("impl", "rust", re.compile(r"^\s*(?:pub\s+)?impl(?:\s+<[^>]*>)?\s+([A-Za-z_][\w]*)\s*", re.MULTILINE)),
         # Go
-        ("function", "go", re.compile(r"^\s*func\s+(?:(?:\([^)]+\)\s*)?([A-Za-z_][\w]*)\s*\(", re.MULTILINE)),
+        ("function", "go", re.compile(r"^\s*func\s+(?:\([^)]+\)\s+)?([A-Za-z_][\w]*)\s*\(", re.MULTILINE)),
         ("type", "go", re.compile(r"^\s*type\s+([A-Za-z_][\w]*)\s+(?:struct|interface)", re.MULTILINE)),
         # Generic
         ("function", "text", re.compile(r"^\s*def\s+([a-zA-Z_][\w]*)\s*\(", re.MULTILINE)),

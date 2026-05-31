@@ -220,6 +220,133 @@ CRITICAL MISSING:
 
 ---
 
+## How to Add a New Language
+
+This section describes how to add support for a new programming language to the AI_SUPPORT indexer.
+
+### Overview
+
+The indexing system supports languages through tree-sitter parsers. When a tree-sitter parser is available, the indexer uses AST-based analysis for accurate symbol extraction. When unavailable, it falls back to regex patterns.
+
+### Step 1: Install the Tree-sitter Grammar
+
+First, ensure tree-sitter-languages is installed with the grammar for your language:
+
+```bash
+# Install tree-sitter-languages (includes many grammars)
+pip install tree-sitter-languages
+
+# Or install specific grammar if needed
+npm install -g tree-sitter-java  # Example for Java
+```
+
+### Step 2: Register the Language Extension
+
+Edit `src/infrastructure/indexing/tree_sitter/__init__.py` and add your language extension:
+
+```python
+_EXTENSION_LANGUAGE: dict[str, str] = {
+    # ... existing entries ...
+    ".java": "java",  # Add your language here
+    ".kt": "kotlin",  # Kotlin example
+    ".swift": "swift",  # Swift example
+}
+```
+
+### Step 3: Define Symbol Node Types
+
+Add the tree-sitter node types that correspond to symbols in your language:
+
+```python
+_SYMBOL_NODES: dict[str, list[str]] = {
+    # ... existing entries ...
+    "java": [
+        "method_declaration", "class_declaration", "interface_declaration",
+        "enum_declaration", "annotation", "constructor_declaration",
+    ],
+    "kotlin": [
+        "function_declaration", "class_declaration", "object_declaration",
+    ],
+}
+```
+
+### Step 4: Add Regex Fallback (Optional)
+
+For the regex fallback when tree-sitter is unavailable, add patterns in `_extract_symbols_regex`:
+
+```python
+("function", "java", re.compile(r"^\s*(?:public|private|protected)?\s*\w+\s+\w+\s*\([^)]*\)", re.MULTILINE)),
+("class", "java", re.compile(r"^\s*(?:public|private)?\s*class\s+([A-Za-z_]\w*)", re.MULTILINE)),
+```
+
+### Step 5: Write a Sanity Test
+
+Create a test in `tests/unit/test_language_coverage.py`:
+
+```python
+class TestJavaParser:
+    """Sanity tests for Java tree-sitter parser."""
+
+    @pytest.fixture
+    def java_code(self) -> str:
+        return '''
+public class MyClass {
+    public void myMethod() {
+        // ...
+    }
+}
+'''
+
+    @pytest.mark.asyncio
+    async def test_java_class_parsing(self, indexer, java_code, tmp_path):
+        test_file = tmp_path / "test.java"
+        test_file.write_text(java_code)
+        result = await indexer.index_file(str(test_file))
+        assert result["status"] == "success"
+        symbols = result["symbols"]
+        assert any(s["type"] == "class" for s in symbols)
+```
+
+### Step 6: Run the Metrics Command
+
+Verify your language is being parsed correctly:
+
+```bash
+python -m ai_support.metrics --format summary
+# Should show your language with tree-sitter or regex percentage
+```
+
+### Language Support Matrix
+
+| Language | Extension | Tree-sitter Parser | Regex Fallback |
+|----------|-----------|-------------------|----------------|
+| Python | `.py` | ✅ Full | ✅ |
+| C | `.c`, `.h` | ✅ Full | ✅ |
+| C++ | `.cpp`, `.cc` | ✅ Full | ✅ |
+| JavaScript | `.js`, `.jsx` | ✅ Full | ✅ |
+| TypeScript | `.ts`, `.tsx` | ✅ Full | ✅ |
+| Rust | `.rs` | ✅ Full | ✅ |
+| Go | `.go` | ✅ Full | ✅ |
+| Java | `.java` | ✅ | ✅ |
+| Kotlin | `.kt` | ✅ | ⚠️ Basic |
+| Swift | `.swift` | ⚠️ | ⚠️ Basic |
+
+### Troubleshooting
+
+**Language not recognized:**
+- Check file extension is registered in `_EXTENSION_LANGUAGE`
+- Verify tree-sitter-languages is installed
+
+**Parser returns no symbols:**
+- Check node types are correct in `_SYMBOL_NODES`
+- Run test with `--format json` to see raw parser output
+
+**Regex fallback always used:**
+- Tree-sitter parser may not be installed
+- Check parser availability: `python -c "import tree_sitter_languages; print(tree_sitter_languages.get_parser('java'))"`
+
+---
+
 ## How to Use
 
 ### Example 1: Index a Codebase
@@ -241,46 +368,14 @@ for f in funcs[:5]:
     print(f"  {f.name} at {f.location}")
 ```
 
-### Example 2: Orchestrate Tasks
+### Example 2: Check Parser Coverage
 
-```python
-from core.orchestration.task_orchestrator import TaskOrchestrator, Agent
+```bash
+# Run metrics command
+python -m ai_support.metrics src/
 
-orch = TaskOrchestrator(max_parallel=4)
-
-# Register agents
-orch.register_agent(Agent(
-    agent_id="coder",
-    name="Coder Agent",
-    capabilities=["python", "c"]
-))
-
-# Create dependency graph
-task1 = orch.create_task("analyze", analyze_code)
-task2 = orch.create_task("fix", fix_bug, depends_on=[task1.task_id])
-task3 = orch.create_task("test", run_tests, depends_on=[task2.task_id])
-
-# Execute with parallel optimization
-result = await orch.execute()
-print(f"Success: {result.success}")
-print(f"Completed: {len(result.completed_tasks)}")
-```
-
-### Example 3: Parse and Fix Errors
-
-```python
-from core.execution.tool_executor import ToolExecutor
-
-executor = ToolExecutor()
-
-# Execute build
-result = await executor.build("make", cwd="/path/to/project")
-
-# Parse errors
-for diag in result.diagnostics:
-    print(f"{diag.severity.name}: {diag.message}")
-    if diag.suggestions:
-        print(f"  Try: {diag.suggestions[0]}")
+# Output shows tree-sitter vs regex usage
+# Parser coverage: 94.5% tree-sitter (523/553)
 ```
 
 ---
