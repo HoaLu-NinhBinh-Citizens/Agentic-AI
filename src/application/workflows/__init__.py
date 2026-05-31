@@ -16,6 +16,25 @@ Unified Pipeline:
 
 from src.application.workflows.base import BaseWorkflow, WorkflowStep, WorkflowResult
 
+# Collaborative review exports
+try:
+    from src.application.workflows.collaborative import (
+        CollaborativeReview,
+        CollaborativeReviewDB,
+        ThreadState,
+        Comment,
+        Thread,
+        ReviewSession,
+    )
+except ImportError:
+    # Graceful degradation if collaborative module not available
+    CollaborativeReview = None
+    CollaborativeReviewDB = None
+    ThreadState = None
+    Comment = None
+    Thread = None
+    ReviewSession = None
+
 # Unified pipeline exports
 try:
     from src.application.workflows.unified import (
@@ -36,6 +55,13 @@ __all__ = [
     "BaseWorkflow",
     "WorkflowStep",
     "WorkflowResult",
+    # Collaborative Review
+    "CollaborativeReview",
+    "CollaborativeReviewDB",
+    "ThreadState",
+    "Comment",
+    "Thread",
+    "ReviewSession",
     # Unified Pipeline
     "UnifiedReviewEngine",
     "ReviewEngineConfig",

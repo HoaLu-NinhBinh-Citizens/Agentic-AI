@@ -1,0 +1,12 @@
+{
+    "name": "example-plugin",
+    "version": "1.0.0",
+    "description": "Example AI_SUPPORT plugin demonstrating plugin system",
+    "author": "AI_SUPPORT Team",
+    "main": "plugin.py",
+    "entry_point": "register",
+    "dependencies": [],
+    "permissions": [],
+    "min_ai_support_version": "1.0.0",
+    "hooks": ["on_finding_found"]
+}
