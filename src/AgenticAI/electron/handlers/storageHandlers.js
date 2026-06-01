@@ -1,107 +1,210 @@
 /**
- * Storage IPC Handlers
+ * IPC Handler: Storage
+ * Handles all storage operations with validation
  */
+const { z } = require('zod');
 
-const { ipcMain } = require('electron');
+// Validation schemas
+const updateSettingsSchema = z.record(z.unknown());
+const setAPIKeySchema = z.string().min(1);
+const setWorkspaceSchema = z.string().min(1);
+const saveTasksSchema = z.array(
+  z.object({
+    id: z.string(),
+    title: z.string(),
+    description: z.string().optional(),
+    completed: z.boolean(),
+    createdAt: z.string(),
+    updatedAt: z.string(),
+  })
+);
+const saveChatSchema = z.array(
+  z.object({
+    id: z.string(),
+    role: z.enum(['user', 'assistant', 'system']),
+    content: z.string(),
+    timestamp: z.string(),
+  })
+);
+const updateUIStateSchema = z.record(z.unknown());
+const updateOpenFilesSchema = z.object({
+  files: z.array(z.string()),
+  activeFile: z.string().nullable().optional(),
+});
 
-let storage = null;
-
-function setStorage(s) {
-  storage = s;
+// Error handler helper
+function handleError(error, context) {
+  console.error(`[Storage Handler] ${context}:`, error);
+  return { error: error.message };
 }
 
-function registerStorageHandlers() {
-  // Settings handlers
+// IPC Handlers
+function registerStorageHandlers(ipcMain, { storage }) {
+  // Get Settings
   ipcMain.handle('storage:getSettings', async () => {
-    if (!storage) return {};
-    return storage.getSettings();
+    try {
+      if (!storage) return {};
+      return storage.getSettings();
+    } catch (error) {
+      return handleError(error, 'getSettings');
+    }
   });
 
+  // Update Settings
   ipcMain.handle('storage:updateSettings', async (_, updates) => {
-    if (!storage) return false;
-    storage.updateSettings(updates);
-    return true;
+    try {
+      const validated = updateSettingsSchema.parse(updates);
+      if (!storage) return false;
+      storage.updateSettings(validated);
+      return true;
+    } catch (error) {
+      return handleError(error, 'updateSettings');
+    }
   });
 
-  // API key handlers
+  // Get API Key
   ipcMain.handle('storage:getAPIKey', async () => {
-    if (!storage) return null;
-    return storage.getAPIKey();
+    try {
+      if (!storage) return null;
+      return storage.getAPIKey();
+    } catch (error) {
+      return handleError(error, 'getAPIKey');
+    }
   });
 
+  // Set API Key
   ipcMain.handle('storage:setAPIKey', async (_, key) => {
-    if (!storage) return false;
-    storage.setAPIKey(key);
-    return true;
+    try {
+      const validated = setAPIKeySchema.parse(key);
+      if (!storage) return false;
+      storage.setAPIKey(validated);
+      return true;
+    } catch (error) {
+      return handleError(error, 'setAPIKey');
+    }
   });
 
+  // Has API Key
   ipcMain.handle('storage:hasAPIKey', async () => {
-    if (!storage) return false;
-    return storage.hasAPIKey();
+    try {
+      if (!storage) return false;
+      return storage.hasAPIKey();
+    } catch (error) {
+      return handleError(error, 'hasAPIKey');
+    }
   });
 
-  // Workspace handlers
+  // Get Workspace
   ipcMain.handle('storage:getWorkspace', async () => {
-    if (!storage) return null;
-    return storage.getCurrentWorkspace();
+    try {
+      if (!storage) return null;
+      return storage.getCurrentWorkspace();
+    } catch (error) {
+      return handleError(error, 'getWorkspace');
+    }
   });
 
+  // Set Workspace
   ipcMain.handle('storage:setWorkspace', async (_, workspacePath) => {
-    if (!storage) return false;
-    storage.setCurrentWorkspace(workspacePath);
-    return true;
+    try {
+      const validated = setWorkspaceSchema.parse(workspacePath);
+      if (!storage) return false;
+      storage.setCurrentWorkspace(validated);
+      return true;
+    } catch (error) {
+      return handleError(error, 'setWorkspace');
+    }
   });
 
-  // Task handlers
+  // Get Tasks
   ipcMain.handle('storage:getTasks', async () => {
-    if (!storage) return [];
-    return storage.getTasks();
+    try {
+      if (!storage) return [];
+      return storage.getTasks();
+    } catch (error) {
+      return handleError(error, 'getTasks');
+    }
   });
 
+  // Save Tasks
   ipcMain.handle('storage:saveTasks', async (_, tasks) => {
-    if (!storage) return false;
-    storage.saveTasks(tasks);
-    return true;
+    try {
+      const validated = saveTasksSchema.parse(tasks);
+      if (!storage) return false;
+      storage.saveTasks(validated);
+      return true;
+    } catch (error) {
+      return handleError(error, 'saveTasks');
+    }
   });
 
-  // Chat handlers
+  // Get Chat
   ipcMain.handle('storage:getChat', async () => {
-    if (!storage) return { messages: [], conversationId: null };
-    return storage.getChat();
+    try {
+      if (!storage) return { messages: [], conversationId: null };
+      return storage.getChat();
+    } catch (error) {
+      return handleError(error, 'getChat');
+    }
   });
 
+  // Save Chat
   ipcMain.handle('storage:saveChat', async (_, messages) => {
-    if (!storage) return false;
-    storage.saveChat(messages);
-    return true;
+    try {
+      const validated = saveChatSchema.parse(messages);
+      if (!storage) return false;
+      storage.saveChat(validated);
+      return true;
+    } catch (error) {
+      return handleError(error, 'saveChat');
+    }
   });
 
-  // UI state handlers
+  // Get UI State
   ipcMain.handle('storage:getUIState', async () => {
-    if (!storage) return {};
-    return storage.getUIState();
+    try {
+      if (!storage) return {};
+      return storage.getUIState();
+    } catch (error) {
+      return handleError(error, 'getUIState');
+    }
   });
 
+  // Update UI State
   ipcMain.handle('storage:updateUIState', async (_, updates) => {
-    if (!storage) return false;
-    storage.updateUIState(updates);
-    return true;
+    try {
+      const validated = updateUIStateSchema.parse(updates);
+      if (!storage) return false;
+      storage.updateUIState(validated);
+      return true;
+    } catch (error) {
+      return handleError(error, 'updateUIState');
+    }
   });
 
-  // Open files handlers
+  // Get Open Files
   ipcMain.handle('storage:getOpenFiles', async () => {
-    if (!storage) return { files: [], activeFile: null };
-    return storage.getOpenFiles();
+    try {
+      if (!storage) return { files: [], activeFile: null };
+      return storage.getOpenFiles();
+    } catch (error) {
+      return handleError(error, 'getOpenFiles');
+    }
   });
 
+  // Update Open Files
   ipcMain.handle('storage:updateOpenFiles', async (_, updates) => {
-    if (!storage) return false;
-    storage.updateOpenFiles(updates);
-    return true;
+    try {
+      const validated = updateOpenFilesSchema.parse(updates);
+      if (!storage) return false;
+      storage.updateOpenFiles(validated);
+      return true;
+    } catch (error) {
+      return handleError(error, 'updateOpenFiles');
+    }
   });
+
+  console.log('[Storage Handler] Registered all storage handlers with Zod validation');
 }
 
-module.exports = {
-  registerStorageHandlers,
-  setStorage,
-};
+module.exports = { registerStorageHandlers };

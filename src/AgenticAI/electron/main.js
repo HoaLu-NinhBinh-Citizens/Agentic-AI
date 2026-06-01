@@ -2,6 +2,9 @@ const { app, BrowserWindow, ipcMain, dialog } = require('electron');
 const path = require('path');
 const fs = require('fs');
 
+// Import modular handlers
+const { registerAllHandlers } = require('./handlers');
+
 // Ollama Client
 let ollamaClient = null;
 
@@ -326,6 +329,9 @@ function createWindow() {
   // Initialize Phase 3 services
   initializePhase3Services();
   
+  // Initialize main services
+  initializeMainServices();
+  
   mainWindow = new BrowserWindow({
     width: 1400,
     height: 900,
@@ -340,6 +346,18 @@ function createWindow() {
     titleBarStyle: 'hiddenInset',
     frame: process.platform === 'darwin' ? true : false
   });
+
+  // Register all IPC handlers
+  registerAllHandlers(ipcMain, {
+    aiService,
+    storage,
+    steeringParser,
+    gitIntegration,
+    terminalManager,
+    searchEngine,
+    extensionSystem,
+    ollamaClient,
+  }, mainWindow);
 
   const isDev = !app.isPackaged;
   

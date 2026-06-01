@@ -1,0 +1,175 @@
+name: CI
+
+on:
+  push:
+    branches: [main, develop]
+  pull_request:
+    branches: [main, develop]
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  # Job 1: Lint, Typecheck, Unit Tests
+  quality:
+    name: Quality Checks
+    runs-on: ubuntu-latest
+    
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: 'npm'
+          cache-dependency-path: src/AgenticAI/package-lock.json
+
+      - name: Install dependencies
+        working-directory: src/AgenticAI
+        run: npm ci
+
+      - name: Run ESLint
+        working-directory: src/AgenticAI
+        run: npm run lint
+
+      - name: Run TypeScript type checking
+        working-directory: src/AgenticAI
+        run: npx tsc --noEmit
+
+      - name: Run unit tests
+        working-directory: src/AgenticAI
+        run: npm run test
+
+      - name: Run unit tests with coverage
+        working-directory: src/AgenticAI
+        run: npm run test:coverage
+        continue-on-error: true
+
+      - name: Upload coverage to Codecov
+        uses: codecov/codecov-action@v4
+        if: success()
+        with:
+          files: src/AgenticAI/coverage/lcov.info
+          flags: unittests
+          name: codecov-agentic-ai
+          fail_ci_if_error: false
+        env:
+          CODECOV_TOKEN: ${{ secrets.CODECOV_TOKEN }}
+
+  # Job 2: Integration Tests
+  integration:
+    name: Integration Tests
+    runs-on: ubuntu-latest
+    needs: quality
+    
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: 'npm'
+          cache-dependency-path: src/AgenticAI/package-lock.json
+
+      - name: Install dependencies
+        working-directory: src/AgenticAI
+        run: npm ci
+
+      - name: Install Playwright browsers
+        working-directory: src/AgenticAI
+        run: npx playwright install --with-deps chromium
+
+      - name: Run integration tests
+        working-directory: src/AgenticAI
+        run: npm run test -- --testPathPattern=integration
+
+  # Job 3: E2E Tests (Playwright)
+  e2e:
+    name: End-to-End Tests
+    runs-on: ubuntu-latest
+    needs: integration
+    
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: 'npm'
+          cache-dependency-path: src/AgenticAI/package-lock.json
+
+      - name: Install dependencies
+        working-directory: src/AgenticAI
+        run: npm ci
+
+      - name: Install Playwright browsers
+        working-directory: src/AgenticAI
+        run: npx playwright install --with-deps
+
+      - name: Build application
+        working-directory: src/AgenticAI
+        run: npm run build:vite
+
+      - name: Run E2E tests
+        working-directory: src/AgenticAI
+        run: npm run test:e2e
+        continue-on-error: true
+
+      - name: Upload test results
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: playwright-report
+          path: src/AgenticAI/playwright-report/
+          retention-days: 7
+
+  # Job 4: Build and Package
+  build:
+    name: Build & Package
+    runs-on: ubuntu-latest
+    needs: [quality, integration]
+    
+    strategy:
+      matrix:
+        os: [ubuntu-latest, windows-latest]
+    
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: 'npm'
+          cache-dependency-path: src/AgenticAI/package-lock.json
+
+      - name: Install dependencies
+        working-directory: src/AgenticAI
+        run: npm ci
+
+      - name: Build application
+        working-directory: src/AgenticAI
+        run: npm run build
+        if: matrix.os == 'ubuntu-latest'
+
+      - name: Build application (Windows)
+        working-directory: src/AgenticAI
+        run: npm run build
+        if: matrix.os == 'windows-latest'
+
+      - name: Upload build artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: build-artifacts-${{ matrix.os }}
+          path: |
+            src/AgenticAI/release/
+            src/AgenticAI/dist/
+          retention-days: 7

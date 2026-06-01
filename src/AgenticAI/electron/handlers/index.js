@@ -1,74 +1,44 @@
 /**
  * IPC Handlers Index
- * 
- * Unified module that exports all handler registration functions
- * and provides a convenient registerAll function.
+ * Exports all modularized IPC handlers
  */
-
-const { registerFsHandlers, setMainWindow } = require('./fsHandlers');
-const { registerGitHandlers, setGitIntegration } = require('./gitHandlers');
-const { registerAIHandlers, setAIService, setOllamaClient, setSteeringParser } = require('./aiHandlers');
-const { registerTerminalHandlers, setTerminalManager } = require('./terminalHandlers');
-const { registerStorageHandlers, setStorage } = require('./storageHandlers');
+const { registerFSHandlers } = require('./fsHandlers');
+const { registerAIHandlers } = require('./aiHandlers');
+const { registerStorageHandlers } = require('./storageHandlers');
+const { registerGitHandlers } = require('./gitHandlers');
+const { registerSteeringHandlers } = require('./steeringHandlers');
 
 /**
- * Register all IPC handlers
- * @param {Object} services - Object containing all service instances
- * @param {Object} services.mainWindow - Main Electron window
- * @param {Object} services.gitIntegration - Git integration service
- * @param {Object} services.aiService - AI service
- * @param {Object} services.ollamaClient - Ollama client
- * @param {Object} services.steeringParser - Steering parser
- * @param {Object} services.terminalManager - Terminal manager
- * @param {Object} services.storage - Storage service
+ * Register all IPC handlers with the main process
+ * @param {Electron.IpcMain} ipcMain - The IPC main instance
+ * @param {Object} services - All available services
  */
-function registerAllHandlers(services) {
-  const {
-    mainWindow,
-    gitIntegration,
-    aiService,
-    ollamaClient,
-    steeringParser,
-    terminalManager,
-    storage,
-  } = services;
-
-  // Set dependencies for each handler module
-  setMainWindow(mainWindow);
-  setGitIntegration(gitIntegration);
-  setAIService(aiService);
-  setOllamaClient(ollamaClient);
-  setSteeringParser(steeringParser);
-  setTerminalManager(terminalManager);
-  setStorage(storage);
-
-  // Register all handlers
-  registerFsHandlers();
-  registerGitHandlers();
-  registerAIHandlers();
-  registerTerminalHandlers();
-  registerStorageHandlers();
-
-  console.log('[Main] All IPC handlers registered successfully');
+function registerAllHandlers(ipcMain, services, mainWindow) {
+  console.log('[Handlers] Registering all IPC handlers...');
+  
+  // File System handlers
+  registerFSHandlers(ipcMain, mainWindow);
+  
+  // AI handlers
+  registerAIHandlers(ipcMain, { aiService: services.aiService });
+  
+  // Storage handlers
+  registerStorageHandlers(ipcMain, { storage: services.storage });
+  
+  // Git handlers
+  registerGitHandlers(ipcMain, { gitIntegration: services.gitIntegration });
+  
+  // Steering handlers
+  registerSteeringHandlers(ipcMain, { steeringParser: services.steeringParser });
+  
+  console.log('[Handlers] All IPC handlers registered successfully');
 }
 
 module.exports = {
-  // Individual handler registration
-  registerFsHandlers,
-  registerGitHandlers,
-  registerAIHandlers,
-  registerTerminalHandlers,
-  registerStorageHandlers,
-  
-  // Individual setter functions
-  setMainWindow,
-  setGitIntegration,
-  setAIService,
-  setOllamaClient,
-  setSteeringParser,
-  setTerminalManager,
-  setStorage,
-  
-  // Unified registration
   registerAllHandlers,
+  registerFSHandlers,
+  registerAIHandlers,
+  registerStorageHandlers,
+  registerGitHandlers,
+  registerSteeringHandlers,
 };

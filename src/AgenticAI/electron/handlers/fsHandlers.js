@@ -1,108 +1,125 @@
 /**
- * File System IPC Handlers
+ * IPC Handler: File System
+ * Handles all file system operations with validation
  */
-
+const { z } = require('zod');
 const fs = require('fs');
 const path = require('path');
-const { ipcMain, dialog } = require('electron');
 
-let mainWindow = null;
+// Validation schemas
+const readDirectorySchema = z.string().min(1);
+const readFileSchema = z.string().min(1);
+const writeFileSchema = z.object({
+  path: z.string().min(1),
+  content: z.string(),
+});
+const createFileSchema = z.string().min(1);
+const createDirectorySchema = z.string().min(1);
+const deleteFileSchema = z.string().min(1);
+const renameSchema = z.object({
+  oldPath: z.string().min(1),
+  newPath: z.string().min(1),
+});
 
-function setMainWindow(window) {
-  mainWindow = window;
+// Error handler helper
+function handleError(error, context) {
+  console.error(`[FS Handler] ${context}:`, error);
+  return { error: error.message };
 }
 
-function registerFsHandlers() {
-  // Directory picker
+// IPC Handlers
+function registerFSHandlers(ipcMain, mainWindow) {
+  // Open Directory Dialog
   ipcMain.handle('dialog:openDirectory', async () => {
+    const { dialog } = require('electron');
     const result = await dialog.showOpenDialog(mainWindow, {
-      properties: ['openDirectory']
+      properties: ['openDirectory'],
     });
-    return result.filePaths[0];
+    return result.filePaths[0] || null;
   });
 
-  // Read directory contents
+  // Read Directory
   ipcMain.handle('fs:readDirectory', async (_, dirPath) => {
     try {
-      const entries = await fs.promises.readdir(dirPath, { withFileTypes: true });
-      return entries.map(entry => ({
+      const validated = readDirectorySchema.parse(dirPath);
+      const entries = await fs.promises.readdir(validated, { withFileTypes: true });
+      return entries.map((entry) => ({
         name: entry.name,
         isDirectory: entry.isDirectory(),
-        path: path.join(dirPath, entry.name)
+        path: path.join(validated, entry.name),
       }));
     } catch (error) {
-      console.error('Error reading directory:', error);
-      return [];
+      return handleError(error, 'readDirectory');
     }
   });
 
-  // Read file contents
+  // Read File
   ipcMain.handle('fs:readFile', async (_, filePath) => {
     try {
-      return await fs.promises.readFile(filePath, 'utf-8');
+      const validated = readFileSchema.parse(filePath);
+      const content = await fs.promises.readFile(validated, 'utf-8');
+      return content;
     } catch (error) {
-      console.error('Error reading file:', error);
-      return null;
+      return handleError(error, 'readFile');
     }
   });
 
-  // Write file contents
+  // Write File
   ipcMain.handle('fs:writeFile', async (_, filePath, content) => {
     try {
-      await fs.promises.writeFile(filePath, content, 'utf-8');
-      return true;
+      const validated = writeFileSchema.parse({ path: filePath, content });
+      await fs.promises.writeFile(validated.path, validated.content, 'utf-8');
+      return { success: true };
     } catch (error) {
-      console.error('Error writing file:', error);
-      return false;
+      return handleError(error, 'writeFile');
     }
   });
 
-  // Create new file
+  // Create File
   ipcMain.handle('fs:createFile', async (_, filePath) => {
     try {
-      await fs.promises.writeFile(filePath, '', 'utf-8');
-      return true;
+      const validated = createFileSchema.parse(filePath);
+      await fs.promises.writeFile(validated, '', 'utf-8');
+      return { success: true };
     } catch (error) {
-      console.error('Error creating file:', error);
-      return false;
+      return handleError(error, 'createFile');
     }
   });
 
-  // Create directory
+  // Create Directory
   ipcMain.handle('fs:createDirectory', async (_, dirPath) => {
     try {
-      await fs.promises.mkdir(dirPath, { recursive: true });
-      return true;
+      const validated = createDirectorySchema.parse(dirPath);
+      await fs.promises.mkdir(validated, { recursive: true });
+      return { success: true };
     } catch (error) {
-      console.error('Error creating directory:', error);
-      return false;
+      return handleError(error, 'createDirectory');
     }
   });
 
-  // Delete file
+  // Delete File
   ipcMain.handle('fs:deleteFile', async (_, filePath) => {
     try {
-      await fs.promises.unlink(filePath);
-      return true;
+      const validated = deleteFileSchema.parse(filePath);
+      await fs.promises.unlink(validated);
+      return { success: true };
     } catch (error) {
-      console.error('Error deleting file:', error);
-      return false;
+      return handleError(error, 'deleteFile');
     }
   });
 
-  // Rename file
+  // Rename
   ipcMain.handle('fs:rename', async (_, oldPath, newPath) => {
     try {
-      await fs.promises.rename(oldPath, newPath);
-      return true;
+      const validated = renameSchema.parse({ oldPath, newPath });
+      await fs.promises.rename(validated.oldPath, validated.newPath);
+      return { success: true };
     } catch (error) {
-      console.error('Error renaming file:', error);
-      return false;
+      return handleError(error, 'rename');
     }
   });
+
+  console.log('[FS Handler] Registered all FS handlers with Zod validation');
 }
 
-module.exports = {
-  registerFsHandlers,
-  setMainWindow,
-};
+module.exports = { registerFSHandlers };

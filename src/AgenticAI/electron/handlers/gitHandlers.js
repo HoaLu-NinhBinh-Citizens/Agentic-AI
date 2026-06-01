@@ -1,141 +1,162 @@
 /**
- * Git Integration IPC Handlers
+ * IPC Handler: Git Integration
+ * Handles all Git operations with validation
  */
+const { z } = require('zod');
 
-const { ipcMain } = require('electron');
+// Validation schemas
+const gitInfoSchema = z.string().min(1);
+const gitLogSchema = z.object({
+  workspacePath: z.string().min(1),
+  limit: z.number().optional(),
+});
+const gitStageSchema = z.array(z.string());
+const gitUnstageSchema = z.array(z.string());
+const gitCommitSchema = z.object({
+  workspacePath: z.string().min(1),
+  message: z.string().min(1),
+});
+const gitCheckoutSchema = z.object({
+  workspacePath: z.string().min(1),
+  branch: z.string().min(1),
+});
+const gitBranchSchema = z.object({
+  workspacePath: z.string().min(1),
+  name: z.string().min(1),
+  create: z.boolean().optional(),
+});
+const gitDiffSchema = z.object({
+  workspacePath: z.string().min(1),
+  file: z.string().optional(),
+});
+const gitDiscardSchema = z.object({
+  workspacePath: z.string().min(1),
+  files: z.array(z.string()),
+});
 
-let gitIntegration = null;
-
-function setGitIntegration(integration) {
-  gitIntegration = integration;
+// Error handler helper
+function handleError(error, context) {
+  console.error(`[Git Handler] ${context}:`, error);
+  return { error: error.message };
 }
 
-function registerGitHandlers() {
-  // Get repository info
+// IPC Handlers
+function registerGitHandlers(ipcMain, { gitIntegration }) {
+  // Get Git Info
   ipcMain.handle('git:info', async (_, workspacePath) => {
-    if (!gitIntegration) {
-      return { isRepo: false, branch: '', branches: [], status: null, remotes: [] };
-    }
     try {
-      return await gitIntegration.openRepository(workspacePath);
+      const validated = gitInfoSchema.parse(workspacePath);
+      if (!gitIntegration) return { error: 'Git integration not available' };
+      return await gitIntegration.info(validated);
     } catch (error) {
-      console.error('Git info error:', error);
-      return { isRepo: false, branch: '', branches: [], status: null, remotes: [] };
+      return handleError(error, 'gitInfo');
     }
   });
 
-  // Get git status
+  // Get Git Status
   ipcMain.handle('git:status', async () => {
-    if (!gitIntegration) return null;
     try {
-      return await gitIntegration.getStatus();
+      if (!gitIntegration) return [];
+      return await gitIntegration.status();
     } catch (error) {
-      console.error('Git status error:', error);
-      return null;
+      return handleError(error, 'gitStatus');
     }
   });
 
-  // Get git log
-  ipcMain.handle('git:log', async (_, { workspacePath, limit }) => {
-    if (!gitIntegration) return [];
+  // Get Git Log
+  ipcMain.handle('git:log', async (_, options) => {
     try {
-      await gitIntegration.openRepository(workspacePath);
-      return await gitIntegration.getLog(limit);
+      const validated = gitLogSchema.parse(options);
+      if (!gitIntegration) return [];
+      return await gitIntegration.log(validated.workspacePath, validated.limit);
     } catch (error) {
-      console.error('Git log error:', error);
-      return [];
+      return handleError(error, 'gitLog');
     }
   });
 
-  // Stage files
-  ipcMain.handle('git:stage', async (_, { workspacePath, files }) => {
-    if (!gitIntegration) return false;
+  // Stage Files
+  ipcMain.handle('git:stage', async (_, options) => {
     try {
-      await gitIntegration.openRepository(workspacePath);
-      return await gitIntegration.stage(files);
+      const validated = gitStageSchema.parse(options.files);
+      if (!gitIntegration) return { error: 'Git integration not available' };
+      await gitIntegration.add(validated);
+      return { success: true };
     } catch (error) {
-      console.error('Git stage error:', error);
-      return false;
+      return handleError(error, 'gitStage');
     }
   });
 
-  // Commit changes
-  ipcMain.handle('git:commit', async (_, { workspacePath, message }) => {
-    if (!gitIntegration) return false;
+  // Unstage Files
+  ipcMain.handle('git:unstage', async (_, options) => {
     try {
-      await gitIntegration.openRepository(workspacePath);
-      return await gitIntegration.commit(message);
+      const validated = gitUnstageSchema.parse(options.files);
+      if (!gitIntegration) return { error: 'Git integration not available' };
+      await gitIntegration.unstage(validated);
+      return { success: true };
     } catch (error) {
-      console.error('Git commit error:', error);
-      return false;
+      return handleError(error, 'gitUnstage');
     }
   });
 
-  // Checkout branch
-  ipcMain.handle('git:checkout', async (_, { workspacePath, branch }) => {
-    if (!gitIntegration) return false;
+  // Commit
+  ipcMain.handle('git:commit', async (_, options) => {
     try {
-      await gitIntegration.openRepository(workspacePath);
-      return await gitIntegration.checkout(branch);
+      const validated = gitCommitSchema.parse(options);
+      if (!gitIntegration) return { error: 'Git integration not available' };
+      await gitIntegration.commit(validated.workspacePath, validated.message);
+      return { success: true };
     } catch (error) {
-      console.error('Git checkout error:', error);
-      return false;
+      return handleError(error, 'gitCommit');
     }
   });
 
-  // Get diff
-  ipcMain.handle('git:diff', async (_, { workspacePath, file }) => {
-    if (!gitIntegration) return '';
+  // Checkout
+  ipcMain.handle('git:checkout', async (_, options) => {
     try {
-      await gitIntegration.openRepository(workspacePath);
-      return await gitIntegration.getDiff(file);
+      const validated = gitCheckoutSchema.parse(options);
+      if (!gitIntegration) return { error: 'Git integration not available' };
+      await gitIntegration.checkout(validated.workspacePath, validated.branch);
+      return { success: true };
     } catch (error) {
-      console.error('Git diff error:', error);
-      return '';
+      return handleError(error, 'gitCheckout');
     }
   });
 
-  // Unstage files
-  ipcMain.handle('git:unstage', async (_, { workspacePath, files }) => {
-    if (!gitIntegration) return false;
+  // Branch
+  ipcMain.handle('git:branch', async (_, options) => {
     try {
-      await gitIntegration.openRepository(workspacePath);
-      return await gitIntegration.unstage(files);
+      const validated = gitBranchSchema.parse(options);
+      if (!gitIntegration) return [];
+      return await gitIntegration.branch(validated.workspacePath, validated.name, validated.create);
     } catch (error) {
-      console.error('Git unstage error:', error);
-      return false;
+      return handleError(error, 'gitBranch');
     }
   });
 
-  // Branch operations
-  ipcMain.handle('git:branch', async (_, { workspacePath, name, create }) => {
-    if (!gitIntegration) return null;
+  // Diff
+  ipcMain.handle('git:diff', async (_, options) => {
     try {
-      await gitIntegration.openRepository(workspacePath);
-      if (create && name) {
-        return await gitIntegration.createBranch(name);
-      }
-      return await gitIntegration.getCurrentBranch();
+      const validated = gitDiffSchema.parse(options);
+      if (!gitIntegration) return '';
+      return await gitIntegration.diff(validated.workspacePath, validated.file);
     } catch (error) {
-      console.error('Git branch error:', error);
-      return null;
+      return handleError(error, 'gitDiff');
     }
   });
 
-  // Discard changes
-  ipcMain.handle('git:discard', async (_, { workspacePath, files }) => {
-    if (!gitIntegration) return false;
+  // Discard
+  ipcMain.handle('git:discard', async (_, options) => {
     try {
-      await gitIntegration.openRepository(workspacePath);
-      return await gitIntegration.discard(files);
+      const validated = gitDiscardSchema.parse(options);
+      if (!gitIntegration) return { error: 'Git integration not available' };
+      await gitIntegration.discard(validated.workspacePath, validated.files);
+      return { success: true };
     } catch (error) {
-      console.error('Git discard error:', error);
-      return false;
+      return handleError(error, 'gitDiscard');
     }
   });
+
+  console.log('[Git Handler] Registered all Git handlers with Zod validation');
 }
 
-module.exports = {
-  registerGitHandlers,
-  setGitIntegration,
-};
+module.exports = { registerGitHandlers };

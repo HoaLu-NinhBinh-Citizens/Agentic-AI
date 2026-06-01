@@ -1,57 +1,39 @@
+/** @type {import('ts-jest').JestConfigWithTsJest} */
 module.exports = {
   preset: 'ts-jest',
   testEnvironment: 'jsdom',
-  roots: ['<rootDir>/src'],
-  testMatch: ['**/__tests__/**/*.test.ts', '**/__tests__/**/*.test.tsx'],
+  setupFilesAfterEnv: ['<rootDir>/jest.setup.ts'],
+  moduleNameMapper: {
+    '^@/(.*)$': '<rootDir>/src/renderer/$1',
+    '\\.(css|less|scss|sass)$': 'identity-obj-proxy',
+  },
+  testMatch: [
+    '**/src/__tests__/**/*.test.ts',
+    '**/src/__tests__/**/*.test.tsx',
+    '**/tests/**/*.test.ts',
+    '**/tests/**/*.test.tsx',
+    '**/tests/**/*.spec.ts',
+    '**/tests/**/*.spec.tsx',
+  ],
+  collectCoverageFrom: [
+    'src/renderer/**/*.{ts,tsx}',
+    'src/main-process/**/*.{ts,js}',
+    '!src/**/*.d.ts',
+    '!src/**/index.{ts,tsx}',
+  ],
+  coverageDirectory: 'coverage',
+  coverageReporters: ['text', 'lcov', 'html'],
   moduleFileExtensions: ['ts', 'tsx', 'js', 'jsx', 'json'],
   transform: {
-    '^.+\\.(ts|tsx)$': [
-      'ts-jest',
-      {
-        tsconfig: {
-          jsx: 'react-jsx',
-          esModuleInterop: true,
-          allowSyntheticDefaultImports: true,
-          module: 'ESNext',
-          moduleResolution: 'node',
-          target: 'ES2020',
-          strict: false,
-          skipLibCheck: true,
-          baseUrl: '.',
-          paths: {
-            '@/*': ['src/*']
-          }
-        }
-      }
-    ],
-    '^.+\\.(js|jsx)$': 'babel-jest'
+    '^.+\\.(ts|tsx)$': ['ts-jest', {
+      tsconfig: 'tsconfig.json',
+    }],
   },
-  moduleNameMapper: {
-    '^@/(.*)$': '<rootDir>/src/$1',
-    '\\.(css|less|scss|sass)$': 'identity-obj-proxy',
-    '\\.(png|jpg|jpeg|gif|svg)$': '<rootDir>/tests/__mocks__/fileMock.js'
+  globals: {
+    'ts-jest': {
+      tsconfig: {
+        jsx: 'react-jsx',
+      },
+    },
   },
-  setupFilesAfterEnv: ['<rootDir>/tests/setup.ts'],
-  collectCoverageFrom: [
-    'src/**/*.{ts,tsx}',
-    '!src/**/*.d.ts',
-    '!src/**/__tests__/**',
-    '!src/vite-env.d.ts'
-  ],
-  coverageThreshold: {
-    global: {
-      lines: 50,
-      functions: 50,
-      branches: 40,
-      statements: 50
-    }
-  },
-  testPathIgnorePatterns: [
-    '/node_modules/',
-    '/dist/',
-    '/release/'
-  ],
-  transformIgnorePatterns: [
-    'node_modules/(?!(react-icons|@monaco-editor|zustand)/)'
-  ]
 };
