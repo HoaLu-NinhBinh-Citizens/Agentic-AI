@@ -75,8 +75,8 @@ venv/
 .vscode/
 .idea/
 
-# OS
-.DS_Store
-Thumbs.db
+# Release builds
+src/AgenticAI/release/
+AgenticAI.exe
 
 .coverage

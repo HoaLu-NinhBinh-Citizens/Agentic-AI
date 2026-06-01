@@ -93,7 +93,7 @@ export const Sidebar: React.FC<SidebarProps> = ({ bridge }) => {
       addOpenFile(node.path);
       
       const openFiles = useAppStore.getState().openFiles;
-      api.storage.updateOpenFiles({
+      await api.storage.updateOpenFiles?.({
         files: openFiles,
         activeFile: node.path
       });

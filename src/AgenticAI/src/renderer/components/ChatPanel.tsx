@@ -59,12 +59,12 @@ export const ChatPanel: React.FC<ChatPanelProps> = ({ bridge }) => {
         throw new Error('AI not configured. Please set up your API key in settings.');
       }
 
-      const chatMessages = messages.map(m => ({
+      const chatMessages: ChatMessage[] = messages.map(m => ({
         role: m.role === 'user' ? 'user' : 'assistant',
         content: m.content,
-      }));
+      })) as ChatMessage[];
 
-      chatMessages.push({ role: 'user' as const, content: input });
+      chatMessages.push({ role: 'user', content: input });
 
       const response = await api.ai.chat(chatMessages);
 

@@ -1,66 +1,15 @@
 /**
- * Default implementation of ElectronBridge that delegates to window.electronAPI
+ * ElectronBridge Implementation
+ * 
+ * This module provides the implementation of the ElectronBridge interface
+ * that delegates to the Electron IPC API.
  */
 
-import { ElectronBridge, FileEntry, GitStatus, GitLogEntry, ChatMessage, AIResponse, UIState, AppSettings, SteeringContext } from './electronBridge';
+import type { ElectronBridge } from './electronBridge';
 
-declare global {
-  interface Window {
-    electronAPI: {
-      platform?: string;
-      openDirectory(): Promise<string | null>;
-      readDirectory(path: string): Promise<FileEntry[]>;
-      readFile(path: string): Promise<string | null>;
-      writeFile(path: string, content: string): Promise<boolean>;
-      createFile(path: string): Promise<boolean>;
-      createDirectory(path: string): Promise<boolean>;
-      deleteFile(path: string): Promise<boolean>;
-      gitStatus(): Promise<GitStatus>;
-      gitBranch(): Promise<string>;
-      gitCommit(message: string): Promise<string>;
-      gitStage(files: string[]): Promise<boolean>;
-      gitUnstage(files: string[]): Promise<boolean>;
-      gitCheckout(branch: string): Promise<boolean>;
-      gitDiscard(path: string): Promise<boolean>;
-      gitLog(limit?: number): Promise<GitLogEntry[]>;
-      gitDiff(path?: string): Promise<string>;
-      terminal: {
-        write(id: string, data: string): void;
-        onData(callback: (id: string, data: string) => void): void;
-        resize(id: string, cols: number, rows: number): void;
-        clear(id: string): void;
-        dispose(id: string): void;
-      };
-      ai: {
-        isInitialized(): Promise<boolean>;
-        chat(messages: ChatMessage[]): Promise<AIResponse>;
-        generateCode(prompt: string): Promise<AIResponse>;
-        codeReview(code: string, file: string): Promise<AIResponse>;
-        explainCode(code: string): Promise<AIResponse>;
-      };
-      storage: {
-        getWorkspace(): Promise<{ path: string } | null>;
-        setWorkspace(path: string): Promise<boolean>;
-        updateUIState(state: Partial<UIState>): Promise<boolean>;
-        updateOpenFiles(files: { files: string[]; activeFile?: string }): Promise<boolean>;
-        getUIState(): Promise<UIState>;
-        getSettings?(): Promise<AppSettings | null>;
-        saveSettings?(settings: AppSettings): Promise<boolean>;
-      };
-      steering?: {
-        load(workspacePath: string): Promise<{ success: boolean; context: SteeringContext }>;
-        save?(context: SteeringContext): Promise<boolean>;
-      };
-      onFileChange(callback: (path: string) => void): void;
-      onGitStatusChange(callback: () => void): void;
-      showContextMenu?(): void;
-      minimizeWindow?(): void;
-      maximizeWindow?(): void;
-      closeWindow?(): void;
-      isMaximized?(): Promise<boolean>;
-    };
-  }
-}
+// ============================================================================
+// ElectronBridge Implementation
+// ============================================================================
 
 export class DefaultElectronBridge implements ElectronBridge {
   private get api() {
@@ -70,10 +19,13 @@ export class DefaultElectronBridge implements ElectronBridge {
     return window.electronAPI;
   }
 
+  // Dialog
   async openDirectory(): Promise<string | null> {
-    return this.api.openDirectory();
+    const result = await this.api.openDirectory();
+    return result ?? null;
   }
 
+  // File System
   async readDirectory(path: string): Promise<FileEntry[]> {
     return this.api.readDirectory(path);
   }
@@ -82,94 +34,146 @@ export class DefaultElectronBridge implements ElectronBridge {
     return this.api.readFile(path);
   }
 
-  async writeFile(path: string, content: string): Promise<boolean> {
-    return this.api.writeFile(path, content);
+  async writeFile(path: string, content: string): Promise<void> {
+    await this.api.writeFile(path, content);
   }
 
-  async createFile(path: string): Promise<boolean> {
-    return this.api.createFile(path);
+  async createFile(path: string): Promise<void> {
+    await this.api.createFile(path);
   }
 
-  async createDirectory(path: string): Promise<boolean> {
-    return this.api.createDirectory(path);
+  async createDirectory(path: string): Promise<void> {
+    await this.api.createDirectory(path);
   }
 
-  async deleteFile(path: string): Promise<boolean> {
-    return this.api.deleteFile(path);
+  async deleteFile(path: string): Promise<void> {
+    await this.api.deleteFile(path);
   }
 
+  async rename(oldPath: string, newPath: string): Promise<void> {
+    await this.api.rename(oldPath, newPath);
+  }
+
+  // Git (legacy flat methods)
   async gitStatus(): Promise<GitStatus> {
-    return this.api.gitStatus();
+    if (this.api.gitStatus) {
+      return this.api.gitStatus();
+    }
+    // Fallback to structured git API
+    const status = await this.api.git.status();
+    return status || {
+      modified: [],
+      staged: [],
+      created: [],
+      deleted: [],
+      not_added: [],
+      current: '',
+      tracking: null,
+    };
   }
 
   async gitBranch(): Promise<string> {
-    return this.api.gitBranch();
+    if (this.api.gitBranch) {
+      return this.api.gitBranch();
+    }
+    const info = await this.api.git.info('');
+    return info.branch;
   }
 
-  async gitCommit(message: string): Promise<string> {
-    return this.api.gitCommit(message);
+  async gitCommit(message: string): Promise<void> {
+    if (this.api.gitCommit) {
+      await this.api.gitCommit(message);
+    } else {
+      await this.api.git.commit('', message);
+    }
   }
 
-  async gitStage(files: string[]): Promise<boolean> {
-    return this.api.gitStage(files);
+  async gitStage(files: string[]): Promise<void> {
+    if (this.api.gitStage) {
+      await this.api.gitStage(files);
+    } else {
+      await this.api.git.stage('', files);
+    }
   }
 
-  async gitUnstage(files: string[]): Promise<boolean> {
-    return this.api.gitUnstage(files);
+  async gitUnstage(files: string[]): Promise<void> {
+    if (this.api.gitUnstage) {
+      await this.api.gitUnstage(files);
+    } else {
+      await this.api.git.unstage('', files);
+    }
   }
 
-  async gitCheckout(branch: string): Promise<boolean> {
-    return this.api.gitCheckout(branch);
+  async gitCheckout(branch: string): Promise<void> {
+    if (this.api.gitCheckout) {
+      await this.api.gitCheckout(branch);
+    } else {
+      await this.api.git.checkout('', branch);
+    }
   }
 
-  async gitDiscard(path: string): Promise<boolean> {
-    return this.api.gitDiscard(path);
+  async gitDiscard(path: string): Promise<void> {
+    if (this.api.gitDiscard) {
+      await this.api.gitDiscard(path);
+    } else {
+      await this.api.git.discard('', [path]);
+    }
   }
 
   async gitLog(limit?: number): Promise<GitLogEntry[]> {
-    return this.api.gitLog(limit);
+    if (this.api.gitLog) {
+      return this.api.gitLog(limit);
+    }
+    return this.api.git.log('', limit);
   }
 
   async gitDiff(path?: string): Promise<string> {
-    return this.api.gitDiff(path);
+    if (this.api.gitDiff) {
+      return this.api.gitDiff(path);
+    }
+    return this.api.git.diff('', path);
   }
 
-  get terminal() {
+  // Terminal
+  get terminal(): TerminalAPI {
     return this.api.terminal;
   }
 
-  get ai() {
+  // AI
+  get ai(): AIAPI {
     return this.api.ai;
   }
 
-  get storage() {
+  // Storage
+  get storage(): StorageAPI {
     return this.api.storage;
   }
 
-  get steering() {
+  // Steering
+  get steering(): SteeringAPI {
     if (!this.api.steering) {
       return {
         load: async () => ({ success: false, context: {} }),
-        save: async () => false,
       };
     }
     return this.api.steering;
   }
 
+  // Settings
   async getSettings(): Promise<AppSettings | null> {
     if (this.api.storage.getSettings) {
-      return this.api.storage.getSettings();
+      return this.api.storage.getSettings() as Promise<AppSettings | null>;
     }
     return null;
   }
 
-  async saveSettings(settings: AppSettings): Promise<boolean> {
+  async saveSettings(settings: AppSettings): Promise<void> {
     if (this.api.storage.saveSettings) {
-      return this.api.storage.saveSettings(settings);
+      await this.api.storage.saveSettings(settings);
     }
-    return false;
   }
 
+  // Events
   onFileChange(callback: (path: string) => void): void {
     this.api.onFileChange(callback);
   }
@@ -179,5 +183,21 @@ export class DefaultElectronBridge implements ElectronBridge {
   }
 }
 
-// Export singleton instance
+// ============================================================================
+// Singleton export
+// ============================================================================
+
+let _bridge: ElectronBridge | null = null;
+
 export const electronBridge = new DefaultElectronBridge();
+
+export function setElectronBridge(bridge: ElectronBridge): void {
+  _bridge = bridge;
+}
+
+export function getElectronBridge(): ElectronBridge {
+  if (_bridge) {
+    return _bridge;
+  }
+  return electronBridge;
+}

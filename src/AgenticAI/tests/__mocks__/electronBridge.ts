@@ -2,23 +2,26 @@
  * Mock implementation of ElectronBridge for testing
  */
 
-import { ElectronBridge, FileEntry, GitStatus, GitLogEntry, ChatMessage, AIResponse, UIState, AppSettings, SteeringContext } from '../../src/services/electronBridge';
+import type { ElectronBridge } from '../../src/services/electronBridge';
 
 export class MockElectronBridge implements ElectronBridge {
-  // File System
+  // Dialog
   openDirectory = jest.fn().mockResolvedValue('/test/workspace');
-  readDirectory = jest.fn().mockResolvedValue<FileEntry[]>([
+  
+  // File System
+  readDirectory = jest.fn().mockResolvedValue([
     { name: 'src', path: '/test/workspace/src', isDirectory: true },
     { name: 'package.json', path: '/test/workspace/package.json', isDirectory: false },
   ]);
   readFile = jest.fn().mockResolvedValue('// test file content');
-  writeFile = jest.fn().mockResolvedValue(true);
-  createFile = jest.fn().mockResolvedValue(true);
-  createDirectory = jest.fn().mockResolvedValue(true);
-  deleteFile = jest.fn().mockResolvedValue(true);
+  writeFile = jest.fn().mockResolvedValue(undefined);
+  createFile = jest.fn().mockResolvedValue(undefined);
+  createDirectory = jest.fn().mockResolvedValue(undefined);
+  deleteFile = jest.fn().mockResolvedValue(undefined);
+  rename = jest.fn().mockResolvedValue(undefined);
   
-  // Git
-  gitStatus = jest.fn().mockResolvedValue<GitStatus>({
+  // Git (legacy flat methods)
+  gitStatus = jest.fn().mockResolvedValue({
     modified: ['src/index.ts'],
     staged: [],
     created: ['src/new.ts'],
@@ -28,12 +31,12 @@ export class MockElectronBridge implements ElectronBridge {
     tracking: 'origin/main',
   });
   gitBranch = jest.fn().mockResolvedValue('feature/test');
-  gitCommit = jest.fn().mockResolvedValue('abc1234567890');
-  gitStage = jest.fn().mockResolvedValue(true);
-  gitUnstage = jest.fn().mockResolvedValue(true);
-  gitCheckout = jest.fn().mockResolvedValue(true);
-  gitDiscard = jest.fn().mockResolvedValue(true);
-  gitLog = jest.fn().mockResolvedValue<GitLogEntry[]>([
+  gitCommit = jest.fn().mockResolvedValue(undefined);
+  gitStage = jest.fn().mockResolvedValue(undefined);
+  gitUnstage = jest.fn().mockResolvedValue(undefined);
+  gitCheckout = jest.fn().mockResolvedValue(undefined);
+  gitDiscard = jest.fn().mockResolvedValue(undefined);
+  gitLog = jest.fn().mockResolvedValue([
     { hash: 'abc123', date: '2024-01-01', message: 'Initial commit', author: 'Test User' },
   ]);
   gitDiff = jest.fn().mockResolvedValue('+ added line\n- removed line');
@@ -50,10 +53,10 @@ export class MockElectronBridge implements ElectronBridge {
   // AI
   ai = {
     isInitialized: jest.fn().mockResolvedValue(true),
-    chat: jest.fn().mockResolvedValue<AIResponse>({ content: 'Mock AI response', error: null }),
-    generateCode: jest.fn().mockResolvedValue<AIResponse>({ content: 'function test() {}', error: null }),
-    codeReview: jest.fn().mockResolvedValue<AIResponse>({ content: 'No issues found', error: null }),
-    explainCode: jest.fn().mockResolvedValue<AIResponse>({ content: 'This function does X', error: null }),
+    chat: jest.fn().mockResolvedValue({ content: 'Mock AI response', error: undefined }),
+    generateCode: jest.fn().mockResolvedValue({ content: 'function test() {}', error: undefined }),
+    codeReview: jest.fn().mockResolvedValue({ content: 'No issues found', error: undefined }),
+    explainCode: jest.fn().mockResolvedValue({ content: 'This function does X', error: undefined }),
   };
   
   // Storage
@@ -62,12 +65,19 @@ export class MockElectronBridge implements ElectronBridge {
     setWorkspace: jest.fn().mockResolvedValue(true),
     updateUIState: jest.fn().mockResolvedValue(true),
     updateOpenFiles: jest.fn().mockResolvedValue(true),
-    getUIState: jest.fn().mockResolvedValue<UIState>({ expandedFolders: [], openFiles: [] }),
+    getUIState: jest.fn().mockResolvedValue({
+      sidebarWidth: 250,
+      taskPanelWidth: 300,
+      chatPanelWidth: 350,
+      terminalHeight: 200,
+      activePanel: 'explorer',
+      expandedFolders: [],
+    }),
   };
   
   // Steering
   steering = {
-    load: jest.fn().mockResolvedValue<{ success: boolean; context: SteeringContext }>({
+    load: jest.fn().mockResolvedValue<{ success: boolean; context: Record<string, string | undefined> }>({
       success: true,
       context: { agents: '# Agents\nTest agents content', claude: '# Claude\nTest claude content' },
     }),
@@ -75,12 +85,17 @@ export class MockElectronBridge implements ElectronBridge {
   };
   
   // Settings
-  getSettings = jest.fn().mockResolvedValue<AppSettings | null>({
-    aiProvider: 'ollama',
+  getSettings = jest.fn().mockResolvedValue({
+    aiProvider: 'ollama' as const,
     ollamaEndpoint: 'http://localhost:11434',
     ollamaModel: 'codellama',
+    maxTokens: 2048,
+    temperature: 0.7,
+    fontSize: 14,
+    autoSave: true,
+    autoSaveDelay: 1000,
   });
-  saveSettings = jest.fn().mockResolvedValue(true);
+  saveSettings = jest.fn().mockResolvedValue(undefined);
   
   // Events
   onFileChange = jest.fn();
@@ -95,7 +110,7 @@ export class MockElectronBridge implements ElectronBridge {
     this.openDirectory = jest.fn().mockResolvedValue(path);
   }
 
-  setReadDirectoryResult(entries: FileEntry[]): void {
+  setReadDirectoryResult(entries: Array<{ name: string; path: string; isDirectory: boolean }>): void {
     this.readDirectory = jest.fn().mockResolvedValue(entries);
   }
 
@@ -103,11 +118,11 @@ export class MockElectronBridge implements ElectronBridge {
     this.readFile = jest.fn().mockResolvedValue(content);
   }
 
-  setGitStatusResult(status: GitStatus): void {
+  setGitStatusResult(status: { modified: string[]; staged: string[]; created: string[]; deleted: string[]; not_added: string[]; current: string; tracking: string | null }): void {
     this.gitStatus = jest.fn().mockResolvedValue(status);
   }
 
-  setAIResponse(response: AIResponse): void {
+  setAIResponse(response: { content?: string; error?: string }): void {
     this.ai.chat = jest.fn().mockResolvedValue(response);
   }
 

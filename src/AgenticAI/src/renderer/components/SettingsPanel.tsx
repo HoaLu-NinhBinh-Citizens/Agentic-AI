@@ -71,7 +71,7 @@ export const SettingsPanel: React.FC<SettingsProps> = ({ isOpen, onClose }) => {
 
   const loadSettings = async () => {
     if (window.electronAPI?.storage) {
-      const stored = await window.electronAPI.storage.getSettings();
+      const stored = await window.electronAPI.storage.getSettings?.();
       if (stored) {
         setSettings(prev => ({
           ...prev,
@@ -193,7 +193,7 @@ export const SettingsPanel: React.FC<SettingsProps> = ({ isOpen, onClose }) => {
     setIsSaving(true);
     try {
       if (window.electronAPI?.storage) {
-        await window.electronAPI.storage.updateSettings({
+        await window.electronAPI.storage.updateSettings?.({
           aiProvider: settings.provider,
           ollamaModel: settings.ollamaModel,
           ollamaTemperature: settings.ollamaTemperature,
@@ -219,7 +219,7 @@ export const SettingsPanel: React.FC<SettingsProps> = ({ isOpen, onClose }) => {
           await window.electronAPI.storage.setAPIKey?.(settings.openaiApiKey);
         }
         
-        await window.electronAPI.ai.initialize({
+        await window.electronAPI.ai.initialize?.({
           provider: settings.provider,
           apiKey: settings.provider === 'openai' ? settings.openaiApiKey : 
                  settings.provider === 'anthropic' ? settings.anthropicApiKey : undefined,
