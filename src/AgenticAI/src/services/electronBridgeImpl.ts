@@ -144,6 +144,41 @@ export class DefaultElectronBridge implements ElectronBridge {
     return this.api.ai;
   }
 
+  // AI Agent (MCP)
+  get aiAgent(): AIAgentAPI {
+    if (!this.api.aiAgent) {
+      return {
+        connect: async () => ({ success: false, error: 'AI Agent not available' }),
+        disconnect: async () => ({ success: false }),
+        status: async () => ({ connected: false, reconnectAttempts: 0, pendingRequests: 0 }),
+        listTools: async () => ({ success: false, error: 'AI Agent not available' }),
+        callTool: async () => ({ success: false, error: 'AI Agent not available' }),
+        hardware: {
+          validate: async () => ({ success: false, error: 'AI Agent not available' }),
+          planInit: async () => ({ success: false, error: 'AI Agent not available' }),
+          reason: async () => ({ success: false, error: 'AI Agent not available' }),
+        },
+        firmware: {
+          analyze: async () => ({ success: false, error: 'AI Agent not available' }),
+          debug: async () => ({ success: false, error: 'AI Agent not available' }),
+          generateCode: async () => ({ success: false, error: 'AI Agent not available' }),
+        },
+        knowledge: {
+          query: async () => ({ success: false, error: 'AI Agent not available' }),
+          crossValidate: async () => ({ success: false, error: 'AI Agent not available' }),
+        },
+        listResources: async () => ({ success: false, error: 'AI Agent not available' }),
+        readResource: async () => ({ success: false, error: 'AI Agent not available' }),
+        listPrompts: async () => ({ success: false, error: 'AI Agent not available' }),
+        getPrompt: async () => ({ success: false, error: 'AI Agent not available' }),
+        subscribe: async () => ({ success: false, error: 'AI Agent not available' }),
+        unsubscribe: async () => ({ success: false, error: 'AI Agent not available' }),
+        onEvent: () => {},
+      };
+    }
+    return this.api.aiAgent;
+  }
+
   // Storage
   get storage(): StorageAPI {
     return this.api.storage;

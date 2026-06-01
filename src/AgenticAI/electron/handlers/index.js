@@ -9,6 +9,7 @@ const { registerGitHandlers } = require('./gitHandlers');
 const { registerSteeringHandlers } = require('./steeringHandlers');
 const { registerTerminalHandlers } = require('./terminalHandlers');
 const { registerOllamaHandlers } = require('./ollamaHandlers');
+const { registerAIAgentHandlers } = require('./aiAgentHandlers');
 
 /**
  * Register all IPC handlers with the main process
@@ -38,7 +39,10 @@ function registerAllHandlers(ipcMain, services, mainWindow) {
   
   // Terminal handlers
   registerTerminalHandlers(ipcMain, { terminalManager: services.terminalManager });
-  
+
+  // AI Agent (MCP) handlers
+  registerAIAgentHandlers(ipcMain, { mcpClient: services.mcpClient });
+
   console.log('[Handlers] All IPC handlers registered successfully');
 }
 

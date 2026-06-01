@@ -311,3 +311,100 @@ export interface GitAPI {
   diff: (workspacePath: string, file?: string) => Promise<string>;
   discard: (workspacePath: string, files: string[]) => Promise<boolean>;
 }
+
+// ============================================================================
+// AI Agent (MCP) Types
+// ============================================================================
+
+export interface AIAgentConfig {
+  pythonPath?: string;
+  agentPath?: string;
+  workspace?: string;
+}
+
+export interface AIAgentStatus {
+  connected: boolean;
+  reconnectAttempts: number;
+  pendingRequests: number;
+}
+
+export interface MCPTool {
+  name: string;
+  description?: string;
+  inputSchema: Record<string, unknown>;
+}
+
+export interface MCPToolsList {
+  tools: MCPTool[];
+}
+
+export interface MCPToolResult {
+  content: Array<{
+    type: 'text' | 'image';
+    text?: string;
+    data?: string;
+    mimeType?: string;
+  }>;
+  isError?: boolean;
+}
+
+export interface MCPResource {
+  uri: string;
+  name?: string;
+  description?: string;
+  mimeType?: string;
+}
+
+export interface MCPResourcesList {
+  resources: MCPResource[];
+}
+
+export interface MCPPrompt {
+  name: string;
+  description?: string;
+  arguments?: Array<{
+    name: string;
+    description?: string;
+    required?: boolean;
+  }>;
+}
+
+export interface MCPPromptsList {
+  prompts: MCPPrompt[];
+}
+
+export interface AIAgentEvent {
+  event: string;
+  data: unknown;
+}
+
+// Hardware/Firmware specialized types
+export interface HardwareValidationRequest {
+  chip?: string;
+  peripherals?: string[];
+  clockConfig?: Record<string, unknown>;
+  interrupts?: string[];
+}
+
+export interface HardwareValidationResult {
+  valid: boolean;
+  issues: string[];
+  warnings: string[];
+  suggestions: string[];
+}
+
+export interface FirmwareAnalysisRequest {
+  filePath?: string;
+  code?: string;
+  language?: string;
+  targetChip?: string;
+}
+
+export interface FirmwareAnalysisResult {
+  summary: string;
+  issues: string[];
+  dependencies: string[];
+  registerUsage: string[];
+  isrAnalysis?: string[];
+  callGraph?: string[];
+}

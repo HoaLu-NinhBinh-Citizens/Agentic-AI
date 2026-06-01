@@ -84,12 +84,12 @@
       "src/main-process/**/*"
     ],
     "directories": {
-      "output": "release"
+      "output": "dist-release"
     },
     "npmRebuild": false,
     "nodeGypRebuild": false,
     "buildDependenciesFromSource": false,
-    "asar": true,
+    "asar": false,
     "compression": "maximum"
   }
 }

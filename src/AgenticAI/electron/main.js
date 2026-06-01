@@ -4,6 +4,7 @@ const fs = require('fs');
 
 // Import modular handlers
 const { registerAllHandlers } = require('./handlers');
+const { mcpClient } = require('./mcp/mcpClient');
 
 // Ollama Client
 let ollamaClient = null;
@@ -136,6 +137,7 @@ function createWindow() {
     searchEngine,
     extensionSystem,
     ollamaClient,
+    mcpClient,
   }, mainWindow);
 
   const isDev = !app.isPackaged;
@@ -238,6 +240,12 @@ function createSecurityDetectorModule() {
 
 // Initialize code analysis on startup
 initializeCodeAnalysis();
+
+// ============================================================================
+// MCP Client (Phase 1 - Python Agent Integration)
+// ============================================================================
+// mcpClient is already imported at the top of the file from './mcp/mcpClient'
+// No additional initialization needed - the singleton is created in mcpClient.js
 
 ipcMain.handle('code:analyze', async (_, { filePath, content }) => {
   try {

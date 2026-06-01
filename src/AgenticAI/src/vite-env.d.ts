@@ -253,6 +253,126 @@ interface SearchAPI {
 }
 
 // ============================================================================
+// AI Agent (MCP) Types
+// ============================================================================
+
+interface AIAgentConfig {
+  pythonPath?: string;
+  agentPath?: string;
+  workspace?: string;
+}
+
+interface AIAgentStatus {
+  connected: boolean;
+  reconnectAttempts: number;
+  pendingRequests: number;
+}
+
+interface MCPTool {
+  name: string;
+  description?: string;
+  inputSchema: Record<string, unknown>;
+}
+
+interface MCPToolResult {
+  content: Array<{
+    type: 'text' | 'image';
+    text?: string;
+    data?: string;
+    mimeType?: string;
+  }>;
+  isError?: boolean;
+}
+
+interface MCPResource {
+  uri: string;
+  name?: string;
+  description?: string;
+  mimeType?: string;
+}
+
+interface MCPPrompt {
+  name: string;
+  description?: string;
+  arguments?: Array<{
+    name: string;
+    description?: string;
+    required?: boolean;
+  }>;
+}
+
+interface AIAgentEvent {
+  event: string;
+  data: unknown;
+}
+
+interface HardwareValidationRequest {
+  chip?: string;
+  peripherals?: string[];
+  clockConfig?: Record<string, unknown>;
+  interrupts?: string[];
+}
+
+interface HardwareValidationResult {
+  valid: boolean;
+  issues: string[];
+  warnings: string[];
+  suggestions: string[];
+}
+
+interface FirmwareAnalysisRequest {
+  filePath?: string;
+  code?: string;
+  language?: string;
+  targetChip?: string;
+}
+
+interface FirmwareAnalysisResult {
+  summary: string;
+  issues: string[];
+  dependencies: string[];
+  registerUsage: string[];
+  isrAnalysis?: string[];
+  callGraph?: string[];
+}
+
+interface AIAgentAPI {
+  connect(options?: AIAgentConfig): Promise<{ success: boolean; error?: string }>;
+  disconnect(): Promise<{ success: boolean; error?: string }>;
+  status(): Promise<AIAgentStatus>;
+
+  listTools(): Promise<{ success: boolean; tools?: MCPTool[]; error?: string }>;
+  callTool(name: string, args?: Record<string, unknown>): Promise<{ success: boolean; result?: MCPToolResult; error?: string }>;
+
+  hardware: {
+    validate(config: HardwareValidationRequest): Promise<{ success: boolean; result?: HardwareValidationResult; error?: string }>;
+    planInit(params: { chip: string; peripheral: string }): Promise<{ success: boolean; result?: unknown; error?: string }>;
+    reason(params: { question: string; context?: Record<string, unknown> }): Promise<{ success: boolean; result?: unknown; error?: string }>;
+  };
+
+  firmware: {
+    analyze(params: FirmwareAnalysisRequest): Promise<{ success: boolean; result?: FirmwareAnalysisResult; error?: string }>;
+    debug(params: { code: string; error: string }): Promise<{ success: boolean; result?: unknown; error?: string }>;
+    generateCode(params: { spec: string; context?: string }): Promise<{ success: boolean; result?: unknown; error?: string }>;
+  };
+
+  knowledge: {
+    query(params: { query: string; topK?: number }): Promise<{ success: boolean; result?: unknown; error?: string }>;
+    crossValidate(params: Record<string, unknown>): Promise<{ success: boolean; result?: unknown; error?: string }>;
+  };
+
+  listResources(): Promise<{ success: boolean; resources?: MCPResource[]; error?: string }>;
+  readResource(uri: string): Promise<{ success: boolean; resource?: unknown; error?: string }>;
+
+  listPrompts(): Promise<{ success: boolean; prompts?: MCPPrompt[]; error?: string }>;
+  getPrompt(name: string, args?: Record<string, unknown>): Promise<{ success: boolean; prompt?: unknown; error?: string }>;
+
+  subscribe(eventName: string, channel: string): Promise<{ success: boolean; error?: string }>;
+  unsubscribe(eventName: string): Promise<{ success: boolean; error?: string }>;
+  onEvent(channel: string, callback: (event: AIAgentEvent) => void): void;
+}
+
+// ============================================================================
 // Window Interface
 // ============================================================================
 
@@ -288,6 +408,9 @@ interface Window {
     terminal: TerminalAPI;
     search?: SearchAPI;
     app?: AppAPI;
+    
+    // AI Agent (MCP - Python Agent)
+    aiAgent?: AIAgentAPI;
     
     // Ollama
     ollamaHealth?(timeout?: number): Promise<OllamaHealthStatus>;

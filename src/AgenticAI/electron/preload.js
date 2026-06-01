@@ -134,4 +134,51 @@ contextBridge.exposeInMainWorld('electronAPI', {
     close: () => ipcRenderer.invoke('app:close'),
     getVersion: () => ipcRenderer.invoke('app:getVersion'),
   },
+
+  // AI Agent (MCP) - Python Agent Integration
+  aiAgent: {
+    // Connection
+    connect: (options) => ipcRenderer.invoke('aiAgent:connect', options),
+    disconnect: () => ipcRenderer.invoke('aiAgent:disconnect'),
+    status: () => ipcRenderer.invoke('aiAgent:status'),
+
+    // Tools
+    listTools: () => ipcRenderer.invoke('aiAgent:listTools'),
+    callTool: (name, args) => ipcRenderer.invoke('aiAgent:callTool', { name, arguments: args }),
+
+    // Hardware tools
+    hardware: {
+      validate: (config) => ipcRenderer.invoke('aiAgent:hardware:validate', config),
+      planInit: (params) => ipcRenderer.invoke('aiAgent:hardware:planInit', params),
+      reason: (params) => ipcRenderer.invoke('aiAgent:hardware:reason', params),
+    },
+
+    // Firmware tools
+    firmware: {
+      analyze: (params) => ipcRenderer.invoke('aiAgent:firmware:analyze', params),
+      debug: (params) => ipcRenderer.invoke('aiAgent:firmware:debug', params),
+      generateCode: (params) => ipcRenderer.invoke('aiAgent:firmware:generateCode', params),
+    },
+
+    // Knowledge tools
+    knowledge: {
+      query: (params) => ipcRenderer.invoke('aiAgent:knowledge:query', params),
+      crossValidate: (params) => ipcRenderer.invoke('aiAgent:knowledge:crossValidate', params),
+    },
+
+    // Resources
+    listResources: () => ipcRenderer.invoke('aiAgent:listResources'),
+    readResource: (uri) => ipcRenderer.invoke('aiAgent:readResource', uri),
+
+    // Prompts
+    listPrompts: () => ipcRenderer.invoke('aiAgent:listPrompts'),
+    getPrompt: (name, args) => ipcRenderer.invoke('aiAgent:getPrompt', { name, arguments: args }),
+
+    // Events
+    subscribe: (eventName, channel) => ipcRenderer.invoke('aiAgent:subscribe', { eventName, channel }),
+    unsubscribe: (eventName) => ipcRenderer.invoke('aiAgent:unsubscribe', { eventName }),
+    onEvent: (channel, callback) => {
+      ipcRenderer.on(`aiAgent:event:${channel}`, (_, event) => callback(event));
+    },
+  },
 });
