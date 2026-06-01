@@ -7,6 +7,8 @@ const { registerAIHandlers } = require('./aiHandlers');
 const { registerStorageHandlers } = require('./storageHandlers');
 const { registerGitHandlers } = require('./gitHandlers');
 const { registerSteeringHandlers } = require('./steeringHandlers');
+const { registerTerminalHandlers } = require('./terminalHandlers');
+const { registerOllamaHandlers } = require('./ollamaHandlers');
 
 /**
  * Register all IPC handlers with the main process
@@ -22,6 +24,9 @@ function registerAllHandlers(ipcMain, services, mainWindow) {
   // AI handlers
   registerAIHandlers(ipcMain, { aiService: services.aiService });
   
+  // Ollama handlers
+  registerOllamaHandlers(ipcMain, { ollamaClient: services.ollamaClient });
+  
   // Storage handlers
   registerStorageHandlers(ipcMain, { storage: services.storage });
   
@@ -30,6 +35,9 @@ function registerAllHandlers(ipcMain, services, mainWindow) {
   
   // Steering handlers
   registerSteeringHandlers(ipcMain, { steeringParser: services.steeringParser });
+  
+  // Terminal handlers
+  registerTerminalHandlers(ipcMain, { terminalManager: services.terminalManager });
   
   console.log('[Handlers] All IPC handlers registered successfully');
 }

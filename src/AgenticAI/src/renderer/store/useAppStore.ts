@@ -82,6 +82,10 @@ interface AppStore {
   setGitLoading: (loading: boolean) => void;
   commitMessage: string;
   setCommitMessage: (message: string) => void;
+
+  // Landing Page
+  isLandingVisible: boolean;
+  setLandingVisible: (visible: boolean) => void;
 }
 
 export interface GitFileChange {
@@ -182,6 +186,10 @@ export const useAppStore = create<AppStore>((set) => ({
   setGitLoading: (loading) => set({ gitLoading: loading }),
   commitMessage: '',
   setCommitMessage: (message) => set({ commitMessage: message }),
+
+  // Landing Page
+  isLandingVisible: true,
+  setLandingVisible: (visible) => set({ isLandingVisible: visible }),
 }));
 
 function toggleFolderInTree(files: FileNode[], path: string): FileNode[] {

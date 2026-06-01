@@ -2,15 +2,7 @@
  * Terminal IPC Handlers
  */
 
-const { ipcMain } = require('electron');
-
-let terminalManager = null;
-
-function setTerminalManager(manager) {
-  terminalManager = manager;
-}
-
-function registerTerminalHandlers() {
+function registerTerminalHandlers(ipcMain, { terminalManager }) {
   // Create terminal session
   ipcMain.handle('terminal:create', async (_, cwd) => {
     if (!terminalManager) {
@@ -51,5 +43,4 @@ function registerTerminalHandlers() {
 
 module.exports = {
   registerTerminalHandlers,
-  setTerminalManager,
 };
