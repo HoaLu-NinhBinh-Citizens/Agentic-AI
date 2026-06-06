@@ -82,7 +82,6 @@ def forward(self, x):
         patterns=[
             r"batch_size\s*=\s*(?:12[89]|[2-9]\d{2}|\d{4,})\s*\n(?:.*\n)*?.*lr\s*=",
             r"batch_size\s*=\s*(?:12[89]|[2-9]\d{2}|\d{4,})(?:.*\n)*?.*(?:optimizer|Adam|SGD)",
-            r"batch_size\s*=\s*\d+\s*\n\s*lr\s*=\s*\d",
         ],
         fix_template="""# Scale learning rate linearly with batch size
 # Linear scaling rule: lr_new = lr_base * (batch_size / base_batch_size)
