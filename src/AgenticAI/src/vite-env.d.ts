@@ -179,6 +179,12 @@ interface AIAPI {
   generateCode(prompt: string): Promise<AIResponse>;
   codeReview(code: string, file: string): Promise<AIResponse>;
   explainCode(code: string): Promise<AIResponse>;
+  complete(params: {
+    prefix: string;
+    suffix: string;
+    language: string;
+    maxTokens?: number;
+  }): Promise<{ success: boolean; completion: string; error?: string }>;
 }
 
 interface SteeringAPI {

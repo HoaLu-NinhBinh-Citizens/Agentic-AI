@@ -20,6 +20,7 @@ contextBridge.exposeInMainWorld('electronAPI', {
     codeReview: (code, language, context) => ipcRenderer.invoke('ai:codeReview', code, language, context),
     generateCode: (spec, existingCode) => ipcRenderer.invoke('ai:generateCode', spec, existingCode),
     isInitialized: () => ipcRenderer.invoke('ai:isInitialized'),
+    complete: (params) => ipcRenderer.invoke('ai:complete', params),
   },
   
   // Steering Parser
@@ -133,6 +134,19 @@ contextBridge.exposeInMainWorld('electronAPI', {
     maximize: () => ipcRenderer.invoke('app:maximize'),
     close: () => ipcRenderer.invoke('app:close'),
     getVersion: () => ipcRenderer.invoke('app:getVersion'),
+  },
+
+  // Extension Marketplace
+  marketplace: {
+    search: (query, limit) => ipcRenderer.invoke('marketplace:search', { query, limit }),
+    popular: () => ipcRenderer.invoke('marketplace:popular'),
+    details: (namespace, name) => ipcRenderer.invoke('marketplace:details', { namespace, name }),
+    install: (namespace, name) => ipcRenderer.invoke('marketplace:install', { namespace, name }),
+    uninstall: (extensionId) => ipcRenderer.invoke('marketplace:uninstall', { extensionId }),
+    installed: () => ipcRenderer.invoke('marketplace:installed'),
+    onInstallProgress: (callback) => {
+      ipcRenderer.on('marketplace:install-progress', (_, data) => callback(data));
+    },
   },
 
   // AI Agent (MCP) - Python Agent Integration

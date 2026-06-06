@@ -10,6 +10,7 @@ const { registerSteeringHandlers } = require('./steeringHandlers');
 const { registerTerminalHandlers } = require('./terminalHandlers');
 const { registerOllamaHandlers } = require('./ollamaHandlers');
 const { registerAIAgentHandlers } = require('./aiAgentHandlers');
+const { registerMarketplaceHandlers } = require('./marketplaceHandlers');
 
 /**
  * Register all IPC handlers with the main process
@@ -42,6 +43,9 @@ function registerAllHandlers(ipcMain, services, mainWindow) {
 
   // AI Agent (MCP) handlers
   registerAIAgentHandlers(ipcMain, { mcpClient: services.mcpClient });
+
+  // Extension Marketplace handlers
+  registerMarketplaceHandlers(ipcMain, mainWindow);
 
   console.log('[Handlers] All IPC handlers registered successfully');
 }

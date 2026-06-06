@@ -15,6 +15,7 @@ import { NexusLanding } from './components/NexusLanding';
 import { ProcessPanel, ProcessLog } from './components/ProcessPanel';
 import { InlineDiffView, DiffHunk } from './components/InlineDiffView';
 import { TitleBar } from './components/TitleBar';
+import { ExtensionsPanel } from './components/ExtensionsPanel';
 import { useAppStore } from './store/useAppStore';
 
 const App: React.FC = () => {
@@ -82,6 +83,8 @@ const App: React.FC = () => {
         return <SearchPanel />;
       case 'git':
         return <GitPanel />;
+      case 'extensions':
+        return <ExtensionsPanel />;
       case 'terminal':
         return <div className="terminal-sidebar"><TerminalPanel isOpen={true} onClose={() => setTerminalOpen(false)} onMinimize={() => setTerminalOpen(false)} /></div>;
       default:

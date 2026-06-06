@@ -1,7 +1,7 @@
 import { create } from 'zustand';
 import { FileNode, Task, Spec, ChatMessage, SteeringContext, OllamaModel, OllamaHealthStatus, AIProviderConfig } from '../../shared/types';
 
-export type SidebarView = 'explorer' | 'search' | 'git' | 'terminal' | 'settings';
+export type SidebarView = 'explorer' | 'search' | 'git' | 'terminal' | 'settings' | 'extensions';
 
 interface CursorPosition {
   line: number;

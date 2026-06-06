@@ -182,16 +182,15 @@ export const ChatPanel: React.FC<ChatPanelProps> = ({ bridge }) => {
 
       <div className="chat-input">
         <textarea
-          placeholder={isAIInitialized ? "Ask me anything..." : "Configure AI first..."}
+          placeholder={isAIInitialized ? "Ask me anything..." : "Type a message (you'll be prompted to configure AI)..."}
           value={input}
           onChange={(e) => setInput(e.target.value)}
           onKeyDown={handleKeyDown}
           rows={2}
-          disabled={!isAIInitialized}
         />
         <button 
           onClick={sendMessage} 
-          disabled={!input.trim() || isLoading || !isAIInitialized}
+          disabled={!input.trim() || isLoading}
         >
           <FiSend />
         </button>

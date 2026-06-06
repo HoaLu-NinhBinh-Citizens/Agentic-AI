@@ -1,10 +1,10 @@
 import React from 'react';
 import { 
-  FiFolder, FiSearch, FiGitBranch, FiTerminal, FiSettings 
+  FiFolder, FiSearch, FiGitBranch, FiTerminal, FiSettings, FiPackage 
 } from 'react-icons/fi';
 import { useAppStore } from '../store/useAppStore';
 
-type ViewType = 'explorer' | 'search' | 'git' | 'terminal' | 'settings';
+type ViewType = 'explorer' | 'search' | 'git' | 'terminal' | 'extensions' | 'settings';
 
 export const ActivityBar: React.FC = () => {
   const { activeSidebarView, setActiveSidebarView } = useAppStore();
@@ -13,6 +13,7 @@ export const ActivityBar: React.FC = () => {
     { id: 'explorer', icon: <FiFolder size={24} />, label: 'Explorer' },
     { id: 'search', icon: <FiSearch size={24} />, label: 'Search' },
     { id: 'git', icon: <FiGitBranch size={24} />, label: 'Source Control' },
+    { id: 'extensions', icon: <FiPackage size={24} />, label: 'Extensions' },
     { id: 'terminal', icon: <FiTerminal size={24} />, label: 'Terminal' },
   ];
 

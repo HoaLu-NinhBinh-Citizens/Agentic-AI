@@ -1,6 +1,7 @@
 import React, { useEffect, useState } from 'react';
 import Editor from '@monaco-editor/react';
 import { useAppStore } from '../store/useAppStore';
+import { useInlineCompletion } from '../hooks/useInlineCompletion';
 import { FiX, FiFolder } from 'react-icons/fi';
 
 interface EditorPanelProps {
@@ -19,6 +20,27 @@ export const EditorPanel: React.FC<EditorPanelProps> = ({ onMount }) => {
 
   const [content, setContent] = useState<string>('');
   const [isDirty, setIsDirty] = useState(false);
+  const [monacoInstance, setMonacoInstance] = useState<any>(null);
+
+  const getLanguageFromPath = (path: string | null): string => {
+    if (!path) return 'plaintext';
+    const ext = path.split('.').pop()?.toLowerCase();
+    const langMap: Record<string, string> = {
+      'ts': 'typescript', 'tsx': 'typescript',
+      'js': 'javascript', 'jsx': 'javascript',
+      'py': 'python', 'json': 'json',
+      'md': 'markdown', 'css': 'css', 'html': 'html'
+    };
+    return langMap[ext || ''] || 'plaintext';
+  };
+
+  const currentLanguage = getLanguageFromPath(activeFile);
+
+  // Register AI ghost-text inline completion for the active language
+  useInlineCompletion(monacoInstance, currentLanguage, {
+    enabled: true,
+    debounceMs: 350,
+  });
 
   useEffect(() => {
     const loadFile = async () => {
@@ -36,7 +58,8 @@ export const EditorPanel: React.FC<EditorPanelProps> = ({ onMount }) => {
     setIsDirty(true);
   };
 
-  const handleEditorMount = (editor: any) => {
+  const handleEditorMount = (editor: any, monaco: any) => {
+    setMonacoInstance(monaco);
     editor.onDidChangeCursorPosition((e: any) => {
       setCursorPosition({
         line: e.position.lineNumber,
@@ -68,17 +91,6 @@ export const EditorPanel: React.FC<EditorPanelProps> = ({ onMount }) => {
   };
 
   const getFileName = (path: string) => path.split(/[/\\]/).pop() || path;
-
-  const getLanguage = (path: string) => {
-    const ext = path.split('.').pop()?.toLowerCase();
-    const langMap: Record<string, string> = {
-      'ts': 'typescript', 'tsx': 'typescript',
-      'js': 'javascript', 'jsx': 'javascript',
-      'py': 'python', 'json': 'json',
-      'md': 'markdown', 'css': 'css', 'html': 'html'
-    };
-    return langMap[ext || ''] || 'plaintext';
-  };
 
   useEffect(() => {
     const handleKeyDown = (e: KeyboardEvent) => {
@@ -118,7 +130,7 @@ export const EditorPanel: React.FC<EditorPanelProps> = ({ onMount }) => {
         {activeFile ? (
           <Editor
             height="100%"
-            language={getLanguage(activeFile)}
+            language={currentLanguage}
             value={content}
             onChange={handleEditorChange}
             onMount={handleEditorMount}
@@ -136,6 +148,8 @@ export const EditorPanel: React.FC<EditorPanelProps> = ({ onMount }) => {
               wordWrap: 'on',
               folding: true,
               renderLineHighlight: 'all',
+              inlineSuggest: { enabled: true },
+              suggest: { preview: true },
               scrollbar: {
                 vertical: 'visible',
                 horizontal: 'visible',

@@ -35,7 +35,7 @@ from fastapi.middleware.cors import CORSMiddleware
 
 from application.orchestration.tool_execution.config import get_tool_execution_config
 from application.orchestration.tool_execution.service import ToolExecutionService
-from core.agent.mock_agent import MockAgent
+from core.agent.real_agent import RealAgent
 from core.rate_limiter import SlidingWindowRateLimiter
 from core.runtime.runtime_manager import RuntimeManager
 from core.session.persistent_manager import PersistentSessionManager
@@ -65,13 +65,13 @@ class ServerState:
         session_manager: PersistentSessionManager,
         connection_manager: ConnectionManager,
         runtime_manager: RuntimeManager,
-        mock_agent: MockAgent,
+        real_agent: RealAgent,
         tool_execution_service: ToolExecutionService,
     ) -> None:
         self.session_manager = session_manager
         self.connection_manager = connection_manager
         self.runtime_manager = runtime_manager
-        self.mock_agent = mock_agent
+        self.real_agent = real_agent
         self.tool_execution_service = tool_execution_service
         self._rate_limiters: dict[str, SlidingWindowRateLimiter] = {}
 
@@ -103,8 +103,8 @@ async def lifespan(app: FastAPI):
     await session_manager.initialize()
 
     connection_manager = ConnectionManager()
-    mock_agent = MockAgent()
-    runtime_manager = RuntimeManager(mock_agent)
+    real_agent = RealAgent()
+    runtime_manager = RuntimeManager(real_agent)
     await runtime_manager.start()
 
     # Initialize MCP manager

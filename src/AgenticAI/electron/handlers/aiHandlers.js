@@ -106,6 +106,48 @@ function registerAIHandlers(ipcMain, { aiService }) {
     return aiService ? aiService.isInitialized() : false;
   });
 
+  // Inline Completion (ghost text) — fill-in-the-middle style
+  ipcMain.handle('ai:complete', async (_, params) => {
+    try {
+      const { prefix, suffix, language, maxTokens } = params || {};
+      if (!aiService || !aiService.isInitialized()) {
+        return { success: false, completion: '' };
+      }
+
+      // Build a focused FIM prompt for short, inline completions
+      const systemPrompt =
+        'You are a code completion engine. Complete the code at the cursor. ' +
+        'Return ONLY the code that should be inserted at the cursor position. ' +
+        'No explanations, no markdown fences, no repetition of existing code. ' +
+        'Keep completions short (usually one line, at most a few lines).';
+
+      const userPrompt =
+        `Language: ${language || 'plaintext'}\n` +
+        `Complete the code between <CURSOR> markers.\n\n` +
+        `${prefix || ''}<CURSOR>${suffix || ''}`;
+
+      const response = await aiService.chat(
+        [{ role: 'user', content: userPrompt }],
+        systemPrompt
+      );
+
+      // Clean up: strip markdown fences if model added them
+      let completion = (response || '').trim();
+      completion = completion.replace(/^```[\w]*\n?/, '').replace(/\n?```$/, '');
+
+      // Cap length defensively
+      const maxLen = (maxTokens || 120) * 4;
+      if (completion.length > maxLen) {
+        completion = completion.slice(0, maxLen);
+      }
+
+      return { success: true, completion };
+    } catch (error) {
+      console.error('[AI Handler] complete:', error);
+      return { success: false, completion: '', error: error.message };
+    }
+  });
+
   console.log('[AI Handler] Registered all AI handlers with Zod validation');
 }
 
