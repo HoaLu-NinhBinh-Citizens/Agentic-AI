@@ -2,6 +2,12 @@
 
 This module provides LLM-powered fix generation for issues that don't have
 rule-based fixes, using code context to generate appropriate solutions.
+
+Features:
+- Retry logic with exponential backoff
+- LRU cache to avoid redundant API calls
+- Cost tracking and statistics
+- Configurable fallback to templates
 """
 
 from __future__ import annotations
@@ -22,6 +28,7 @@ from src.infrastructure.llm.adapters import (
     ServiceUnavailableError,
     calculate_cost,
 )
+from src.core.fix_engine.fix_cache import FixCache
 
 logger = logging.getLogger(__name__)
 
@@ -359,6 +366,7 @@ class LLMSuggester:
         max_context_lines: int = 20,
         max_retries: int = 3,
         backoff_base: float = 2.0,
+        cache: Optional[FixCache] = None,
     ) -> None:
         """Initialize the LLM suggester.
 
@@ -369,6 +377,7 @@ class LLMSuggester:
             max_context_lines: Maximum context lines for prompts
             max_retries: Maximum retry attempts for rate limits
             backoff_base: Base for exponential backoff
+            cache: Optional FixCache for caching suggestions
         """
         self._provider = provider
         self._llm_manager = llm_manager
@@ -377,6 +386,7 @@ class LLMSuggester:
         self.max_retries = max_retries
         self.backoff_base = backoff_base
         self.stats = LLMSuggestionStats()
+        self._cache = cache or FixCache()
 
         if enable_llm and provider is None and llm_manager is None:
             self._provider = create_llm_provider_from_env()
@@ -407,7 +417,9 @@ class LLMSuggester:
         finding: Any,
         context: Optional[CodeContext] = None,
     ) -> Optional[LLMFixSuggestion]:
-        """Generate fix using LLM with code context.
+        """Generate fix using LLM with code context and caching.
+
+        Checks the cache first to avoid redundant API calls.
 
         Args:
             finding: Finding object with rule_id, message, severity, etc.
@@ -422,6 +434,21 @@ class LLMSuggester:
             except Exception as e:
                 logger.warning("Failed to build context: %s", e)
                 return None
+
+        # Check cache first
+        original_code = context.get_relevant_code(finding.line)
+        if original_code:
+            cached = self._cache.get(finding.rule_id, original_code)
+            if cached:
+                logger.debug("Cache hit for %s", finding.rule_id)
+                return LLMFixSuggestion(
+                    original_code=original_code,
+                    suggested_code=cached.suggested_code,
+                    explanation=cached.explanation,
+                    confidence=cached.confidence,
+                    alternative_suggestions=cached.alternatives,
+                    rule_id=finding.rule_id,
+                )
 
         prompt = self._build_prompt(finding, context)
 
@@ -440,7 +467,20 @@ class LLMSuggester:
                 tokens=response.tokens_used,
                 cost=self._estimate_cost(response)
             )
-            return self._parse_llm_response(response, finding, context)
+            suggestion = self._parse_llm_response(response, finding, context)
+
+            # Store in cache
+            if suggestion and original_code:
+                self._cache.put(
+                    rule_id=finding.rule_id,
+                    code=original_code,
+                    suggested_code=suggestion.suggested_code,
+                    explanation=suggestion.explanation,
+                    confidence=suggestion.confidence,
+                    alternatives=suggestion.alternative_suggestions,
+                )
+
+            return suggestion
         except RateLimitError:
             logger.warning("Rate limit exceeded after retries, falling back to template")
             self.stats.record_failure()

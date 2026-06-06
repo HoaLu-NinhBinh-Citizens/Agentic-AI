@@ -1,0 +1,71 @@
+# Unified Review Pipeline Configuration
+#
+# This configuration controls the unified review pipeline behavior,
+# including detector settings, auto-fix thresholds, and output formatting.
+
+pipeline:
+  # Execution settings
+  max_workers: 4  # Maximum parallel workers for analysis
+  timeout_seconds: 300  # Maximum time for analysis per file
+  severity_threshold: "LOW"  # Minimum severity to report: LOW, MEDIUM, HIGH, CRITICAL
+
+# Auto-fix settings by severity level
+auto_fix:
+  low: true          # Auto-fix LOW severity issues
+  medium: false      # Require confirmation for MEDIUM
+  high: false        # Require confirmation for HIGH
+  critical: false   # Require explicit approval for CRITICAL
+
+# Detector enable/disable settings
+detectors:
+  ml: true           # ML-specific bug detection (ML001-ML018)
+  security: true     # Security vulnerability detection
+  quality: true      # Code quality issues
+  embedded: true     # Embedded/C firmware issues
+
+# Output settings
+output:
+  format: "markdown"    # Output format: markdown, json, html
+  show_fix_preview: true # Show before/after code diffs
+  max_issues: 100       # Maximum issues to report per file
+  include_context: 3     # Lines of context before/after issues
+
+# Focus areas - if specified, only run these detectors
+# focus_areas: [ml, security]
+
+# Exclusion patterns - files matching these patterns will be skipped
+exclude_patterns:
+  - "*.test.py"
+  - "*.spec.py"
+  - "**/__pycache__/**"
+  - "**/node_modules/**"
+  - "**/.venv/**"
+  - "**/venv/**"
+  - "**/build/**"
+  - "**/dist/**"
+
+# Severity-specific thresholds
+severity_thresholds:
+  critical_confidence: 0.7    # Minimum confidence for CRITICAL issues
+  high_confidence: 0.6        # Minimum confidence for HIGH issues
+  medium_confidence: 0.5      # Minimum confidence for MEDIUM issues
+  low_confidence: 0.4         # Minimum confidence for LOW issues
+
+# Interactive mode settings
+interactive:
+  enabled: false              # Enable interactive fix confirmation
+  auto_approve_safe: true     # Auto-approve low-risk fixes
+  show_diff: true             # Show diff in interactive mode
+  confirm_each: false         # Confirm each fix individually
+
+# Logging settings
+logging:
+  level: "INFO"               # Log level: DEBUG, INFO, WARNING, ERROR
+  format: "%(asctime)s - %(name)s - %(levelname)s - %(message)s"
+  file: null                 # Log file path, null for stdout
+
+# Performance settings
+performance:
+  enable_caching: true        # Cache analysis results
+  cache_ttl_seconds: 3600     # Cache TTL in seconds
+  incremental_analysis: true  # Only re-analyze changed files

@@ -64,6 +64,13 @@ class PipelineConfig:
     # Detector-specific config
     focus_areas: list[str] = field(default_factory=list)  # ["ml", "security"]
     exclude_patterns: list[str] = field(default_factory=list)  # ["*.test.py"]
+    
+    # Interactive fix configuration
+    interactive_mode: bool = False
+    auto_fix_low: bool = False
+    auto_fix_medium: bool = False
+    auto_approve_critical: bool = True
+    workspace_root: Optional[str] = None
 
 
 @dataclass
@@ -379,3 +386,188 @@ class UnifiedReviewPipeline:
     def detectors(self) -> list[str]:
         """Get list of available detector names."""
         return self._registry.list_all()
+    
+    # ─── Interactive Fix Integration ─────────────────────────────────────────────
+    
+    async def analyze_with_interactive_fix(
+        self,
+        files: list[Path | str],
+        apply_tool=None,
+        auto_approved_rules: Optional[set[str]] = None,
+    ) -> tuple[list[ReviewIssue], dict[str, Any]]:
+        """Analyze files and run interactive fix session.
+        
+        This method combines analysis with interactive fix confirmation.
+        
+        Args:
+            files: List of file paths to analyze
+            apply_tool: Optional ApplyFixTool for applying fixes
+            auto_approved_rules: Set of rule IDs to auto-approve
+            
+        Returns:
+            Tuple of (issues, fix_results)
+        """
+        # Analyze files
+        issues = await self.analyze(files)
+        
+        if not issues:
+            return issues, {"applied": 0, "skipped": 0, "failed": 0}
+        
+        # Run interactive fix if enabled or if auto_fix is configured
+        fix_results = {"applied": 0, "skipped": 0, "failed": 0, "issues": issues}
+        
+        if self.config.interactive_mode:
+            fix_results = await self._run_interactive_fix(
+                issues, apply_tool, auto_approved_rules
+            )
+        elif self.config.auto_fix_low or self.config.auto_fix_medium:
+            fix_results = await self._run_auto_fix(issues, apply_tool)
+        
+        return issues, fix_results
+    
+    async def _run_interactive_fix(
+        self,
+        issues: list[ReviewIssue],
+        apply_tool,
+        auto_approved_rules: Optional[set[str]],
+    ) -> dict[str, Any]:
+        """Run interactive fix session for issues.
+        
+        Args:
+            issues: List of issues to potentially fix
+            apply_tool: ApplyFixTool instance
+            auto_approved_rules: Set of rule IDs to auto-approve
+            
+        Returns:
+            Fix results dictionary
+        """
+        try:
+            from src.interfaces.cli.commands.fix_interactive import (
+                run_interactive_fix_from_issues,
+            )
+            
+            workspace_root = self.config.workspace_root or "."
+            
+            result = await run_interactive_fix_from_issues(
+                issues=issues,
+                workspace_root=workspace_root,
+                auto_approved_rules=auto_approved_rules,
+            )
+            
+            return {
+                "applied": result.applied_count,
+                "skipped": result.skipped_count,
+                "failed": 0,
+                "session": result,
+            }
+        except Exception as e:
+            logger.warning("Interactive fix failed: %s", e)
+            return {"applied": 0, "skipped": len(issues), "failed": 0, "error": str(e)}
+    
+    async def _run_auto_fix(
+        self,
+        issues: list[ReviewIssue],
+        apply_tool,
+    ) -> dict[str, Any]:
+        """Run automatic fix for eligible issues.
+        
+        Args:
+            issues: List of issues
+            apply_tool: ApplyFixTool instance
+            
+        Returns:
+            Fix results dictionary
+        """
+        applied = 0
+        skipped = 0
+        failed = 0
+        
+        for issue in issues:
+            # Check if issue is fixable
+            if not issue.is_fixable or not issue.fixes:
+                skipped += 1
+                continue
+            
+            # Check severity-based auto-fix
+            should_fix = False
+            if issue.severity == Severity.LOW and self.config.auto_fix_low:
+                should_fix = True
+            elif issue.severity == Severity.MEDIUM and self.config.auto_fix_medium:
+                should_fix = True
+            
+            if not should_fix:
+                skipped += 1
+                continue
+            
+            # Apply fix
+            if apply_tool:
+                try:
+                    fix_result = apply_tool.apply_fix(issue)
+                    if fix_result.success:
+                        applied += 1
+                    else:
+                        failed += 1
+                except Exception as e:
+                    logger.warning("Failed to apply fix: %s", e)
+                    failed += 1
+            else:
+                # Just count as applied without actual tool
+                applied += 1
+        
+        return {
+            "applied": applied,
+            "skipped": skipped,
+            "failed": failed,
+        }
+    
+    def get_fixable_issues(
+        self,
+        issues: list[ReviewIssue],
+        max_severity: Optional[Severity] = None,
+    ) -> list[ReviewIssue]:
+        """Get fixable issues, optionally filtered by severity.
+        
+        Args:
+            issues: List of issues
+            max_severity: Optional maximum severity to include
+            
+        Returns:
+            List of fixable issues
+        """
+        fixable = [i for i in issues if i.is_fixable and i.fixes]
+        
+        if max_severity:
+            fixable = [
+                i for i in fixable
+                if i.severity.weight <= max_severity.weight
+            ]
+        
+        return fixable
+    
+    def categorize_issues_by_action(
+        self,
+        issues: list[ReviewIssue],
+    ) -> dict[str, list[ReviewIssue]]:
+        """Categorize issues by recommended action based on severity.
+        
+        Args:
+            issues: List of issues
+            
+        Returns:
+            Dict mapping action category to issues
+        """
+        categories: dict[str, list[ReviewIssue]] = {
+            "auto_fix_low": [],
+            "review_required": [],
+            "critical_warn": [],
+        }
+        
+        for issue in issues:
+            if issue.severity == Severity.CRITICAL:
+                categories["critical_warn"].append(issue)
+            elif issue.severity == Severity.LOW and issue.is_fixable:
+                categories["auto_fix_low"].append(issue)
+            else:
+                categories["review_required"].append(issue)
+        
+        return categories

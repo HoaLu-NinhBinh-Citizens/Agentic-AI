@@ -1,5 +1,15 @@
-"""CLI-friendly report generator for terminal output."""
+"""CLI-friendly report generator for terminal output.
 
+Features:
+- Box-style formatting with Unicode borders
+- Syntax-highlighted code snippets via Pygments
+- Side-by-side diff for before/after code
+- ANSI color support with NO_COLOR fallback
+- Severity icons and color-coded output
+"""
+
+import os
+import shutil
 from typing import Optional
 
 from src.infrastructure.reporting.markdown_report import (
@@ -7,10 +17,16 @@ from src.infrastructure.reporting.markdown_report import (
     PipelineStats,
     Severity,
 )
+from src.infrastructure.reporting.syntax_highlight import (
+    highlight_code,
+    highlight_diff,
+    detect_language,
+    _supports_color,
+)
 
 
 class CLIReportGenerator:
-    """Generate concise CLI output with box-style formatting."""
+    """Generate concise CLI output with box-style formatting and syntax highlighting."""
 
     _severity_icons = {
         Severity.CRITICAL: "[CRIT]",
@@ -30,7 +46,7 @@ class CLIReportGenerator:
     _reset = "\033[0m"
 
     def __init__(self, use_colors: bool = True):
-        self.use_colors = use_colors
+        self.use_colors = use_colors and _supports_color()
 
     def generate(
         self,
@@ -111,17 +127,41 @@ class CLIReportGenerator:
         for f in findings:
             by_file.setdefault(f.file_path, []).append(f)
 
+        terminal_width = shutil.get_terminal_size((max_width, 24)).columns
+
         lines = ["\n─── Findings by File ───"]
         for file_path, file_findings in sorted(by_file.items()):
             lines.append(f"\n  📄 {file_path}")
             for f in file_findings:
                 icon = self._severity_icons[f.severity]
+                colored_icon = self._color(f.severity, icon)
                 msg = f.message[:max_width - 30] + "..." if len(f.message) > max_width - 30 else f.message
-                lines.append(f"    {icon} L{f.line:4} {msg}")
+                lines.append(f"    {colored_icon} L{f.line:4} {msg}")
+
+                # Show syntax-highlighted code context if available
+                if f.old_code and f.new_code:
+                    lines.append(highlight_diff(
+                        f.old_code, f.new_code, terminal_width
+                    ))
+                elif f.old_code:
+                    lang = detect_language(file_path)
+                    lines.append("    ─── Original ───")
+                    lines.append(highlight_code(
+                        f.old_code, language=lang, file_path=file_path,
+                        line_numbers=True, start_line=f.line
+                    ))
+                elif f.new_code:
+                    lang = detect_language(file_path)
+                    lines.append("    ─── Suggested Fix ───")
+                    lines.append(highlight_code(
+                        f.new_code, language=lang, file_path=file_path,
+                        line_numbers=True, start_line=f.line
+                    ))
+
         return "\n".join(lines) + "\n"
 
     def _build_footer(self, stats: PipelineStats) -> str:
-        total = len(stats.findings_by_severity)
+        total = stats.total_findings
         return f"""
 ─── Statistics ───
   Total findings: {total}

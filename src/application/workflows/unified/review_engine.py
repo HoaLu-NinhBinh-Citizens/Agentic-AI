@@ -55,7 +55,9 @@ from src.application.workflows.unified.result_formatter import (
     ResultFormatter,
     MarkdownFormatter,
     get_formatter,
+    UnifiedMarkdownFormatter,
 )
+from src.domain.models.review_issue import ReviewIssue
 from src.application.workflows.unified.suggestion_engine import SuggestionEngine
 from src.infrastructure.indexing.tree_sitter import SafeTreeSitterIndexer
 from src.infrastructure.indexing.reference_graph import ReferenceGraph
@@ -67,6 +69,54 @@ from src.infrastructure.performance import (
 )
 
 logger = logging.getLogger(__name__)
+
+
+def _finding_to_review_issue(finding: Finding) -> "ReviewIssue":
+    """Convert a legacy Finding to a unified ReviewIssue for formatting."""
+    from src.domain.models.review_issue import ReviewIssue, CodeEvidence, FixOption, generate_issue_id
+
+    old_code = finding.metadata.get("old_code", finding.context or "")
+    new_code = finding.metadata.get("new_code", "")
+
+    evidence = CodeEvidence(
+        file=finding.file,
+        line_start=finding.line,
+        line_end=finding.end_line or finding.line,
+        old_code=old_code,
+        new_code=new_code,
+    )
+
+    fixes = []
+    if finding.fix:
+        fix_option = FixOption(
+            id=f"fix-{finding.rule_id}-{finding.line}",
+            title=finding.rule_name or f"Fix {finding.rule_id}",
+            description="Suggested fix",
+            old_code=old_code,
+            new_code=new_code,
+            risk=finding.severity,
+            confidence=finding.confidence,
+        )
+        fixes.append(fix_option)
+
+    return ReviewIssue(
+        id=generate_issue_id(finding.rule_id, finding.file, finding.line),
+        rule_id=finding.rule_id,
+        severity=finding.severity,
+        file=finding.file,
+        line=finding.line,
+        end_line=finding.end_line or finding.line,
+        title=finding.rule_name or finding.rule_id,
+        message=finding.message,
+        explanation=finding.metadata.get("explanation", ""),
+        evidence=evidence,
+        fixes=fixes,
+        confidence=finding.confidence,
+        tags=finding.metadata.get("tags", []),
+        detector=finding.detector,
+        detection_method=finding.metadata.get("detection_method", ""),
+    )
+
 
 # ─── Config ──────────────────────────────────────────────────────────────────────
 
@@ -321,8 +371,9 @@ class UnifiedReviewEngine:
             files_scanned=len(contexts),  # Actual files processed (may be fewer than input due to errors)
         )
 
-        # Format output
-        output = self.formatter.format(findings, stats, suggestions)
+        # Format output - convert findings to ReviewIssues for unified formatters
+        issues = [_finding_to_review_issue(f) for f in findings]
+        output = self.formatter.format(issues, stats)
 
         return ReviewResult(
             findings=findings,

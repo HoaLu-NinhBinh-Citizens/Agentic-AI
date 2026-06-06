@@ -87,11 +87,6 @@ def register(subparsers: argparse._SubParsersAction[argparse.ArgumentParser]) ->
         help="Maximum findings per file (default: 50)",
     )
     parser.add_argument(
-        "--auto-fix",
-        action="store_true",
-        help="Automatically apply safe fixes",
-    )
-    parser.add_argument(
         "--interactive", "-i",
         action="store_true",
         help="Interactive mode with pre/post review questions and fix confirmation",
@@ -112,6 +107,20 @@ def register(subparsers: argparse._SubParsersAction[argparse.ArgumentParser]) ->
         nargs="*",
         default=[],
         help="Restrict to specific languages (e.g., python js)",
+    )
+    parser.add_argument(
+        "--auto-fix",
+        nargs="?",
+        const="low",
+        default=None,
+        help="Auto-fix level: none, low, medium, high, all. "
+             "Use --auto-fix=low to auto-fix low severity issues.",
+    )
+    parser.add_argument(
+        "--auto-fix-level",
+        choices=["none", "low", "medium", "high", "all"],
+        default="low",
+        help="Severity level for auto-fix (default: low)",
     )
     parser.set_defaults(handler=run_unified_review)
 
@@ -153,6 +162,12 @@ async def run_unified_review(args: argparse.Namespace) -> int:
         languages=args.languages if args.languages else [],
         enable_parallel=not args.no_parallel,
     )
+    
+    # Configure auto-fix settings from CLI
+    auto_fix_level = getattr(args, 'auto_fix_level', 'low')
+    if getattr(args, 'auto_fix', None) is not None:
+        auto_fix_level = args.auto_fix
+    config.auto_fix_level = auto_fix_level
 
     # Run review
     engine = UnifiedReviewEngine(config)

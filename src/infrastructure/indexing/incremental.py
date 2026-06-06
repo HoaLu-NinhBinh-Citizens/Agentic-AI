@@ -8,6 +8,10 @@ Architecture:
 For watch mode: file watcher triggers mark_dirty() per changed path,
 then a background task re-indexes lazily without blocking startup.
 
+Dependency tracking:
+    When file X changes, also re-index files that import X.
+    Uses file_dependencies table for dependency graph.
+
 Performance optimizations:
     - ThreadPoolExecutor for parallel file hashing
     - Async batch processing with controlled concurrency
@@ -24,7 +28,7 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import dataclass, field
 from functools import lru_cache
 from pathlib import Path
-from typing import TYPE_CHECKING, Any, Callable, Coroutine, Sequence
+from typing import TYPE_CHECKING, Any, Callable, Coroutine, Optional, Sequence
 
 from src.infrastructure.indexing.hash_utils import compute_content_hash, compute_short_hash
 
@@ -147,6 +151,20 @@ class IndexStateDB:
             CREATE INDEX IF NOT EXISTS idx_indexed_at
             ON file_index_state (indexed_at)
         """)
+        # Dependency tracking table
+        self._conn.execute("""
+            CREATE TABLE IF NOT EXISTS file_dependencies (
+                source_path TEXT    NOT NULL,
+                target_path TEXT    NOT NULL,
+                dep_type   TEXT    NOT NULL DEFAULT 'import',
+                line       INTEGER,
+                PRIMARY KEY (source_path, target_path)
+            )
+        """)
+        self._conn.execute("""
+            CREATE INDEX IF NOT EXISTS idx_dependents
+            ON file_dependencies (target_path)
+        """)
         self._conn.commit()
 
     # ── read ──────────────────────────────────────────────────────────────────
@@ -183,6 +201,99 @@ class IndexStateDB:
 
     def delete(self, path: str) -> None:
         self._conn.execute("DELETE FROM file_index_state WHERE path=?", (path,))
+        self._conn.commit()
+    
+    # ── dependency tracking ─────────────────────────────────────────────────────
+    
+    def upsert_dependencies(
+        self,
+        source_path: str,
+        target_paths: list[str],
+        dep_type: str = "import",
+    ) -> None:
+        """Store file dependencies.
+        
+        Args:
+            source_path: Path to the file with the imports
+            target_paths: List of paths that this file imports
+            dep_type: Type of dependency (import, include, etc.)
+        """
+        # Delete existing dependencies for this source
+        self._conn.execute(
+            "DELETE FROM file_dependencies WHERE source_path=?",
+            (source_path,),
+        )
+        # Insert new dependencies
+        for target_path in target_paths:
+            self._conn.execute(
+                """INSERT OR REPLACE INTO file_dependencies
+                   (source_path, target_path, dep_type) VALUES (?,?,?)""",
+                (source_path, target_path, dep_type),
+            )
+        self._conn.commit()
+    
+    def get_dependents(self, path: str) -> list[str]:
+        """Get all files that depend on the given file.
+        
+        Args:
+            path: Path to the target file
+            
+        Returns:
+            List of file paths that depend on this file
+        """
+        rows = self._conn.execute(
+            "SELECT source_path FROM file_dependencies WHERE target_path=?",
+            (path,),
+        ).fetchall()
+        return [r[0] for r in rows]
+    
+    def get_dependencies(self, path: str) -> list[str]:
+        """Get all files that the given file depends on.
+        
+        Args:
+            path: Path to the source file
+            
+        Returns:
+            List of file paths that this file depends on
+        """
+        rows = self._conn.execute(
+            "SELECT target_path FROM file_dependencies WHERE source_path=?",
+            (path,),
+        ).fetchall()
+        return [r[0] for r in rows]
+    
+    def get_all_dependents_transitive(self, path: str) -> set[str]:
+        """Get all files that transitively depend on the given file.
+        
+        Args:
+            path: Path to the target file
+            
+        Returns:
+            Set of all transitive dependent file paths
+        """
+        result: set[str] = set()
+        queue = [path]
+        
+        while queue:
+            current = queue.pop()
+            dependents = self.get_dependents(current)
+            for dep in dependents:
+                if dep not in result:
+                    result.add(dep)
+                    queue.append(dep)
+        
+        return result
+    
+    def clear_dependencies(self, path: str) -> None:
+        """Clear all dependencies for a file.
+        
+        Args:
+            path: Path to clear dependencies for
+        """
+        self._conn.execute(
+            "DELETE FROM file_dependencies WHERE source_path=? OR target_path=?",
+            (path, path),
+        )
         self._conn.commit()
 
     # ── helpers ───────────────────────────────────────────────────────────────
@@ -435,10 +546,47 @@ class IncrementalIndexer:
             self._db.mark_unindexed(path_str)
             asyncio.create_task(self._reindex_batch([path_str]))
 
+    def mark_dirty_with_dependents(self, path: str | Path) -> list[str]:
+        """Mark a file and all files that depend on it as dirty.
+        
+        This triggers cascading re-indexing when a dependency changes.
+        
+        Args:
+            path: Path to the changed file
+            
+        Returns:
+            List of all paths that were marked dirty
+        """
+        path_str = str(path)
+        if not is_indexable(Path(path_str)):
+            return []
+        
+        # Get all files that depend on this file (transitively)
+        dependent_paths = list(self._db.get_all_dependents_transitive(path_str))
+        dependent_paths.append(path_str)
+        
+        # Mark all as unindexed
+        for p in dependent_paths:
+            self._db.mark_unindexed(p)
+        
+        # Trigger re-indexing
+        asyncio.create_task(self._reindex_batch(dependent_paths))
+        
+        logger.debug(
+            "marked_dirty_with_dependents",
+            path=path_str,
+            dependents=len(dependent_paths) - 1,
+        )
+        
+        return dependent_paths
+
     # ── internal helpers ─────────────────────────────────────────────────────
 
     async def _index_file(self, file_path: Path, content_hash: str) -> None:
-        """Read file, chunk, embed, and upsert to KB + state DB."""
+        """Read file, chunk, embed, and upsert to KB + state DB.
+        
+        Also extracts and stores import dependencies for cascading re-indexing.
+        """
         content = file_path.read_text(encoding="utf-8", errors="replace")
         rel_path = str(file_path)
 
@@ -449,6 +597,11 @@ class IncrementalIndexer:
             content_hash=content_hash,
             indexed_at=None,
         ))
+
+        # Extract and store dependencies
+        dependencies = self._extract_dependencies(content, file_path)
+        if dependencies:
+            self._db.upsert_dependencies(rel_path, dependencies)
 
         # Chunk and embed
         chunks = self._chunk_content(content, rel_path)
@@ -468,6 +621,95 @@ class IncrementalIndexer:
         ))
 
         logger.debug("indexed_file", path=rel_path, chunks=len(chunks))
+
+    def _extract_dependencies(self, content: str, file_path: Path) -> list[str]:
+        """Extract import dependencies from file content.
+        
+        Args:
+            content: File content
+            file_path: Path to the file
+            
+        Returns:
+            List of file paths that this file depends on
+        """
+        dependencies: list[str] = []
+        suffix = file_path.suffix.lower()
+        
+        if suffix == ".py":
+            # Python imports
+            import re
+            patterns = [
+                re.compile(r"^from\s+([\w.]+)\s+import", re.MULTILINE),
+                re.compile(r"^import\s+([\w.]+)", re.MULTILINE),
+            ]
+            
+            for pattern in patterns:
+                for match in pattern.finditer(content):
+                    module = match.group(1)
+                    # Try to resolve to a file path
+                    resolved = self._resolve_python_import(module, file_path.parent)
+                    if resolved:
+                        dependencies.append(resolved)
+        
+        elif suffix in {".c", ".h", ".cpp", ".hpp"}:
+            # C/C++ includes
+            import re
+            pattern = re.compile(r'#include\s*[<"]([^>"]+)[>"]')
+            for match in pattern.finditer(content):
+                include = match.group(1)
+                # System includes usually don't have local files
+                if not include.startswith("<"):
+                    resolved = self._resolve_c_include(include, file_path.parent)
+                    if resolved:
+                        dependencies.append(resolved)
+        
+        return list(set(dependencies))  # Deduplicate
+    
+    def _resolve_python_import(self, module: str, current_dir: Path) -> Optional[str]:
+        """Resolve a Python import to a file path.
+        
+        Args:
+            module: Module name (e.g., "src.utils")
+            current_dir: Directory of the importing file
+            
+        Returns:
+            Resolved file path or None
+        """
+        # Try to find module file
+        parts = module.split(".")
+        for i in range(len(parts), 0, -1):
+            module_path = "/".join(parts[:i])
+            candidates = [
+                current_dir / f"{module_path}.py",
+                current_dir / module_path / "__init__.py",
+            ]
+            for candidate in candidates:
+                if candidate.exists():
+                    return str(candidate)
+        return None
+    
+    def _resolve_c_include(self, include: str, current_dir: Path) -> Optional[str]:
+        """Resolve a C include to a file path.
+        
+        Args:
+            include: Include name (e.g., "utils.h")
+            current_dir: Directory of the including file
+            
+        Returns:
+            Resolved file path or None
+        """
+        # Try current directory first
+        candidate = current_dir / include
+        if candidate.exists():
+            return str(candidate)
+        
+        # Try parent directories
+        for parent in current_dir.parents:
+            candidate = parent / include
+            if candidate.exists():
+                return str(candidate)
+        
+        return None
 
     async def _delete_from_kb(self, path: str) -> None:
         """Remove all KB entries that originated from `path`."""

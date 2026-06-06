@@ -19,6 +19,128 @@ from typing import Any
 
 
 FIX_TEMPLATES: dict[str, dict[str, dict[str, Any]]] = {
+    # ML016: Missing torch.no_grad() in inference
+    "ML016": {
+        "primary": {
+            "title": "Add torch.no_grad() context",
+            "description": "Wrap inference code with torch.no_grad() to disable gradient computation",
+            "old_code": "# WRONG - Gradients computed during inference\noutputs = model(inputs)  # Stores computation graph",
+            "new_code": "# CORRECT - No gradients during inference\nwith torch.no_grad():\n    outputs = model(inputs)\n# Memory is not retained for backprop",
+            "severity": "HIGH",
+            "line_context": "Wrap inference code with torch.no_grad() to prevent memory accumulation",
+            "risk": "low",
+            "tradeoff": "Simple fix, reduces memory usage by ~50% during inference",
+            "test_recommendation": "Verify memory usage during inference",
+        },
+        "quick_fix": {
+            "title": "Quick fix - wrap single line",
+            "description": "Minimal change to add no_grad context around one line",
+            "old_code": "outputs = model(inputs)",
+            "new_code": "with torch.no_grad():\n    outputs = model(inputs)",
+            "severity": "HIGH",
+            "line_context": "Minimal fix for single prediction call",
+            "risk": "low",
+            "tradeoff": "Quick change, but may need to handle multiple lines",
+            "test_recommendation": "Test inference output",
+        },
+        "refactored": {
+            "title": "Refactored - decorator + inference_mode",
+            "description": "Use decorator pattern for reusable inference context",
+            "old_code": "# Inline no_grad usage\nwith torch.no_grad():\n    outputs = model(inputs)",
+            "new_code": "@torch.no_grad()  # Or @torch.inference_mode() for PyTorch 1.9+\ndef predict(inputs):\n    model.eval()\n    return model(inputs)\n\n# Usage:\noutputs = predict(inputs)",
+            "severity": "MEDIUM",
+            "line_context": "Decorator pattern for cleaner, reusable inference functions",
+            "risk": "medium",
+            "tradeoff": "Better design, reusable across codebase, requires refactoring",
+            "test_recommendation": "Verify decorator is applied consistently",
+        },
+    },
+
+    # ML017: Wrong Loss Function
+    "ML017": {
+        "primary": {
+            "title": "Use correct loss function for task type",
+            "description": "Match loss function to task type (multi-class vs multi-label)",
+            "old_code": "# WRONG - CrossEntropyLoss for multi-label\ncriterion = nn.CrossEntropyLoss()",
+            "new_code": "# CORRECT - BCEWithLogitsLoss for multi-label\ncriterion = nn.BCEWithLogitsLoss()\n# Or for multi-class:\n# criterion = nn.CrossEntropyLoss()",
+            "severity": "CRITICAL",
+            "line_context": "CrossEntropyLoss for multi-class, BCEWithLogitsLoss for multi-label",
+            "risk": "high",
+            "tradeoff": "Critical fix - wrong loss causes training to fail",
+            "test_recommendation": "Verify loss decreases and accuracy improves",
+        },
+        "quick_fix": {
+            "title": "Quick swap CrossEntropy to BCE",
+            "description": "Simple replacement for multi-label tasks",
+            "old_code": "criterion = nn.CrossEntropyLoss()",
+            "new_code": "criterion = nn.BCEWithLogitsLoss()",
+            "severity": "CRITICAL",
+            "line_context": "Direct swap for multi-label classification",
+            "risk": "high",
+            "tradeoff": "Quick fix, but verify target format matches",
+            "test_recommendation": "Check target tensor format (should be 0/1)",
+        },
+        "refactored": {
+            "title": "Refactored - auto-detect loss type",
+            "description": "Add task type detection and loss selection",
+            "old_code": "# Hardcoded loss\ncriterion = nn.CrossEntropyLoss()",
+            "new_code": "def get_loss_function(task_type: str):\n    \"\"\"Get appropriate loss for task type.\"\"\"\n    if task_type == 'multi_class':\n        return nn.CrossEntropyLoss()\n    elif task_type == 'multi_label':\n        return nn.BCEWithLogitsLoss()\n    elif task_type == 'binary':\n        return nn.BCEWithLogitsLoss()\n    else:\n        raise ValueError(f'Unknown task type: {task_type}')\n\ncriterion = get_loss_function(config.task_type)",
+            "severity": "HIGH",
+            "line_context": "Configurable loss selection based on task type",
+            "risk": "medium",
+            "tradeoff": "More flexible, supports multiple task types",
+            "test_recommendation": "Test with different task types",
+        },
+        "ignore": {
+            "title": "Ignore - if intentionally using this loss",
+            "description": "Mark as intentional if task type is correct",
+            "old_code": "# Already correct for multi-class",
+            "new_code": "# CrossEntropyLoss is correct for single-label multi-class\ncriterion = nn.CrossEntropyLoss()",
+            "severity": "MEDIUM",
+            "line_context": "If using single-label classification, CrossEntropyLoss is correct",
+            "risk": "none",
+            "tradeoff": "Acknowledges intentional design if task is single-label",
+            "test_recommendation": "Confirm task is multi-class (not multi-label)",
+        },
+    },
+
+    # ML018: Incomplete Seed Setting
+    "ML018": {
+        "primary": {
+            "title": "Set all random seeds comprehensively",
+            "description": "Set seeds for torch, numpy, random, and CUDA",
+            "old_code": "# WRONG - Only partial seeding\ntorch.manual_seed(42)  # Other sources still random",
+            "new_code": "# CORRECT - Comprehensive seeding\nimport torch, numpy as np, random, os\n\ndef set_seed(seed=42):\n    os.environ['PYTHONHASHSEED'] = str(seed)\n    random.seed(seed)\n    np.random.seed(seed)\n    torch.manual_seed(seed)\n    torch.cuda.manual_seed(seed)\n    torch.cuda.manual_seed_all(seed)\n    if torch.cuda.is_available():\n        torch.backends.cudnn.deterministic = True\n        torch.backends.cudnn.benchmark = False\n\nset_seed(42)",
+            "severity": "HIGH",
+            "line_context": "Set all random sources for reproducibility",
+            "risk": "low",
+            "tradeoff": "Ensures reproducibility across runs",
+            "test_recommendation": "Run twice and verify identical results",
+        },
+        "quick_fix": {
+            "title": "Quick fix - add numpy/random seeds",
+            "description": "Minimal change to add missing seed calls",
+            "old_code": "torch.manual_seed(42)",
+            "new_code": "import numpy as np, random\nrandom.seed(42)\nnp.random.seed(42)\ntorch.manual_seed(42)",
+            "severity": "MEDIUM",
+            "line_context": "Add missing seed calls for numpy and random",
+            "risk": "low",
+            "tradeoff": "Quick fix, partial reproducibility",
+            "test_recommendation": "Test with CUDA disabled first",
+        },
+        "refactored": {
+            "title": "Refactored - environment-based seeding",
+            "description": "Use hash-based seeding from environment for unique runs",
+            "old_code": "# Static seed\ntorch.manual_seed(42)",
+            "new_code": "import hashlib, os\n\ndef get_reproducible_seed(base_seed: int = 42) -> int:\n    \"\"\"Get seed from environment or generate deterministic hash.\"\"\"\n    env_seed = os.getenv('TRAIN_SEED')\n    if env_seed:\n        return int(env_seed)\n    # Generate from system entropy\n    entropy = os.urandom(32)\n    return int(hashlib.sha256(entropy).hexdigest()[:8], 16) % (2**31)\n\nseed = get_reproducible_seed()\nset_seed(seed)",
+            "severity": "MEDIUM",
+            "line_context": "Environment-based seeding for flexibility",
+            "risk": "medium",
+            "tradeoff": "Supports both reproducible and unique runs",
+            "test_recommendation": "Test with TRAIN_SEED set and unset",
+        },
+    },
+
     # ML001: Data Leakage - scaler.fit() before train_test_split
     "ML001": {
         "primary": {

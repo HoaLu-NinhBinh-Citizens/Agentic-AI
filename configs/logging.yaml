@@ -1,0 +1,159 @@
+# Logging Configuration for AI_SUPPORT
+#
+# This configuration controls logging behavior across all components.
+
+version: 1
+disable_existing_loggers: false
+
+# Formatters define the layout of log messages
+formatters:
+  # Standard format with timestamp, name, level, and message
+  standard:
+    format: "%(asctime)s - %(name)s - %(levelname)s - %(message)s"
+    datefmt: "%Y-%m-%d %H:%M:%S"
+
+  # Detailed format with file location for debugging
+  detailed:
+    format: "%(asctime)s - %(name)s - %(levelname)s - %(pathname)s:%(lineno)d - %(message)s"
+    datefmt: "%Y-%m-%d %H:%M:%S"
+
+  # Simple format for console output
+  simple:
+    format: "%(levelname)s - %(message)s"
+
+  # JSON format for structured logging
+  json:
+    class: pythonjsonlogger.jsonlogger.JsonFormatter
+    format: "%(asctime)s %(name)s %(levelname)s %(message)s"
+
+# Handlers define where logs are sent
+handlers:
+  # Console output (stdout)
+  console:
+    class: logging.StreamHandler
+    level: INFO
+    formatter: standard
+    stream: ext://sys.stdout
+
+  # Console output for errors (stderr)
+  console_error:
+    class: logging.StreamHandler
+    level: ERROR
+    formatter: detailed
+    stream: ext://sys.stderr
+
+  # File handler with rotation
+  file:
+    class: logging.handlers.RotatingFileHandler
+    level: DEBUG
+    formatter: detailed
+    filename: logs/ai_support.log
+    maxBytes: 10485760  # 10MB
+    backupCount: 5
+    encoding: utf-8
+
+  # Error-only file handler
+  error_file:
+    class: logging.handlers.RotatingFileHandler
+    level: ERROR
+    formatter: detailed
+    filename: logs/ai_support_errors.log
+    maxBytes: 10485760  # 10MB
+    backupCount: 3
+    encoding: utf-8
+
+# Loggers define which loggers to configure
+loggers:
+  # Root logger configuration
+  root:
+    level: INFO
+    handlers: [console, file]
+
+  # AI_SUPPORT specific loggers
+  ai_support:
+    level: DEBUG
+    handlers: [console, file]
+    propagate: false
+
+  src.application.workflows:
+    level: INFO
+    handlers: [console, file]
+    propagate: false
+
+  src.infrastructure.analysis:
+    level: INFO
+    handlers: [console, file]
+    propagate: false
+
+  src.infrastructure.ml_detectors:
+    level: DEBUG
+    handlers: [console, file]
+    propagate: false
+
+  # Security-sensitive loggers
+  src.infrastructure.security:
+    level: WARNING
+    handlers: [console, error_file]
+    propagate: false
+
+  # Performance logging
+  src.infrastructure.performance:
+    level: INFO
+    handlers: [console, file]
+    propagate: false
+
+  # Session and state management
+  src.core.session:
+    level: INFO
+    handlers: [console, file]
+    propagate: false
+
+  # Hardware and embedded logging
+  src.domain.hardware:
+    level: INFO
+    handlers: [console, file]
+    propagate: false
+
+  # Tool execution logging
+  src.application.tools:
+    level: DEBUG
+    handlers: [console, file]
+    propagate: false
+
+# Third-party library loggers (reduce noise)
+loggers:
+  urllib3:
+    level: WARNING
+    handlers: [console]
+    propagate: false
+
+  requests:
+    level: WARNING
+    handlers: [console]
+    propagate: false
+
+  httpx:
+    level: WARNING
+    handlers: [console]
+    propagate: false
+
+  asyncio:
+    level: WARNING
+    handlers: [console]
+    propagate: false
+
+  # Reduce noise from libraries
+  uvicorn:
+    level: INFO
+    handlers: [console]
+    propagate: false
+
+  uvicorn.access:
+    level: WARNING
+    handlers: [console]
+    propagate: false
+
+# Root logger configuration (catch-all)
+root:
+  level: INFO
+  handlers: [console, file, error_file]

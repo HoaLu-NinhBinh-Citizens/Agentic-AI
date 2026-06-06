@@ -783,7 +783,7 @@ def _init_builtin_rules() -> list[Rule]:
             description="Use of eval() or exec() is a security risk",
             severity=RuleSeverity.WARNING,
             languages=["python", "javascript"],
-            patterns=[r'\beval\s*\('],
+            patterns=[r'\beval\s*\(', r'\bexec\s*\('],
             cwe_id="CWE-95", tags=["security", "dynamic-code"],
             fix_template="Avoid eval/exec",
         ),

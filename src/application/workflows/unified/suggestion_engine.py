@@ -45,7 +45,7 @@ class SuggestionEngine:
         engine = SuggestionEngine()
         options = await engine.generate(finding, context)
         for option in options:
-            print(option.description, option.code_after)
+            print(option.description, option.new_code)
     """
 
     def __init__(self, fix_engine: Any = None) -> None:
@@ -88,8 +88,8 @@ class SuggestionEngine:
             "title": f"Fix: {finding.rule_name}",
             "description": self._generate_description(finding, options),
             "options": [opt.to_dict() for opt in options],
-            "code_before": options[0].code_before if options else "",
-            "code_after": options[0].code_after if options else "",
+            "old_code": options[0].old_code if options else "",
+            "new_code": options[0].new_code if options else "",
             "risk": risk,
             "rule_id": finding.rule_id,
         }
@@ -513,8 +513,8 @@ class SuggestionEngine:
 
         # Take the lowest risk of all options
         risk_levels = {"low": 1, "medium": 2, "high": 3}
-        min_risk = min(options, key=lambda o: risk_levels.get(o.risk_level, 2))
-        return min_risk.risk_level
+        min_risk = min(options, key=lambda o: risk_levels.get(o.risk.value, 2))
+        return min_risk.risk.value
 
     def _generate_description(
         self,

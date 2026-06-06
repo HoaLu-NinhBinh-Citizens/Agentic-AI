@@ -248,34 +248,38 @@ class TestSuggestionEngine:
         """Test FixOption dataclass."""
         # Get the actual FixOption from the suggestion_engine module
         from src.application.workflows.unified.suggestion_engine import FixOption
+        from src.shared.enums.severity import Severity
 
         option = FixOption(
+            id="test-fix-1",
+            title="Test fix",
             description="Test fix",
-            code_before="old_code",
-            code_after="new_code",
-            risk_level="low",
+            old_code="old_code",
+            new_code="new_code",
+            risk=Severity.LOW,
             confidence=0.95,
-            rule_id="TEST001",
         )
 
-        assert option.description == "Test fix"
-        assert option.risk_level == "low"
+        assert option.title == "Test fix"
+        assert option.risk == Severity.LOW
         assert option.confidence == 0.95
 
         # Test to_dict conversion
         option_dict = option.to_dict()
         assert isinstance(option_dict, dict)
-        assert option_dict["description"] == "Test fix"
+        assert option_dict["title"] == "Test fix"
 
     def test_risk_assessment(self):
         """Test risk level assessment for fixes."""
+        from src.application.workflows.unified.suggestion_engine import FixOption
+        from src.shared.enums.severity import Severity
+
         suggestion_engine = SuggestionEngine()
 
         # Test overall risk assessment
-        from src.application.workflows.unified.suggestion_engine import FixOption
         options = [
-            FixOption(description="a", code_before="", code_after="", risk_level="low"),
-            FixOption(description="b", code_before="", code_after="", risk_level="high"),
+            FixOption(id="a", title="a", description="a", old_code="", new_code="", risk=Severity.LOW),
+            FixOption(id="b", title="b", description="b", old_code="", new_code="", risk=Severity.HIGH),
         ]
         risk = suggestion_engine._assess_overall_risk(options)
         assert risk == "low"  # Takes minimum risk

@@ -1,4 +1,10 @@
-"""JSON report generator for CI/CD integration."""
+"""JSON report generator for CI/CD integration.
+
+Produces a structured JSON document conforming to the defined schema:
+- findings: array of finding objects
+- stats: object with files_analyzed, duration_seconds, total_findings
+- metadata: object with timestamp (ISO 8601), version, project_name
+"""
 
 from dataclasses import dataclass, asdict
 from datetime import datetime
@@ -28,6 +34,7 @@ class JSONFinding:
     fixable: bool
     auto_fixable: bool
     risk_level: str
+    code_context: str = ""
 
     @classmethod
     def from_finding(cls, finding: Finding) -> "JSONFinding":
@@ -45,6 +52,7 @@ class JSONFinding:
             fixable=finding.fixable,
             auto_fixable=finding.auto_fixable,
             risk_level=finding.risk_level,
+            code_context=finding.old_code or "",
         )
 
 
@@ -61,19 +69,50 @@ class JSONReportGenerator:
         stats: PipelineStats,
         recommendations: Optional[list[str]] = None,
     ) -> dict[str, Any]:
-        """Generate JSON report."""
+        """Generate JSON report conforming to the standardized schema.
+
+        Schema:
+            - findings: array of finding objects
+            - stats: {files_analyzed, duration_seconds, total_findings}
+            - metadata: {timestamp (ISO 8601), version, project_name}
+        """
         json_findings = [JSONFinding.from_finding(f) for f in findings]
         by_file = self._group_by_file(findings)
         by_severity = self._group_by_severity(findings)
         top3 = self._get_top_3_actionable(findings)
 
         return {
-            "version": self.version,
-            "timestamp": datetime.now().isoformat(),
-            "project": self.project_name,
+            "metadata": {
+                "timestamp": datetime.now().isoformat(),
+                "version": self.version,
+                "project_name": self.project_name,
+            },
+            "stats": {
+                "files_analyzed": stats.files_analyzed,
+                "duration_seconds": round(stats.duration_seconds, 3),
+                "total_findings": len(findings),
+            },
+            "findings": [
+                {
+                    "file": f.file_path,
+                    "line": f.line,
+                    "rule_id": f.rule_id,
+                    "severity": f.severity,
+                    "message": f.message,
+                    "code_context": f.code_context,
+                    "title": f.title,
+                    "description": f.description,
+                    "old_code": f.old_code,
+                    "new_code": f.new_code,
+                    "confidence": f.confidence,
+                    "fixable": f.fixable,
+                    "auto_fixable": f.auto_fixable,
+                    "risk_level": f.risk_level,
+                }
+                for f in json_findings
+            ],
             "summary": self._build_summary(by_severity),
             "top_fixes": self._build_top_fixes(top3),
-            "findings": [asdict(f) for f in json_findings],
             "by_file": self._build_by_file(by_file),
             "statistics": self._build_statistics(findings),
             "recommendations": recommendations or [],

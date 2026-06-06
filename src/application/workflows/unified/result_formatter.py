@@ -110,6 +110,60 @@ class UnifiedPipelineStats:
         
         return stats
 
+    @classmethod
+    def from_findings(
+        cls,
+        findings: list,
+        execution_time_ms: float = 0.0,
+        detectors_used: Optional[list[str]] = None,
+        files_scanned: int = 0,
+    ) -> UnifiedPipelineStats:
+        """Create stats from legacy Finding list (backward compatibility).
+
+        Args:
+            findings: List of legacy Finding objects (detector_base Finding)
+            execution_time_ms: Execution time in milliseconds
+            detectors_used: List of detector names used
+            files_scanned: Number of files scanned
+        """
+        from src.application.workflows.unified.detector_base import FindingSeverity
+
+        stats = cls(
+            execution_time_ms=execution_time_ms,
+            detectors_used=detectors_used or [],
+            files_scanned=files_scanned,
+        )
+
+        stats.total_issues = len(findings)
+
+        severity_counts = {
+            FindingSeverity.ERROR: 0,
+            FindingSeverity.WARNING: 0,
+            FindingSeverity.INFO: 0,
+            FindingSeverity.HINT: 0,
+        }
+
+        for finding in findings:
+            sev = finding.severity
+            severity_counts[sev] = severity_counts.get(sev, 0) + 1
+            stats.issues_by_file[finding.file] = stats.issues_by_file.get(finding.file, 0) + 1
+
+        stats.critical_count = severity_counts[FindingSeverity.ERROR]
+        stats.high_count = severity_counts[FindingSeverity.WARNING]
+        stats.info_count = severity_counts[FindingSeverity.INFO]
+
+        return stats
+
+    @property
+    def findings_count(self) -> int:
+        """Alias for total_issues (backward compatibility)."""
+        return self.total_issues
+
+    @property
+    def errors_count(self) -> int:
+        """Alias for critical_count (backward compatibility)."""
+        return self.critical_count
+
 
 class UnifiedFormatter(ABC):
     """Abstract base class for unified result formatters.
@@ -137,17 +191,20 @@ class UnifiedFormatter(ABC):
     def _group_by_severity(
         self,
         issues: list[ReviewIssue],
-    ) -> dict[Severity, list[ReviewIssue]]:
+    ) -> dict[str, list[ReviewIssue]]:
         """Group issues by severity."""
-        groups: dict[Severity, list[ReviewIssue]] = {
-            Severity.CRITICAL: [],
-            Severity.HIGH: [],
-            Severity.MEDIUM: [],
-            Severity.LOW: [],
-            Severity.INFO: [],
+        groups: dict[str, list[ReviewIssue]] = {
+            "CRITICAL": [],
+            "HIGH": [],
+            "MEDIUM": [],
+            "LOW": [],
+            "INFO": [],
         }
         for issue in issues:
-            groups[issue.severity].append(issue)
+            sev_key = str(issue.severity).upper()
+            if sev_key not in groups:
+                sev_key = issue.severity.value if hasattr(issue.severity, 'value') else str(issue.severity)
+            groups.setdefault(sev_key, []).append(issue)
         return groups
     
     def _group_by_file(
@@ -248,8 +305,14 @@ class UnifiedMarkdownFormatter(UnifiedFormatter):
             lines.extend(self._format_file_breakdown(by_file))
             lines.append("")
         
+        # Top 3 Recommended Actions
+        rec_lines = self.format_recommended_actions(issues, max_actions=3)
+        if rec_lines:
+            lines.append(rec_lines)
+            lines.append("")
+
         return "\n".join(lines)
-    
+
     def _format_summary(self, stats: UnifiedPipelineStats) -> list[str]:
         """Format summary statistics."""
         lines: list[str] = []
@@ -274,15 +337,15 @@ class UnifiedMarkdownFormatter(UnifiedFormatter):
     
     def _get_top_issues(self, issues: list[ReviewIssue]) -> list[ReviewIssue]:
         """Get top actionable issues (critical and high severity, high confidence)."""
-        actionable = [
-            i for i in issues
-            if i.severity in (Severity.CRITICAL, Severity.HIGH)
-            and i.confidence >= 0.7
-        ]
-        # Sort by severity, then confidence, then line number
+        actionable = []
+        for i in issues:
+            sev_str = str(i.severity).upper()
+            if sev_str in ("CRITICAL", "HIGH") and i.confidence >= 0.7:
+                actionable.append(i)
+        # Sort by severity weight, then confidence, then line number
         actionable.sort(
             key=lambda i: (
-                -i.severity.weight,
+                -getattr(i.severity, 'weight', 50),
                 -i.confidence,
                 i.line,
             )
@@ -385,17 +448,11 @@ class UnifiedMarkdownFormatter(UnifiedFormatter):
             by_severity = self._group_by_severity(file_issues)
             
             # Show critical first, then high, etc.
-            severity_order = [
-                Severity.CRITICAL,
-                Severity.HIGH,
-                Severity.MEDIUM,
-                Severity.LOW,
-                Severity.INFO,
-            ]
-            
+            severity_order = ["CRITICAL", "HIGH", "MEDIUM", "LOW", "INFO"]
+
             shown = 0
-            for severity in severity_order:
-                severity_issues = by_severity.get(severity, [])
+            for sev_key in severity_order:
+                severity_issues = by_severity.get(sev_key, [])
                 for issue in severity_issues:
                     if shown >= self.max_issues_per_file:
                         remaining = len(file_issues) - shown
@@ -425,6 +482,97 @@ class UnifiedMarkdownFormatter(UnifiedFormatter):
             return str(Path(file_path).relative_to(Path.cwd()))
         except ValueError:
             return file_path
+    
+    def format_recommended_actions(
+        self,
+        issues: list[ReviewIssue],
+        max_actions: int = 3,
+    ) -> str:
+        """Format Top N Recommended Actions summary.
+
+        This provides actionable, prioritized recommendations based on
+        severity + fixability + confidence scoring.
+
+        Args:
+            issues: List of issues to prioritize
+            max_actions: Maximum number of actions to show (default: 3)
+
+        Returns:
+            Markdown formatted recommended actions section
+        """
+        if not issues:
+            return ""
+
+        # Score each issue: severity_weight * confidence * fixability
+        scored_issues = []
+        for issue in issues:
+            # Severity weight (0-1)
+            severity_score = getattr(issue.severity, 'weight', 50)
+
+            # Confidence score (0-1)
+            confidence_score = issue.confidence
+
+            # Fixability bonus
+            fixability_score = 1.0
+            if issue.is_auto_fixable:
+                fixability_score = 1.5  # 50% bonus for auto-fixable
+            elif issue.is_fixable:
+                fixability_score = 1.2  # 20% bonus for fixable
+
+            # Calculate final score
+            total_score = severity_score * confidence_score * fixability_score
+
+            scored_issues.append((total_score, issue))
+
+        # Sort by score (descending) and take top N
+        scored_issues.sort(key=lambda x: -x[0])
+        top_issues = [issue for _, issue in scored_issues[:max_actions]]
+
+        if not top_issues:
+            return ""
+
+        lines: list[str] = []
+        lines.append("## Top 3 Recommended Actions")
+        lines.append("")
+        lines.append("| Priority | Action | File | Line |")
+        lines.append("|----------|--------|------|------|")
+
+        priority_labels = ["1st", "2nd", "3rd", "4th", "5th"]
+
+        for i, issue in enumerate(top_issues):
+            # Format action description
+            if issue.is_auto_fixable:
+                action = f"Auto-fix: {issue.rule_id}"
+            elif issue.is_fixable:
+                action = f"Review & fix: {issue.rule_id}"
+            else:
+                action = f"Review: {issue.rule_id}"
+
+            # Truncate long messages
+            message = issue.message[:40] + "..." if len(issue.message) > 40 else issue.message
+
+            priority = priority_labels[i] if i < len(priority_labels) else f"#{i+1}"
+            sev_str = str(issue.severity).upper()
+            severity_emoji = {
+                "CRITICAL": "🔴",
+                "HIGH": "🟠",
+                "MEDIUM": "🟡",
+                "LOW": "🔵",
+                "INFO": "⚪",
+            }.get(sev_str, "")
+
+            lines.append(
+                f"| {priority} {severity_emoji} | "
+                f"{action} - {message} | "
+                f"`{Path(issue.file).name}` | "
+                f"`{issue.line}` |"
+            )
+
+        lines.append("")
+        lines.append("> **Tip:** Run `/fix @<filename>` to auto-fix auto-fixable issues")
+        lines.append("")
+
+        return "\n".join(lines)
 
 
 class UnifiedJsonFormatter(UnifiedFormatter):
@@ -577,12 +725,8 @@ def get_formatter(format_type: str) -> UnifiedFormatter:
 # Backward Compatibility Aliases
 # =============================================================================
 
-# Import for backward compatibility
-from src.application.workflows.unified.detector_base import Finding, FindingSeverity
-from src.infrastructure.reporting.markdown_report import PipelineStats as LegacyPipelineStats
-
-# Alias old names to new unified classes
-PipelineStats = LegacyPipelineStats
+# Alias old name to new unified class
+PipelineStats = UnifiedPipelineStats
 MarkdownFormatter = UnifiedMarkdownFormatter  # Old name
 JsonFormatter = UnifiedJsonFormatter
 ConsoleFormatter = UnifiedConsoleFormatter

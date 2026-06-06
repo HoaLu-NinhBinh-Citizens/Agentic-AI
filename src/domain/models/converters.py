@@ -53,7 +53,7 @@ class MLFindingConverter:
     _SEVERITY_MAP = {
         "CRITICAL": Severity.CRITICAL,
         "HIGH": Severity.HIGH,
-        "MEDIUM": Severity.INFO,
+        "MEDIUM": Severity.MEDIUM,
     }
     
     @classmethod
