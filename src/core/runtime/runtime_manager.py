@@ -15,7 +15,7 @@ import logging
 from typing import TYPE_CHECKING, Any
 
 if TYPE_CHECKING:
-    from core.agent.mock_agent import MockAgent
+    from core.agent.real_agent import RealAgent
     from interfaces.server.websocket.client import WebSocketClient
 
 logger = logging.getLogger(__name__)
@@ -40,8 +40,8 @@ class StreamInfo:
 class RuntimeManager:
     """Manages agent runtime lifecycle with cancellation and timeout support."""
 
-    def __init__(self, mock_agent: MockAgent) -> None:
-        self._mock_agent = mock_agent
+    def __init__(self, real_agent: RealAgent) -> None:
+        self._real_agent = real_agent
         self._streams: dict[str, StreamInfo] = {}
 
     async def start(self) -> None:
@@ -79,7 +79,7 @@ class RuntimeManager:
         async def run_stream() -> None:
             try:
                 await asyncio.wait_for(
-                    self._mock_agent.stream_response(
+                    self._real_agent.stream_response(
                         message,
                         send_event,
                         cancellation_event,

@@ -18,9 +18,11 @@ Phase 2B additions:
 
 from __future__ import annotations
 
+import asyncio
 import logging
 import os
 import sys
+import uuid
 from contextlib import asynccontextmanager
 from pathlib import Path
 from typing import Any
@@ -32,6 +34,9 @@ if str(_SRC_DIR) not in sys.path:
 
 from fastapi import FastAPI, HTTPException, WebSocket, WebSocketDisconnect, status
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import JSONResponse
+import time
+from datetime import datetime
 
 from application.orchestration.tool_execution.config import get_tool_execution_config
 from application.orchestration.tool_execution.service import ToolExecutionService
@@ -107,17 +112,17 @@ async def lifespan(app: FastAPI):
     runtime_manager = RuntimeManager(real_agent)
     await runtime_manager.start()
 
-    # Initialize MCP manager
+    # Initialize MCP manager (non-blocking with timeout)
     mcp_manager = MCPClientManager(config_path="configs/mcp/servers.yaml")
     try:
-        await mcp_manager.initialize()
+        await asyncio.wait_for(mcp_manager.initialize(), timeout=15.0)
         logger.info(
             "MCP client manager ready",
             servers=len(mcp_manager._servers),
             tools=len(mcp_manager._global_tools),
         )
-    except RuntimeError as e:
-        logger.warning("MCP initialization failed: %s", str(e))
+    except (RuntimeError, asyncio.TimeoutError, Exception) as e:
+        logger.warning("MCP initialization skipped: %s", str(e))
         mcp_manager = None
 
     # Set MCP manager in session manager for tool execution
@@ -130,7 +135,7 @@ async def lifespan(app: FastAPI):
         session_manager=session_manager,
         connection_manager=connection_manager,
         runtime_manager=runtime_manager,
-        mock_agent=mock_agent,
+        real_agent=real_agent,
         tool_execution_service=tool_execution_service,
     )
     app.state.mcp_manager = mcp_manager
@@ -530,6 +535,63 @@ async def handle_tool_call(
         trace_id=trace_id,
         broadcast_callback=broadcast_callback,
     )
+
+
+# ============================================
+# AI Configuration & Test Endpoints
+# ============================================
+
+
+@app.get("/api/ai/config/status")
+async def get_ai_config_status() -> dict[str, Any]:
+    """Get AI provider configuration status."""
+    server_state = get_state()
+    status = server_state.real_agent.get_configuration_status()
+
+    # Check Ollama availability
+    ollama_available = False
+    ollama_url = os.getenv("OLLAMA_BASE_URL", "http://localhost:11434")
+    try:
+        import aiohttp
+
+        async with aiohttp.ClientSession() as session:
+            async with session.get(
+                f"{ollama_url}/api/tags", timeout=aiohttp.ClientTimeout(total=2)
+            ) as resp:
+                ollama_available = resp.status == 200
+    except Exception:
+        ollama_available = False
+
+    return {
+        "configured": status.get("configured", False),
+        "active_provider": status.get("active_provider"),
+        "providers": status.get("providers", {}),
+        "ollama_available": ollama_available,
+        "environment": {
+            "OPENAI_API_KEY": bool(os.getenv("OPENAI_API_KEY")),
+            "ANTHROPIC_API_KEY": bool(os.getenv("ANTHROPIC_API_KEY")),
+            "OLLAMA_BASE_URL": ollama_url,
+        },
+        "suggestions": status.get("suggestions", []),
+    }
+
+
+@app.post("/api/ai/test")
+async def test_ai_connection(body: dict[str, Any] | None = None) -> dict[str, Any]:
+    """Test AI provider connection with a simple prompt."""
+    server_state = get_state()
+
+    test_prompt = "Respond with: AI_SUPPORT is working."
+    if body and "prompt" in body:
+        test_prompt = body["prompt"]
+
+    result = await server_state.real_agent.generate_response(
+        message=test_prompt,
+        session_id="test_session",
+        trace_id=f"test_{uuid.uuid4().hex[:8]}",
+    )
+
+    return result
 
 
 if __name__ == "__main__":
