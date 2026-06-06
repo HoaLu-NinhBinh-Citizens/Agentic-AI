@@ -22,7 +22,7 @@ servers:
       - "@modelcontextprotocol/server-filesystem"
       - "C:\\Users\\thang\\Desktop"
     transport: "stdio"
-    enabled: true
+    enabled: false
 
   # Git server - provides git operations
   - name: "git"

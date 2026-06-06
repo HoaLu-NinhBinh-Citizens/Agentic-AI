@@ -112,18 +112,23 @@ async def lifespan(app: FastAPI):
     runtime_manager = RuntimeManager(real_agent)
     await runtime_manager.start()
 
-    # Initialize MCP manager (non-blocking with timeout)
-    mcp_manager = MCPClientManager(config_path="configs/mcp/servers.yaml")
-    try:
-        await asyncio.wait_for(mcp_manager.initialize(), timeout=15.0)
-        logger.info(
-            "MCP client manager ready",
-            servers=len(mcp_manager._servers),
-            tools=len(mcp_manager._global_tools),
-        )
-    except (RuntimeError, asyncio.TimeoutError, Exception) as e:
-        logger.warning("MCP initialization skipped: %s", str(e))
-        mcp_manager = None
+    # Initialize MCP manager (skip if config not found)
+    mcp_manager = None
+    mcp_config_path = Path("configs/mcp/servers.yaml")
+    if mcp_config_path.exists():
+        mcp_manager = MCPClientManager(config_path=str(mcp_config_path))
+        try:
+            await asyncio.wait_for(mcp_manager.initialize(), timeout=15.0)
+            logger.info(
+                "MCP client manager ready",
+                servers=len(mcp_manager._servers),
+                tools=len(mcp_manager._global_tools),
+            )
+        except (RuntimeError, asyncio.TimeoutError, Exception) as e:
+            logger.warning("MCP initialization skipped: %s", str(e))
+            mcp_manager = None
+    else:
+        logger.info("MCP config not found, skipping MCP initialization")
 
     # Set MCP manager in session manager for tool execution
     session_manager.set_mcp_manager(mcp_manager)
