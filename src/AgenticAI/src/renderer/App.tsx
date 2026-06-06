@@ -12,6 +12,9 @@ import { TerminalPanel } from './components/TerminalPanel';
 import { GitPanel } from './components/GitPanel';
 import { SearchPanel } from './components/SearchPanel';
 import { NexusLanding } from './components/NexusLanding';
+import { ProcessPanel, ProcessLog } from './components/ProcessPanel';
+import { InlineDiffView, DiffHunk } from './components/InlineDiffView';
+import { TitleBar } from './components/TitleBar';
 import { useAppStore } from './store/useAppStore';
 
 const App: React.FC = () => {
@@ -28,6 +31,8 @@ const App: React.FC = () => {
   } = useAppStore();
 
   const [isCommandPaletteOpen, setCommandPaletteOpen] = useState(false);
+  const [processes, setProcesses] = useState<ProcessLog[]>([]);
+  const [diffHunks, setDiffHunks] = useState<DiffHunk[]>([]);
 
   // Global keyboard shortcuts
   useEffect(() => {
@@ -51,6 +56,23 @@ const App: React.FC = () => {
     window.addEventListener('keydown', handleKeyDown);
     return () => window.removeEventListener('keydown', handleKeyDown);
   }, [isTerminalOpen, setTerminalOpen]);
+
+  // Diff hunk handlers
+  const handleAcceptHunk = (id: string) => {
+    setDiffHunks(prev => prev.map(h => h.id === id ? { ...h, status: 'accepted' as const } : h));
+  };
+
+  const handleRejectHunk = (id: string) => {
+    setDiffHunks(prev => prev.map(h => h.id === id ? { ...h, status: 'rejected' as const } : h));
+  };
+
+  const handleAcceptAll = () => {
+    setDiffHunks(prev => prev.map(h => ({ ...h, status: 'accepted' as const })));
+  };
+
+  const handleRejectAll = () => {
+    setDiffHunks(prev => prev.map(h => ({ ...h, status: 'rejected' as const })));
+  };
 
   const renderSidebarContent = () => {
     switch (activeSidebarView) {
@@ -88,7 +110,18 @@ const App: React.FC = () => {
           )}
         </div>
         <div className="right-panels">
-          <TaskPanel />
+          <ProcessPanel 
+            processes={processes}
+            onClear={() => setProcesses([])}
+          />
+          <InlineDiffView
+            hunks={diffHunks}
+            onAcceptHunk={handleAcceptHunk}
+            onRejectHunk={handleRejectHunk}
+            onAcceptAll={handleAcceptAll}
+            onRejectAll={handleRejectAll}
+            onViewAll={() => {}}
+          />
           <ChatPanel />
         </div>
         <StatusBar />
@@ -98,6 +131,7 @@ const App: React.FC = () => {
 
   return (
     <div className="app-container">
+      <TitleBar />
       {renderMainContent()}
 
       {/* Modals - Always render, visible when isLandingVisible is false */}

@@ -304,6 +304,141 @@ def _fix_attribute_error(error: CompileError, content: str) -> Optional[CompileF
     return None
 
 
+def _fix_runtime_warning(error: CompileError, content: str) -> Optional[CompileFix]:
+    """Fix RuntimeWarning — commonly 'coroutine was never awaited'."""
+    msg = error.message
+
+    # "coroutine 'X' was never awaited"
+    match = re.search(r"coroutine '(\w+)' was never awaited", msg)
+    if match:
+        func_name = match.group(1)
+        lines = content.split("\n") if content else []
+        # Find the line with the call and suggest adding await
+        if error.line > 0 and error.line <= len(lines):
+            original_line = lines[error.line - 1]
+            # Find the function call in the line
+            call_match = re.search(rf'\b{re.escape(func_name)}\s*\(', original_line)
+            if call_match:
+                indent = len(original_line) - len(original_line.lstrip())
+                new_line = original_line[:call_match.start()] + "await " + original_line[call_match.start():]
+                return CompileFix(
+                    error=error,
+                    fix_description=f"Add 'await' before '{func_name}()' (async function not awaited)",
+                    old_code=original_line.strip(),
+                    new_code=new_line.strip(),
+                    confidence=0.9,
+                )
+        return CompileFix(
+            error=error,
+            fix_description=f"Add 'await' before calling '{func_name}()' — it's a coroutine.",
+            new_code=f"await {func_name}(...)",
+            confidence=0.85,
+        )
+
+    return None
+
+
+def _fix_unused_variable(error: CompileError, content: str) -> Optional[CompileFix]:
+    """Fix unused variable warnings (from ruff/pylint F841)."""
+    msg = error.message
+
+    # Ruff: "Local variable 'X' is assigned to but never used"
+    match = re.search(r"[Ll]ocal variable '(\w+)'.* never used", msg)
+    if not match:
+        # pylint style
+        match = re.search(r"Unused variable '(\w+)'", msg)
+    if match:
+        var_name = match.group(1)
+        lines = content.split("\n") if content else []
+        if error.line > 0 and error.line <= len(lines):
+            original_line = lines[error.line - 1]
+            # Replace variable name with _ prefix
+            new_line = original_line.replace(var_name, f"_{var_name}", 1)
+            return CompileFix(
+                error=error,
+                fix_description=f"Prefix unused variable '{var_name}' with '_' or remove assignment",
+                old_code=original_line.strip(),
+                new_code=new_line.strip(),
+                confidence=0.85,
+            )
+
+    return None
+
+
+def _fix_return_type_mismatch(error: CompileError, content: str) -> Optional[CompileFix]:
+    """Fix return type annotation mismatch (from mypy/pyright)."""
+    msg = error.message
+
+    # mypy: 'Incompatible return value type (got "X", expected "Y")'
+    match = re.search(
+        r'[Ii]ncompatible return.*got "([^"]+)".*expected "([^"]+)"', msg
+    )
+    if match:
+        got_type = match.group(1)
+        expected_type = match.group(2)
+        # Suggest updating the annotation to Union
+        return CompileFix(
+            error=error,
+            fix_description=(
+                f"Return type mismatch: returns '{got_type}' but annotated as '{expected_type}'. "
+                f"Update annotation to '{expected_type} | {got_type}' or fix the return value."
+            ),
+            new_code=f"-> {expected_type} | {got_type}:",
+            confidence=0.75,
+        )
+
+    # pyright: "Expression of type X cannot be assigned to return type Y"
+    match = re.search(
+        r'type "([^"]+)" cannot be assigned to.*type "([^"]+)"', msg
+    )
+    if match:
+        actual = match.group(1)
+        expected = match.group(2)
+        return CompileFix(
+            error=error,
+            fix_description=f"Type '{actual}' incompatible with '{expected}'. Update annotation or fix return.",
+            confidence=0.7,
+        )
+
+    return None
+
+
+def _fix_missing_await(error: CompileError, content: str) -> Optional[CompileFix]:
+    """Fix missing await (from ruff/pylint async rules)."""
+    msg = error.message.lower()
+
+    # Various patterns for unawaited coroutines
+    if "not awaited" in msg or "missing await" in msg:
+        lines = content.split("\n") if content else []
+        if error.line > 0 and error.line <= len(lines):
+            original_line = lines[error.line - 1]
+            # Simple fix: prepend await
+            stripped = original_line.lstrip()
+            indent = original_line[:len(original_line) - len(stripped)]
+
+            # Check if it's an assignment: x = func()
+            assign_match = re.match(r'(\w+)\s*=\s*(.+)', stripped)
+            if assign_match:
+                var, expr = assign_match.group(1), assign_match.group(2)
+                return CompileFix(
+                    error=error,
+                    fix_description=f"Add 'await' to async call",
+                    old_code=stripped,
+                    new_code=f"{var} = await {expr}",
+                    confidence=0.9,
+                )
+            else:
+                return CompileFix(
+                    error=error,
+                    fix_description=f"Add 'await' to async call",
+                    old_code=stripped,
+                    new_code=f"await {stripped}",
+                    confidence=0.85,
+                )
+
+    return None
+
+
 def _generic_fix(error: CompileError, content: str) -> Optional[CompileFix]:
     """Generic fix attempt based on error message patterns."""
     return CompileFix(
@@ -321,6 +456,16 @@ _FIX_HANDLERS = {
     "TypeError": _fix_type_error,
     "SyntaxError": _fix_syntax_error,
     "AttributeError": _fix_attribute_error,
+    "RuntimeWarning": _fix_runtime_warning,
+    # Ruff/pylint codes for unused variables
+    "F841": _fix_unused_variable,
+    "W0612": _fix_unused_variable,
+    # Type mismatch errors
+    "return-value": _fix_return_type_mismatch,
+    "assignment": _fix_return_type_mismatch,
+    # Async-related
+    "async": _fix_missing_await,
+    "unawaited": _fix_missing_await,
 }
 
 
