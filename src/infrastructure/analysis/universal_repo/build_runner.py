@@ -24,7 +24,6 @@ from .models import (
     CompilerError,
     DependencyResult,
     IterativeBuildResult,
-    PipelineProgressEvent,
     ProjectProfile,
     DEFAULT_BUILD_TIMEOUT_SECONDS,
 )
@@ -143,33 +142,37 @@ class BuildRunner:
         profile: ProjectProfile,
         progress_sink: StreamSink | None = None,
     ) -> BuildResult:
-        """Execute build and capture errors.
+        """Execute build and capture errors with real-time output streaming.
 
         Runs the build command as a subprocess with configurable timeout.
         Parses stdout/stderr for compiler errors via ErrorParser.
+        Streams build output lines in real-time via PipelineProgressEmitter.
 
         Args:
             repo_path: Root path of the repository.
             profile: Detected project profile with build tool information.
-            progress_sink: Optional sink for streaming progress events.
+            progress_sink: Optional sink for streaming build output in real-time.
 
         Returns:
             A BuildResult indicating the outcome of the build.
 
-        Requirements: 4.2, 4.3, 4.4, 4.6
+        Requirements: 4.2, 4.3, 4.4, 4.5, 4.6, 10.3
         """
+        from .progress_emitter import PipelineProgressEmitter
+
+        emitter = PipelineProgressEmitter(sink=progress_sink)
+        emitter.start_phase("build")
+
         build_command = self.construct_build_command(profile)
         tool_name = profile.build_tools[0].name.lower()
         compiler = _TOOL_TO_COMPILER.get(tool_name, "gcc")
 
         start_time = time.perf_counter()
 
-        if progress_sink:
-            await progress_sink.emit(PipelineProgressEvent(
-                phase="build",
-                progress_percent=0.0,
-                message=f"Starting build: {' '.join(build_command.command)}",
-            ))
+        await emitter.emit_build_progress(
+            output_line=f"Starting build: {' '.join(build_command.command)}",
+            phase="starting",
+        )
 
         try:
             process = await asyncio.create_subprocess_exec(
@@ -217,13 +220,12 @@ class BuildRunner:
                     raw_output=partial_output,
                 )
 
-                if progress_sink:
-                    await progress_sink.emit(PipelineProgressEvent(
-                        phase="build",
-                        progress_percent=100.0,
-                        message="Build timed out",
-                        data={"timeout_seconds": build_command.timeout_seconds},
-                    ))
+                await emitter.emit_build_progress(
+                    output_line=(
+                        f"Build timed out after {build_command.timeout_seconds}s"
+                    ),
+                    phase="timeout",
+                )
 
                 return BuildResult(
                     success=False,
@@ -245,6 +247,10 @@ class BuildRunner:
                 message=f"Build command not found: {build_command.command[0]}",
                 compiler=compiler,
             )
+            await emitter.emit_build_progress(
+                output_line=f"Command not found: {build_command.command[0]}",
+                phase="error",
+            )
             return BuildResult(
                 success=False,
                 errors=[not_found_error],
@@ -258,6 +264,15 @@ class BuildRunner:
         stdout_text = stdout_bytes.decode(errors="replace")
         stderr_text = stderr_bytes.decode(errors="replace")
         combined_output = stdout_text + stderr_text
+
+        # Stream output lines in real-time via emitter
+        if emitter.has_sink:
+            for line in combined_output.splitlines():
+                if line.strip():
+                    await emitter.emit_build_progress(
+                        output_line=line,
+                        phase="compiling",
+                    )
 
         # Parse compiler errors from output
         errors: list[CompilerError] = []
@@ -277,17 +292,23 @@ class BuildRunner:
 
         success = process.returncode == 0
 
-        if progress_sink:
-            await progress_sink.emit(PipelineProgressEvent(
-                phase="build",
-                progress_percent=100.0,
-                message="Build complete" if success else "Build failed",
-                data={
-                    "return_code": process.returncode,
-                    "error_count": len(errors),
-                    "warning_count": len(warnings),
-                },
-            ))
+        # Emit build phase completion
+        await emitter.emit_build_progress(
+            output_line="Build complete" if success else "Build failed",
+            phase="complete",
+        )
+
+        phase_duration_ms = emitter.get_phase_duration_ms("build")
+        await emitter.emit_phase_complete(
+            phase="build",
+            summary={
+                "success": success,
+                "return_code": process.returncode,
+                "error_count": len(errors),
+                "warning_count": len(warnings),
+            },
+            duration_ms=phase_duration_ms,
+        )
 
         return BuildResult(
             success=success,

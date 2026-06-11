@@ -1,0 +1,24 @@
+{
+  "$schema": "https://app.kilo.ai/config.json",
+  "model": "custom/qwen2.5-coder:7b",
+  "provider": {
+    "custom": {
+      "baseURL": "http://localhost:11434/v1",
+      "apiKey": "",
+      "models": {
+        "qwen2.5-coder:7b": {
+          "name": "Qwen 2.5 Coder 7B",
+          "system": "Bạn là một trợ lý AI chuyên viết câu trả lời dài, chi tiết, không tự giới hạn độ dài. Hãy viết đầy đủ nội dung, có thể lên đến vài nghìn từ nếu cần.",
+          "tool_call": true,
+          "limit": {
+            "context": 32768,
+            "output": 10
+          },
+          "options": {
+            "num_predict": 32768
+          }
+        }
+      }
+    }
+  }
+}

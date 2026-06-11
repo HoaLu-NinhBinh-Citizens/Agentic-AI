@@ -291,7 +291,23 @@ class UniversalRuleEngine(RuleEngine):
         profile: ProjectProfile,
         progress_sink: "StreamSink | None" = None,
     ) -> list[Finding]:
-        """Analyze all project files with progress streaming."""
+        """Analyze all project files with progress streaming.
+
+        Uses PipelineProgressEmitter to emit analysis progress including
+        files analyzed count, findings count, and current file being analyzed.
+
+        Args:
+            repo_path: Root path of the repository.
+            profile: Detected project profile.
+            progress_sink: Optional sink for streaming progress events.
+
+        Requirements: 3.1, 3.6, 10.2
+        """
+        from .progress_emitter import PipelineProgressEmitter
+
+        emitter = PipelineProgressEmitter(sink=progress_sink)
+        emitter.start_phase("analysis")
+
         self.load_rules_for_profile(profile)
 
         files_to_analyze = self._collect_files(repo_path)
@@ -306,65 +322,26 @@ class UniversalRuleEngine(RuleEngine):
             file_findings = await self.analyze_file(file_path, language)
             all_findings.extend(file_findings)
 
-            # Emit progress periodically
-            if progress_sink and (idx + 1) % PROGRESS_EMIT_INTERVAL == 0:
-                await self._emit_progress(
-                    progress_sink, idx + 1, total_files, all_findings
+            # Emit progress periodically with current file info
+            if emitter.has_sink and (idx + 1) % PROGRESS_EMIT_INTERVAL == 0:
+                await emitter.emit_analysis_progress(
+                    files_analyzed=idx + 1,
+                    findings_count=len(all_findings),
+                    current_file=str(file_path.relative_to(repo_path)),
                 )
 
-        # Emit completion event
-        if progress_sink:
-            await self._emit_completion(progress_sink, total_files, all_findings)
+        # Emit phase completion
+        duration_ms = emitter.get_phase_duration_ms("analysis")
+        await emitter.emit_phase_complete(
+            phase="analysis",
+            summary={
+                "files_analyzed": total_files,
+                "findings_count": len(all_findings),
+            },
+            duration_ms=duration_ms,
+        )
 
         return self._deduplicate_findings(all_findings)
-
-    # ─── Progress Emission ────────────────────────────────────────────────────
-
-    async def _emit_progress(
-        self,
-        sink: "StreamSink",
-        files_done: int,
-        total_files: int,
-        findings: list[Finding],
-    ) -> None:
-        """Emit an analysis progress event."""
-        from .models import PipelineProgressEvent
-
-        progress_pct = (files_done / total_files) * 100.0 if total_files > 0 else 0.0
-        event = PipelineProgressEvent(
-            phase="analysis",
-            progress_percent=progress_pct,
-            message=f"Analyzed {files_done}/{total_files} files, "
-                    f"{len(findings)} findings",
-            data={
-                "files_analyzed": files_done,
-                "total_files": total_files,
-                "findings_count": len(findings),
-            },
-        )
-        await sink.emit(event)
-
-    async def _emit_completion(
-        self,
-        sink: "StreamSink",
-        total_files: int,
-        findings: list[Finding],
-    ) -> None:
-        """Emit an analysis completion event."""
-        from .models import PipelineProgressEvent
-
-        event = PipelineProgressEvent(
-            phase="analysis",
-            progress_percent=100.0,
-            message=f"Analysis complete: {len(findings)} findings "
-                    f"in {total_files} files",
-            data={
-                "files_analyzed": total_files,
-                "total_files": total_files,
-                "findings_count": len(findings),
-            },
-        )
-        await sink.emit(event)
 
     # ─── AST Rule Execution ───────────────────────────────────────────────────
 

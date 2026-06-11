@@ -66,8 +66,11 @@ async def run_iterative_fix_cycle(
 
     Requirements: 7.1, 7.2, 7.3, 7.4, 7.5
     """
-    from .models import BuildResult, PipelineProgressEvent
+    from .models import BuildResult
+    from .progress_emitter import PipelineProgressEmitter
 
+    emitter = PipelineProgressEmitter(sink=progress_sink)
+    emitter.start_phase("fix")
     fix_generator = FixGenerator(llm_provider=None)
 
     all_patches_applied: list[FixPatch] = []
@@ -95,20 +98,12 @@ async def run_iterative_fix_cycle(
 
     # Step 3: Iterative fix cycle
     for iteration in range(1, max_iterations + 1):
-        if progress_sink:
-            await progress_sink.emit(PipelineProgressEvent(
-                phase="fix",
-                progress_percent=(iteration / max_iterations) * 100,
-                message=(
-                    f"Iteration {iteration}/{max_iterations}: "
-                    f"attempting to fix {len(previous_errors)} error(s)"
-                ),
-                data={
-                    "iteration": iteration,
-                    "max_iterations": max_iterations,
-                    "errors_count": len(previous_errors),
-                },
-            ))
+        await emitter.emit_fix_cycle_status(
+            iteration=iteration,
+            max_iterations=max_iterations,
+            errors_fixed=len(all_errors_resolved),
+            errors_remaining=len(previous_errors),
+        )
 
         # 3a-b: For each error, generate fix suggestions
         iteration_patches: list[FixPatch] = []
@@ -173,20 +168,25 @@ async def run_iterative_fix_cycle(
         if rebuild_result.success:
             all_errors_resolved.extend(previous_errors)
 
-            if progress_sink:
-                await progress_sink.emit(PipelineProgressEvent(
-                    phase="fix",
-                    progress_percent=100.0,
-                    message=(
-                        f"All errors resolved after {iteration} iteration(s). "
-                        f"{len(all_patches_applied)} patch(es) applied."
-                    ),
-                    data={
-                        "iteration": iteration,
-                        "patches_applied": len(all_patches_applied),
-                        "errors_resolved": len(all_errors_resolved),
-                    },
-                ))
+            await emitter.emit_fix_cycle_status(
+                iteration=iteration,
+                max_iterations=max_iterations,
+                errors_fixed=len(all_errors_resolved),
+                errors_remaining=0,
+            )
+
+            # Emit phase completion
+            duration_ms = emitter.get_phase_duration_ms("fix")
+            await emitter.emit_phase_complete(
+                phase="fix",
+                summary={
+                    "iterations_run": iteration,
+                    "patches_applied": len(all_patches_applied),
+                    "errors_resolved": len(all_errors_resolved),
+                    "final_success": True,
+                },
+                duration_ms=duration_ms,
+            )
 
             return IterativeBuildResult(
                 final_success=True,
@@ -204,37 +204,34 @@ async def run_iterative_fix_cycle(
         all_errors_resolved.extend(resolved)
         previous_errors = current_errors
 
-        if progress_sink:
-            await progress_sink.emit(PipelineProgressEvent(
-                phase="fix",
-                progress_percent=(iteration / max_iterations) * 100,
-                message=(
-                    f"Iteration {iteration} complete: "
-                    f"{len(resolved)} error(s) resolved, "
-                    f"{len(current_errors)} remaining"
-                ),
-                data={
-                    "iteration": iteration,
-                    "errors_resolved_this_iteration": len(resolved),
-                    "errors_remaining": len(current_errors),
-                },
-            ))
+        await emitter.emit_fix_cycle_status(
+            iteration=iteration,
+            max_iterations=max_iterations,
+            errors_fixed=len(all_errors_resolved),
+            errors_remaining=len(current_errors),
+        )
 
     # Step 4: Max iterations reached — report remaining errors
-    if progress_sink:
-        await progress_sink.emit(PipelineProgressEvent(
-            phase="fix",
-            progress_percent=100.0,
-            message=(
-                f"Max iterations ({max_iterations}) reached. "
-                f"{len(previous_errors)} error(s) remain."
-            ),
-            data={
-                "max_iterations_reached": True,
-                "errors_remaining": len(previous_errors),
-                "patches_applied": len(all_patches_applied),
-            },
-        ))
+    await emitter.emit_fix_cycle_status(
+        iteration=max_iterations,
+        max_iterations=max_iterations,
+        errors_fixed=len(all_errors_resolved),
+        errors_remaining=len(previous_errors),
+    )
+
+    # Emit phase completion
+    duration_ms = emitter.get_phase_duration_ms("fix")
+    await emitter.emit_phase_complete(
+        phase="fix",
+        summary={
+            "iterations_run": max_iterations,
+            "max_iterations_reached": True,
+            "errors_remaining": len(previous_errors),
+            "patches_applied": len(all_patches_applied),
+            "final_success": False,
+        },
+        duration_ms=duration_ms,
+    )
 
     return IterativeBuildResult(
         final_success=False,

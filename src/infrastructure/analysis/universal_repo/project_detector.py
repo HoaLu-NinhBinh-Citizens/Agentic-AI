@@ -15,6 +15,8 @@ import os
 from datetime import datetime, timezone
 from pathlib import Path
 
+from typing import TYPE_CHECKING
+
 from .models import (
     BuildToolInfo,
     Framework,
@@ -33,6 +35,9 @@ from ._framework_detection import (
     detect_rust_frameworks,
 )
 from ._build_tool_detection import detect_build_tools_at_root
+
+if TYPE_CHECKING:
+    from . import StreamSink
 
 # ─── Named Constants ─────────────────────────────────────────────────────────
 
@@ -224,16 +229,30 @@ class ProjectDetector:
 
     # ─── Detection ───────────────────────────────────────────────────────────
 
-    async def detect(self, repo_path: Path) -> ProjectProfile:
+    async def detect(
+        self,
+        repo_path: Path,
+        progress_sink: "StreamSink | None" = None,
+    ) -> ProjectProfile:
         """Full detection producing a complete ProjectProfile.
 
-        Requirements: 1.2, 2.1, 9.1, 9.2
+        Args:
+            repo_path: Root path of the repository to detect.
+            progress_sink: Optional sink for streaming detection progress events.
+
+        Requirements: 1.2, 2.1, 9.1, 9.2, 10.1
         """
+        from .progress_emitter import PipelineProgressEmitter
+
+        emitter = PipelineProgressEmitter(sink=progress_sink)
+
         cached = self.get_cached_profile(repo_path)
         if cached is not None:
             return cached
 
-        languages = await self.detect_languages(repo_path)
+        emitter.start_phase("detection")
+
+        languages = await self._detect_languages_with_progress(repo_path, emitter)
         frameworks = await self.detect_frameworks(repo_path, languages)
         build_tools = await self.detect_build_tools(repo_path)
 
@@ -255,7 +274,77 @@ class ProjectDetector:
         )
 
         self._store_in_cache(repo_path, profile)
+
+        # Emit phase completion
+        duration_ms = emitter.get_phase_duration_ms("detection")
+        await emitter.emit_phase_complete(
+            phase="detection",
+            summary={
+                "primary_language": languages.primary_language,
+                "languages_detected": len(languages.languages),
+                "frameworks_detected": len(frameworks),
+                "build_tools_detected": len(build_tools),
+                "confidence": confidence,
+            },
+            duration_ms=duration_ms,
+        )
+
         return profile
+
+    async def _detect_languages_with_progress(
+        self,
+        repo_path: Path,
+        emitter: "PipelineProgressEmitter",
+    ) -> LanguageDistribution:
+        """Scan file extensions with progress emission during scanning."""
+        file_counts: dict[str, int] = {}
+        loc_counts: dict[str, int] = {}
+        files_scanned = 0
+        source_files = self._collect_source_files(repo_path)
+        total_files = len(source_files)
+
+        for file_path in source_files:
+            if files_scanned >= MAX_SCAN_FILES:
+                break
+
+            language = self._detect_file_language(file_path)
+            if language is None:
+                files_scanned += 1
+                # Emit progress every 50 files during scanning
+                if files_scanned % 50 == 0:
+                    await emitter.emit_detection_progress(
+                        files_scanned=files_scanned,
+                        total_files=total_files,
+                        phase="language",
+                    )
+                continue
+
+            file_counts[language] = file_counts.get(language, 0) + 1
+            line_count = await self._count_lines(file_path)
+            loc_counts[language] = loc_counts.get(language, 0) + line_count
+            files_scanned += 1
+
+            # Emit progress every 50 files during scanning
+            if files_scanned % 50 == 0:
+                await emitter.emit_detection_progress(
+                    files_scanned=files_scanned,
+                    total_files=total_files,
+                    phase="language",
+                )
+
+        # Emit final scan progress
+        await emitter.emit_detection_progress(
+            files_scanned=files_scanned,
+            total_files=total_files,
+            phase="language",
+        )
+
+        self._apply_marker_detection(repo_path, file_counts, loc_counts)
+
+        if not file_counts:
+            return LanguageDistribution(primary_language="unknown", languages={})
+
+        return self._build_distribution(file_counts, loc_counts)
 
     async def detect_languages(self, repo_path: Path) -> LanguageDistribution:
         """Scan file extensions, shebangs, and markers to detect languages."""

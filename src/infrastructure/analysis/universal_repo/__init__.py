@@ -35,7 +35,9 @@ from .models import (
 )
 from .error_parser import ErrorParser, create_error_parser
 from .fix_generator import FixGenerator, FileContext
+from .progress_emitter import PipelineProgressEmitter
 from .rule_engine import UniversalRuleEngine, UniversalRule
+from .pipeline import PipelineResult, run_pipeline
 
 
 # ─── Component Protocols ─────────────────────────────────────────────────────
@@ -123,6 +125,10 @@ __all__ = [
     "create_error_parser",
     "FixGenerator",
     "FileContext",
+    "PipelineProgressEmitter",
     "UniversalRuleEngine",
     "UniversalRule",
+    # Pipeline
+    "PipelineResult",
+    "run_pipeline",
 ]

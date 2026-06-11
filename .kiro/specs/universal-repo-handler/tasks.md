@@ -208,7 +208,7 @@ This plan implements the Universal Repo Handler as a multi-language pipeline ext
     - Test no-confident-fix threshold behavior
     - _Requirements: 6.2, 6.3, 6.5, 6.6_
 
-- [ ] 12. Implement Iterative Build-Fix Cycle
+- [x] 12. Implement Iterative Build-Fix Cycle
   - [x] 12.1 Implement `run_iterative_fix_cycle()` with max 3 iterations
     - Wire `BuildRunner` → `ErrorParser` → `FixGenerator` → apply patches → rebuild loop
     - Apply only patches with confidence > 0.7 automatically
@@ -217,47 +217,47 @@ This plan implements the Universal Repo Handler as a multi-language pipeline ext
     - Report remaining errors with all attempted fixes when max iterations reached
     - _Requirements: 7.1, 7.2, 7.3, 7.4, 7.5_
 
-  - [-] 12.2 Write unit tests for iterative build-fix cycle
+  - [x] 12.2 Write unit tests for iterative build-fix cycle
     - Test cycle terminates after 3 iterations max
     - Test only high-confidence fixes are applied
     - Test success reporting when all errors resolved
     - Test remaining errors reporting after max iterations
     - _Requirements: 7.1, 7.2, 7.3, 7.4, 7.5_
 
-- [ ] 13. Implement WebSocket Progress Streaming
-  - [-] 13.1 Create PipelineProgressEmitter extending existing StreamEvent model
+- [x] 13. Implement WebSocket Progress Streaming
+  - [x] 13.1 Create PipelineProgressEmitter extending existing StreamEvent model
     - Create `src/infrastructure/analysis/universal_repo/progress_emitter.py`
     - Extend `StreamEvent` from `src/core/streaming/stream.py`
     - Implement `emit_detection_progress()`, `emit_analysis_progress()`, `emit_build_progress()`, `emit_phase_complete()`
     - _Requirements: 10.1, 10.2, 10.3, 10.4_
 
-  - [~] 13.2 Wire progress streaming into detection, analysis, and build phases
+  - [x] 13.2 Wire progress streaming into detection, analysis, and build phases
     - Add `progress_sink` parameter to `ProjectDetector.detect()`, `UniversalRuleEngine.analyze_project()`, `BuildRunner.run_build()`
     - Emit progress during file scanning, rule analysis, and build output streaming
     - Emit status updates during iterative fix cycle (iteration number, errors fixed, errors remaining)
     - _Requirements: 4.5, 7.6, 10.1, 10.2, 10.3, 10.4_
 
-  - [~] 13.3 Write unit tests for progress streaming
+  - [x] 13.3 Write unit tests for progress streaming
     - Test events emitted during detection phase
     - Test events emitted during build output streaming
     - Test completion events include summary and duration
     - _Requirements: 10.1, 10.2, 10.3, 10.4_
 
-- [ ] 14. Integration — Wire full pipeline together
-  - [~] 14.1 Create pipeline orchestrator wiring all phases
+- [x] 14. Integration — Wire full pipeline together
+  - [x] 14.1 Create pipeline orchestrator wiring all phases
     - Create `src/infrastructure/analysis/universal_repo/pipeline.py`
     - Implement full pipeline: detect → analyze → build → parse → fix → iterate → report
     - Expose as single entry point accepting a repository path
     - Wire cache, progress streaming, and all components
     - _Requirements: 1.1, 2.1, 3.1, 4.1, 5.6, 6.1, 7.1, 9.1, 10.1_
 
-  - [~] 14.2 Write integration tests for full pipeline
+  - [x] 14.2 Write integration tests for full pipeline
     - Test pipeline end-to-end with a minimal test repository
     - Test pipeline handles missing build tool gracefully
     - Test pipeline reports results with all errors, fixes, and outcomes
     - _Requirements: 1.1, 4.1, 7.4, 7.5_
 
-- [~] 15. Final checkpoint — Ensure all tests pass
+- [x] 15. Final checkpoint — Ensure all tests pass
   - Ensure all tests pass, ask the user if questions arise.
 
 ## Notes
