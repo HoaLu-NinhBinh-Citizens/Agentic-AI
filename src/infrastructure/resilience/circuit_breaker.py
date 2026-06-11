@@ -201,6 +201,9 @@ class CircuitBreaker:
                 
                 # Only retry if transient and haven't exhausted retries
                 if self._is_transient_failure(e) and attempt < self.max_retries:
+                    # W-009 backoff: previously documented but never slept,
+                    # so retries hammered the failing server back-to-back.
+                    await asyncio.sleep(self.base_backoff * (2**attempt))
                     continue
                 else:
                     # Non-transient or max retries reached

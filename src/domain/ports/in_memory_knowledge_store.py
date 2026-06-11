@@ -106,6 +106,15 @@ class InMemoryKnowledgeStore(KnowledgeStore):
         self._entries.pop(entry_id, None)
         self._embeddings.pop(entry_id, None)
 
+    async def delete_by_source(self, source: str) -> int:
+        """Delete all entries originating from a source (e.g. file path)."""
+        await self.initialize()
+        matching = [eid for eid, e in self._entries.items() if e.source == source]
+        for entry_id in matching:
+            self._entries.pop(entry_id, None)
+            self._embeddings.pop(entry_id, None)
+        return len(matching)
+
     async def count(self) -> int:
         """Get entry count."""
         await self.initialize()

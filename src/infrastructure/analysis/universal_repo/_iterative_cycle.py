@@ -140,6 +140,10 @@ async def run_iterative_fix_cycle(
             )
 
         # 3d: Apply high-confidence patches
+        # Snapshot touched files first so a regressive iteration (rebuild
+        # produces MORE errors than before) can be rolled back instead of
+        # leaving the workspace in a worse state than we found it.
+        iteration_snapshot = _snapshot_files(repo_path, high_confidence)
         applied, failed = _apply_patches(repo_path, high_confidence)
         all_patches_applied.extend(applied)
         all_patches_failed.extend(failed)
@@ -198,8 +202,32 @@ async def run_iterative_fix_cycle(
                 build_results=all_build_results,
             )
 
-        # 3g: Track resolved vs remaining errors
+        # 3g: Detect regression — patches that increase the error count made
+        # the build worse, so restore the pre-iteration file state and stop.
         current_errors = rebuild_result.errors
+        if len(current_errors) > len(previous_errors):
+            logger.warning(
+                "Iteration %d: error count regressed (%d -> %d), rolling back patches",
+                iteration,
+                len(previous_errors),
+                len(current_errors),
+            )
+            _restore_files(iteration_snapshot)
+            for patch in applied:
+                if patch in all_patches_applied:
+                    all_patches_applied.remove(patch)
+            all_patches_failed.extend(applied)
+            return IterativeBuildResult(
+                final_success=False,
+                iterations_run=iteration,
+                errors_resolved=all_errors_resolved,
+                errors_remaining=previous_errors,
+                patches_applied=all_patches_applied,
+                patches_failed=all_patches_failed,
+                build_results=all_build_results,
+            )
+
+        # Track resolved vs remaining errors
         resolved = _find_resolved_errors(previous_errors, current_errors)
         all_errors_resolved.extend(resolved)
         previous_errors = current_errors
@@ -245,6 +273,45 @@ async def run_iterative_fix_cycle(
 
 
 # ─── Private Helpers ─────────────────────────────────────────────────────────
+
+
+def _snapshot_files(
+    repo_path: Path, patches: list[FixPatch]
+) -> dict[Path, str | None]:
+    """Capture original content of every file a patch batch will touch.
+
+    None marks a file that did not exist at snapshot time.
+    """
+    snapshot: dict[Path, str | None] = {}
+    for patch in patches:
+        if not patch.file_path:
+            continue
+        file_path = Path(patch.file_path)
+        if not file_path.is_absolute():
+            file_path = repo_path / file_path
+        if file_path in snapshot:
+            continue
+        try:
+            snapshot[file_path] = (
+                file_path.read_text(encoding="utf-8", errors="replace")
+                if file_path.exists()
+                else None
+            )
+        except OSError:
+            snapshot[file_path] = None
+    return snapshot
+
+
+def _restore_files(snapshot: dict[Path, str | None]) -> None:
+    """Restore files to their snapshotted content (rollback)."""
+    for file_path, content in snapshot.items():
+        try:
+            if content is None:
+                file_path.unlink(missing_ok=True)
+            else:
+                file_path.write_text(content, encoding="utf-8")
+        except OSError:
+            logger.warning("Rollback failed to restore %s", file_path)
 
 
 def _build_file_context(repo_path: Path, error: CompilerError) -> FileContext:
@@ -350,6 +417,13 @@ def _apply_patches(
             )
         except (OSError, IOError):
             logger.debug("Cannot write patched file: %s", patch.file_path)
+            # A failed write may have truncated the file — restore original
+            try:
+                file_path.write_text(content, encoding="utf-8")
+            except OSError:
+                logger.warning(
+                    "Could not restore %s after failed patch write", patch.file_path
+                )
             failed.append(patch)
 
     return applied, failed

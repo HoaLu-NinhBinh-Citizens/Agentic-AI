@@ -359,13 +359,24 @@ class EditSession:
                     if await self._fs.exists(block.file_path) else ""
                 )
 
+        # Expected on-disk content per file, updated as blocks write — used to
+        # detect external modification between snapshot and write (TOCTOU).
+        disk_expectations: dict[str, str] = dict(original_snapshots)
+
         for block in self._blocks:
             if block.status != EditStatus.PENDING:
                 continue
 
-            result = await self._apply_one(block, dry_run=dry_run,
-                                           original_snapshot=original_snapshots.get(block.file_path))
+            result = await self._apply_one(
+                block,
+                dry_run=dry_run,
+                original_snapshot=original_snapshots.get(block.file_path),
+                expected_disk_content=disk_expectations.get(block.file_path),
+            )
             results.append(result)
+
+            if result.status in (EditStatus.APPLIED, EditStatus.CREATED):
+                disk_expectations[block.file_path] = block.new_content
 
             if result.status == EditStatus.CONFLICTED and strategy == ConflictStrategy.ABORT_ALL:
                 # Stop processing remaining blocks
@@ -400,6 +411,7 @@ class EditSession:
         block: EditBlock,
         dry_run: bool,
         original_snapshot: str | None = None,
+        expected_disk_content: str | None = None,
     ) -> EditResult:
         """Apply a single block with conflict detection."""
         # Use pre-snapshotted content if provided; otherwise read current state
@@ -422,6 +434,23 @@ class EditSession:
         if dry_run:
             block.status = EditStatus.PENDING  # unchanged
             return EditResult(block_id=block.id, status=EditStatus.PENDING)
+
+        # Re-check disk state just before writing: an external edit (user
+        # typing, another process) between snapshot and write would otherwise
+        # be silently overwritten.
+        if expected_disk_content is not None:
+            actual = (
+                await self._fs.read(block.file_path)
+                if await self._fs.exists(block.file_path) else ""
+            )
+            if actual != expected_disk_content:
+                block.status = EditStatus.CONFLICTED
+                block.error = "conflict: file_changed_externally"
+                return EditResult(
+                    block_id=block.id,
+                    status=EditStatus.CONFLICTED,
+                    conflict_type="file_changed_externally",
+                )
 
         # Use original snapshot for rollback so we revert to the pre-session state
         block.rollback_content = original_snapshot if original_snapshot is not None else current

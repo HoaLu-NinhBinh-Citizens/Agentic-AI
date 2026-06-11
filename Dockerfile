@@ -24,10 +24,12 @@ RUN pip install -e .
 RUN useradd -m appuser && chown -R appuser:appuser /app
 USER appuser
 
-# Default command
-CMD ["python", "-m", "src.interfaces.cli.main", "review", "/workspace"]
+# Run the FastAPI server (the primary product surface).
+# Port 8080 matches the docker-compose ai-support port mapping.
+ENV PORT=8080
+CMD ["python", "-m", "uvicorn", "interfaces.server.main:app", "--host", "0.0.0.0", "--port", "8080"]
 
-# Expose port for API (if needed)
+# Expose port for API
 EXPOSE 8080
 
 # Volume for persistent data

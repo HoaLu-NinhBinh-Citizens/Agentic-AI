@@ -203,11 +203,15 @@ class FileWatcher:
             self._pending_changes.pop(key, None)
             return
 
-        # Track pending change
+        # Track pending change for observers that poll get_pending_changes()
         self._pending_changes[key] = change
 
-        # Batch process after interval
-        # In real implementation, this would use a timer
+        # Process now: per-path debouncing already happened in
+        # FileChangeHandler (0.5s window), so this does not storm on rapid
+        # saves. Previously modified/created events were queued forever and
+        # the on_change callback never fired for them.
+        self._process_change(change)
+        self._pending_changes.pop(key, None)
 
     def _process_change(self, change: FileChange):
         """Process a single file change."""

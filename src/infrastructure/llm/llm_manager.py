@@ -405,8 +405,9 @@ class LLMManager:
     def __init__(self, config: Optional[LLMConfig] = None):
         self.config = config or LLMConfig()
         self._provider: Optional[BaseLLMProvider] = None
+        self._breaker = None
         self._init_provider()
-    
+
     def _init_provider(self) -> None:
         """Initialize the provider based on config."""
         if self.config.provider == ModelProvider.OPENAI:
@@ -417,6 +418,22 @@ class LLMManager:
             self._provider = OllamaProvider(self.config)
         else:
             raise ValueError(f"Unknown provider: {self.config.provider}")
+        self._init_breaker()
+
+    def _init_breaker(self) -> None:
+        """Wrap non-streaming LLM calls in a circuit breaker so a dead or
+        flapping provider fails fast instead of stacking long timeouts."""
+        try:
+            from ..resilience.circuit_breaker import CircuitBreaker
+
+            self._breaker = CircuitBreaker(
+                name=f"llm:{self.config.provider.value}",
+                failure_threshold=5,
+                window_seconds=60.0,
+                timeout_seconds=30.0,
+            )
+        except Exception:  # pragma: no cover - resilience module unavailable
+            self._breaker = None
     
     def switch_provider(self, provider: ModelProvider, **kwargs) -> None:
         """Switch to a different provider."""
@@ -436,15 +453,25 @@ class LLMManager:
         if system:
             messages.append(Message(role="system", content=system))
         messages.append(Message(role="user", content=prompt))
-        
-        return await self._provider.generate(messages, **kwargs)
-    
+
+        return await self._protected_generate(messages, **kwargs)
+
     async def chat(
         self,
         messages: list[Message],
         **kwargs,
     ) -> LLMResponse:
         """Chat with messages."""
+        return await self._protected_generate(messages, **kwargs)
+
+    async def _protected_generate(
+        self, messages: list[Message], **kwargs
+    ) -> LLMResponse:
+        """Provider call routed through the circuit breaker when available."""
+        if self._breaker is not None:
+            return await self._breaker.call(
+                self._provider.generate, messages, **kwargs
+            )
         return await self._provider.generate(messages, **kwargs)
     
     async def stream(

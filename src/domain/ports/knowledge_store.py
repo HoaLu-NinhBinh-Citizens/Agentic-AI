@@ -79,6 +79,21 @@ class KnowledgeStore(ABC):
         pass
 
     @abstractmethod
+    async def delete_by_source(self, source: str) -> int:
+        """Delete all entries that originated from a given source.
+
+        Used by the incremental indexer to replace a file's chunks on
+        re-index and to purge chunks of deleted files.
+
+        Args:
+            source: Source identifier (e.g. file path) stored on the entry.
+
+        Returns:
+            Number of entries deleted.
+        """
+        pass
+
+    @abstractmethod
     async def count(self) -> int:
         """Get total number of entries in the store.
 

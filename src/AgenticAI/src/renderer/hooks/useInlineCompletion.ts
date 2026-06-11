@@ -54,7 +54,12 @@ export function useInlineCompletion(
 
     const provider = {
       // Monaco calls this to get inline completions
-      provideInlineCompletions: async (model: any, position: any) => {
+      provideInlineCompletions: async (
+        model: any,
+        position: any,
+        _context: any,
+        token: any
+      ) => {
         try {
           // Build prefix (text before cursor) and suffix (text after)
           const offset = model.getOffsetAt(position);
@@ -73,8 +78,13 @@ export function useInlineCompletion(
             return { items: [] };
           }
 
-          // Check cache
-          const cacheKey = hashString(prefix.slice(-200) + '|' + suffix.slice(0, 100));
+          // Check cache. The key MUST include file + cursor position:
+          // a text-only hash can resurface a completion generated for a
+          // different location and insert it at the wrong position.
+          const fileKey = model.uri?.toString?.() ?? '';
+          const cacheKey =
+            `${fileKey}|${language}|${position.lineNumber}:${position.column}|` +
+            hashString(prefix.slice(-200) + '|' + suffix.slice(0, 100));
           if (cacheRef.current.has(cacheKey)) {
             const cached = cacheRef.current.get(cacheKey)!;
             return makeCompletionResult(cached, position, monaco);
@@ -87,6 +97,12 @@ export function useInlineCompletion(
             debounceMs
           );
 
+          // Drop stale responses: Monaco cancels the token when the cursor
+          // moved or the document changed while we were waiting on the LLM.
+          if (token?.isCancellationRequested) {
+            return { items: [] };
+          }
+
           if (!completion) {
             return { items: [] };
           }
@@ -96,7 +112,9 @@ export function useInlineCompletion(
           // Limit cache size
           if (cacheRef.current.size > 100) {
             const firstKey = cacheRef.current.keys().next().value;
-            cacheRef.current.delete(firstKey);
+            if (firstKey !== undefined) {
+              cacheRef.current.delete(firstKey);
+            }
           }
 
           return makeCompletionResult(completion, position, monaco);

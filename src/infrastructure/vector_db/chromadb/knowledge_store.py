@@ -174,6 +174,28 @@ class ChromaDBKnowledgeStore(KnowledgeStore):
         self._memory_store.pop(entry_id, None)
         self._memory_embeddings.pop(entry_id, None)
 
+    async def delete_by_source(self, source: str) -> int:
+        """Delete all entries originating from a source (e.g. file path)."""
+        await self.initialize()
+        deleted = 0
+        if self._collection is not None:
+            try:
+                existing = self._collection.get(where={"source": source})
+                ids = existing.get("ids", []) if existing else []
+                if ids:
+                    self._collection.delete(ids=ids)
+                    deleted += len(ids)
+            except Exception as e:
+                logger.warning("ChromaDB delete_by_source error: %s", e)
+        matching = [
+            eid for eid, e in self._memory_store.items() if e.source == source
+        ]
+        for entry_id in matching:
+            self._memory_store.pop(entry_id, None)
+            self._memory_embeddings.pop(entry_id, None)
+        deleted += len(matching)
+        return deleted
+
     async def count(self) -> int:
         """Get total entry count."""
         await self.initialize()

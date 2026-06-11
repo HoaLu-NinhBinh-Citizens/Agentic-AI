@@ -393,7 +393,15 @@ class ASTPatchEngine:
             return self._basic_syntax_check(content, language)
 
         try:
-            parser.parse(content.encode("utf-8"))
+            tree = parser.parse(content.encode("utf-8"))
+            # tree-sitter does not raise on bad input — it produces a tree
+            # containing ERROR nodes, so has_error is the actual verdict.
+            if tree.root_node.has_error:
+                logger.debug(
+                    "Syntax validation failed: parse tree contains errors (%s)",
+                    language,
+                )
+                return False
             return True
         except Exception as e:
             logger.debug("Syntax validation failed: %s", e)
@@ -408,7 +416,12 @@ class ASTPatchEngine:
                 return True
             except SyntaxError:
                 return False
-        # For other languages, assume valid
+        # No parser available for this language: we cannot actually
+        # validate, so pass — but record that validation was skipped
+        # rather than silently claiming the syntax is correct.
+        logger.warning(
+            "Syntax validation skipped for %s: no parser available", language
+        )
         return True
 
     def generate_diff(self, old_content: str, new_content: str) -> str:

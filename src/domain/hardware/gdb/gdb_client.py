@@ -254,25 +254,34 @@ class GDBClient:
         return await self._receive_packet()
     
     async def _receive_packet(self) -> str:
-        """Receive GDB RSP packet."""
+        """Receive GDB RSP packet.
+
+        Every read is bounded by self.timeout and checked for EOF: a server
+        that dies mid-packet previously left the read-until-# loop spinning
+        forever (no EOF check), hanging the caller indefinitely.
+        """
         # Read until $
         while True:
-            data = await self._reader.read(1)
+            data = await asyncio.wait_for(self._reader.read(1), timeout=self.timeout)
             if data == self.PACKET_START:
                 break
             if not data:
                 raise GDBError("Connection closed")
-        
+
         # Read until #
         packet_data = b""
         while True:
-            data = await self._reader.read(1)
+            data = await asyncio.wait_for(self._reader.read(1), timeout=self.timeout)
             if data == self.PACKET_END:
                 break
+            if not data:
+                raise GDBError("Connection closed mid-packet")
             packet_data += data
-        
+
         # Read checksum
-        checksum = await self._reader.read(2)
+        checksum = await asyncio.wait_for(self._reader.read(2), timeout=self.timeout)
+        if not checksum or len(checksum) < 2:
+            raise GDBError("Connection closed reading checksum")
         
         # Verify checksum
         calc_sum = sum(packet_data) % 256

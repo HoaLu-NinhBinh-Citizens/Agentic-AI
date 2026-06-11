@@ -60,6 +60,10 @@ LOG_LEVEL = os.getenv("LOG_LEVEL", "INFO")
 
 RATE_LIMIT_CHAT_MAX = 5
 RATE_LIMIT_CHAT_WINDOW = 10.0
+# Clients that disconnect without calling the delete-session API would
+# otherwise leak one limiter per session forever (8h+ uptime hazard).
+RATE_LIMITER_IDLE_TTL_SECONDS = 1800.0
+RATE_LIMITER_PRUNE_INTERVAL_SECONDS = 60.0
 
 
 class ServerState:
@@ -78,16 +82,36 @@ class ServerState:
         self.runtime_manager = runtime_manager
         self.real_agent = real_agent
         self.tool_execution_service = tool_execution_service
-        self._rate_limiters: dict[str, SlidingWindowRateLimiter] = {}
+        # session_id -> (limiter, last_used monotonic timestamp)
+        self._rate_limiters: dict[str, tuple[SlidingWindowRateLimiter, float]] = {}
+        self._last_prune: float = 0.0
 
     def get_rate_limiter(self, session_id: str) -> SlidingWindowRateLimiter:
         """Get or create rate limiter for a session."""
-        if session_id not in self._rate_limiters:
-            self._rate_limiters[session_id] = SlidingWindowRateLimiter(
-                max_requests=RATE_LIMIT_CHAT_MAX,
-                window_seconds=RATE_LIMIT_CHAT_WINDOW,
-            )
-        return self._rate_limiters[session_id]
+        now = time.monotonic()
+        self._prune_idle_rate_limiters(now)
+        existing = self._rate_limiters.get(session_id)
+        limiter = existing[0] if existing else SlidingWindowRateLimiter(
+            max_requests=RATE_LIMIT_CHAT_MAX,
+            window_seconds=RATE_LIMIT_CHAT_WINDOW,
+        )
+        self._rate_limiters[session_id] = (limiter, now)
+        return limiter
+
+    def _prune_idle_rate_limiters(self, now: float) -> None:
+        """Drop limiters for sessions idle past the TTL (leak prevention)."""
+        if now - self._last_prune < RATE_LIMITER_PRUNE_INTERVAL_SECONDS:
+            return
+        self._last_prune = now
+        expired = [
+            sid
+            for sid, (_, last_used) in self._rate_limiters.items()
+            if now - last_used > RATE_LIMITER_IDLE_TTL_SECONDS
+        ]
+        for sid in expired:
+            self._rate_limiters.pop(sid, None)
+        if expired:
+            logger.debug("Pruned %d idle rate limiters", len(expired))
 
     def clear_rate_limiter(self, session_id: str) -> None:
         """Clear rate limiter for a session."""
@@ -136,6 +160,21 @@ async def lifespan(app: FastAPI):
     # Create tool execution service
     tool_execution_service = ToolExecutionService(session_manager)
 
+    # Optional: live workspace indexing (file watcher + incremental indexer).
+    # Off by default — requires Ollama for embeddings; enable explicitly.
+    indexing_service = None
+    if os.getenv("AI_SUPPORT_ENABLE_INDEXING", "0") == "1":
+        try:
+            from src.infrastructure.indexing.service import IndexingService
+
+            workspace = Path(os.getenv("AI_SUPPORT_WORKSPACE", ".")).resolve()
+            indexing_service = IndexingService(workspace=workspace)
+            await indexing_service.start()
+            logger.info("Workspace indexing enabled for %s", workspace)
+        except Exception as e:
+            logger.warning("Workspace indexing failed to start: %s", e)
+            indexing_service = None
+
     app.state.server_state = ServerState(
         session_manager=session_manager,
         connection_manager=connection_manager,
@@ -144,6 +183,7 @@ async def lifespan(app: FastAPI):
         tool_execution_service=tool_execution_service,
     )
     app.state.mcp_manager = mcp_manager
+    app.state.indexing_service = indexing_service
 
     logger.info(
         "AI_support Phase 2B server started. "
@@ -154,6 +194,8 @@ async def lifespan(app: FastAPI):
     yield
 
     logger.info("Shutting down AI_support Phase 2B server...")
+    if indexing_service is not None:
+        await indexing_service.stop()
     await session_manager.close()
     await runtime_manager.stop()
     await connection_manager.close_all_for_session("*")

@@ -42,7 +42,9 @@ export class AIService {
   private openai: OpenAI | null = null;
   private anthropic: Anthropic | null = null;
   private config: AIConfig | null = null;
-  private abortController: AbortController | null = null;
+  // One controller per in-flight request: aborting one request (e.g. a stale
+  // inline completion) must not kill unrelated concurrent requests.
+  private activeControllers = new Set<AbortController>();
 
   initialize(config: AIConfig): void {
     this.config = config;
@@ -60,28 +62,40 @@ export class AIService {
 
   async chat(
     messages: ChatMessage[],
-    onChunk?: (chunk: StreamChunk) => void
+    onChunk?: (chunk: StreamChunk) => void,
+    signal?: AbortSignal
   ): Promise<AIResponse> {
     if (!this.config) {
       throw new Error('AI service not initialized');
     }
 
-    this.abortController?.abort();
-    this.abortController = new AbortController();
-
-    if (this.config.provider === 'ollama') {
-      return this.chatWithOllama(messages, onChunk);
-    } else if (this.config.provider === 'openai' && this.openai) {
-      return this.chatWithOpenAI(messages, onChunk);
-    } else if (this.config.provider === 'anthropic' && this.anthropic) {
-      return this.chatWithAnthropic(messages, onChunk);
+    const controller = new AbortController();
+    if (signal) {
+      if (signal.aborted) {
+        controller.abort();
+      } else {
+        signal.addEventListener('abort', () => controller.abort(), { once: true });
+      }
     }
+    this.activeControllers.add(controller);
 
-    throw new Error('No AI provider initialized');
+    try {
+      if (this.config.provider === 'ollama') {
+        return await this.chatWithOllama(messages, controller.signal, onChunk);
+      } else if (this.config.provider === 'openai' && this.openai) {
+        return await this.chatWithOpenAI(messages, controller.signal, onChunk);
+      } else if (this.config.provider === 'anthropic' && this.anthropic) {
+        return await this.chatWithAnthropic(messages, controller.signal, onChunk);
+      }
+      throw new Error('No AI provider initialized');
+    } finally {
+      this.activeControllers.delete(controller);
+    }
   }
 
   private async chatWithOllama(
     messages: ChatMessage[],
+    signal: AbortSignal,
     onChunk?: (chunk: StreamChunk) => void
   ): Promise<AIResponse> {
     const model = this.config?.ollamaModel || 'codellama';
@@ -116,7 +130,7 @@ export class AIService {
         fullContent += chunk;
         onChunk({ content: chunk, done: false });
       } : undefined,
-      this.abortController?.signal
+      signal
     );
 
     if (onChunk) {
@@ -128,19 +142,23 @@ export class AIService {
 
   private async chatWithOpenAI(
     messages: ChatMessage[],
+    signal: AbortSignal,
     onChunk?: (chunk: StreamChunk) => void
   ): Promise<AIResponse> {
     if (!this.openai) throw new Error('OpenAI not initialized');
 
     const model = this.config?.openaiModel || 'gpt-4';
 
-    const stream = await this.openai.chat.completions.create({
-      model,
-      messages: messages as unknown as OpenAI.Chat.ChatCompletionMessageParam[],
-      temperature: this.config?.ollamaTemperature ?? 0.7,
-      max_tokens: 4096,
-      stream: true,
-    });
+    const stream = await this.openai.chat.completions.create(
+      {
+        model,
+        messages: messages as unknown as OpenAI.Chat.ChatCompletionMessageParam[],
+        temperature: this.config?.ollamaTemperature ?? 0.7,
+        max_tokens: 4096,
+        stream: true,
+      },
+      { signal }
+    );
 
     let fullContent = '';
 
@@ -159,6 +177,7 @@ export class AIService {
 
   private async chatWithAnthropic(
     messages: ChatMessage[],
+    signal: AbortSignal,
     onChunk?: (chunk: StreamChunk) => void
   ): Promise<AIResponse> {
     if (!this.anthropic) throw new Error('Anthropic not initialized');
@@ -173,13 +192,16 @@ export class AIService {
     }));
 
     // Use the messages property via type assertion
-    const messagesStream = (this.anthropic as any).messages.stream({
-      model: this.config?.anthropicModel || 'claude-3-5-sonnet-20241022',
-      max_tokens: 4096,
-      temperature: this.config?.ollamaTemperature ?? 0.7,
-      system: systemMessage?.content,
-      messages: anthropicMessages,
-    });
+    const messagesStream = (this.anthropic as any).messages.stream(
+      {
+        model: this.config?.anthropicModel || 'claude-3-5-sonnet-20241022',
+        max_tokens: 4096,
+        temperature: this.config?.ollamaTemperature ?? 0.7,
+        system: systemMessage?.content,
+        messages: anthropicMessages,
+      },
+      { signal }
+    );
 
     let fullContent = '';
 
@@ -196,7 +218,10 @@ export class AIService {
   }
 
   cancel(): void {
-    this.abortController?.abort();
+    for (const controller of this.activeControllers) {
+      controller.abort();
+    }
+    this.activeControllers.clear();
   }
 
   isInitialized(): boolean {

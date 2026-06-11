@@ -175,21 +175,23 @@ class TestWearLevelingMonitor:
     @pytest.mark.asyncio
     async def test_wear_warning(self, monitor):
         """Test wear warning generation."""
-        # Simulate high wear (85% of 100000 cycles)
-        for _ in range(85000):
-            await monitor.record_erase(7)
-        
+        # Seed wear just below the target, then record one real erase.
+        # record_erase commits a SQLite transaction per call, so looping
+        # 85000 times took tens of minutes and looked like a hung suite.
+        monitor._stats[7] = SectorStats(sector_index=7, erase_count=84999)
+        await monitor.record_erase(7)  # -> 85000 = 85% of 100000 cycles
+
         warnings = await monitor.get_wear_warnings()
         assert len(warnings) == 1
         assert warnings[0].severity == "warning"
-    
+
     @pytest.mark.asyncio
     async def test_critical_wear_warning(self, monitor):
         """Test critical wear warning."""
-        # Simulate critical wear (96% of 100000 cycles)
-        for _ in range(96000):
-            await monitor.record_erase(8)
-        
+        # Same seeding approach as test_wear_warning (avoid 96000 commits)
+        monitor._stats[8] = SectorStats(sector_index=8, erase_count=95999)
+        await monitor.record_erase(8)  # -> 96000 = 96% of 100000 cycles
+
         warnings = await monitor.get_wear_warnings()
         assert len(warnings) == 1
         assert warnings[0].severity == "critical"

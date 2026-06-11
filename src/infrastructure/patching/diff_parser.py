@@ -285,41 +285,102 @@ class UnifiedDiffParser:
         return "\n".join(content_lines)
 
 
+def _hunk_old_lines(hunk: DiffHunk) -> list[tuple[bool, str]]:
+    """(is_context, text) for lines the hunk expects in the original.
+
+    A bare empty string is treated as a blank context line: LLM- and
+    editor-generated diffs frequently emit blank context lines without the
+    leading space.
+    """
+    old_lines: list[tuple[bool, str]] = []
+    for line in hunk.lines:
+        if line == "":
+            old_lines.append((True, ""))
+        elif line.startswith(" "):
+            old_lines.append((True, line[1:]))
+        elif line.startswith("-"):
+            old_lines.append((False, line[1:]))
+    return old_lines
+
+
+def _matches_at(
+    content: list[str],
+    expected: list[tuple[bool, str]],
+    pos: int,
+    strict_removed: bool,
+) -> bool:
+    """Check whether the hunk's expected lines fit content at `pos`.
+
+    Context lines must match exactly. Removed lines may differ (LLM diffs
+    often paraphrase the line being deleted) — unless the hunk has no
+    context at all, in which case removed lines anchor the position and
+    must match exactly to avoid deleting arbitrary content.
+    """
+    if pos < 0 or pos + len(expected) > len(content):
+        return False
+    for offset, (is_context, text) in enumerate(expected):
+        if (is_context or strict_removed) and content[pos + offset] != text:
+            return False
+    return True
+
+
+def _find_hunk_anchor(
+    content: list[str], old_lines: list[tuple[bool, str]], declared: int
+) -> Optional[int]:
+    """Locate where the hunk's old lines actually appear in content.
+
+    Prefers the declared position; otherwise relocates to the nearest match
+    (handles off-by-N hunk headers without risking corruption).
+    Returns None when no position matches.
+    """
+    # Without any context line, removed lines are the only anchor and must
+    # match exactly; with context, the context anchors the position.
+    strict_removed = not any(is_context for is_context, _ in old_lines)
+
+    if _matches_at(content, old_lines, declared, strict_removed):
+        return declared
+
+    n = len(old_lines)
+    candidates = [
+        i
+        for i in range(0, len(content) - n + 1)
+        if _matches_at(content, old_lines, i, strict_removed)
+    ]
+    if not candidates:
+        return None
+    return min(candidates, key=lambda i: abs(i - declared))
+
+
 def _apply_single_hunk(content: list[str], hunk: DiffHunk) -> list[str]:
     """Apply a single hunk to content lines.
 
-    Unified diff apply algorithm:
-    1. Add content[:old_start-1] (lines before hunk)
-    2. For each hunk line:
-       - '-' (removed): skip from original (don't add)
-       - '+' (added): add to result
-       - ' ' (context): copy from original (unchanged lines to keep)
-    3. Skip any remaining old lines (in case of mismatches)
-    4. Add content[old_end:] (lines after hunk)
-
-    The key is that context lines (' ') represent unchanged content that
-    should be copied from the original, while +/- represent changes.
+    The hunk's expected original lines (context + removals) must match the
+    file content — at the declared position or, failing that, at the nearest
+    exact match elsewhere in the file. A hunk whose original lines cannot be
+    found raises ValueError instead of being force-applied, because silently
+    clamping bounds corrupts files when LLM-generated hunk headers are off.
     """
     if not hunk.lines:
         return content
 
-    # Calculate positions (convert to 0-based)
-    old_start = hunk.old_start - 1
-    old_end = old_start + hunk.old_count
+    old_lines = _hunk_old_lines(hunk)
+    declared = max(hunk.old_start - 1, 0)
 
-    # Validate bounds
-    if old_start < 0:
-        old_start = 0
-    if old_end > len(content):
-        old_end = len(content)
+    if not old_lines:
+        # Pure-insertion hunk: nothing to validate against, keep declared position
+        anchor = min(declared, len(content))
+    else:
+        anchor = _find_hunk_anchor(content, old_lines, declared)
+        if anchor is None:
+            raise ValueError(
+                f"Hunk @@ -{hunk.old_start},{hunk.old_count} @@ does not match "
+                f"file content: expected lines not found "
+                f"(first expected line: {old_lines[0][1]!r})"
+            )
 
-    # Add lines before the hunk
-    result = content[:old_start]
+    result = content[:anchor]
+    orig_idx = anchor
 
-    # Track position in original content
-    orig_idx = old_start
-
-    # Process hunk lines
     for line in hunk.lines:
         if line.startswith("-"):
             # Removed line - skip from original
@@ -327,18 +388,13 @@ def _apply_single_hunk(content: list[str], hunk: DiffHunk) -> list[str]:
         elif line.startswith("+"):
             # Added line - include in result
             result.append(line[1:])
-        elif line.startswith(" "):
-            # Context line - copy from original
-            if orig_idx < old_end:
-                result.append(content[orig_idx])
-                orig_idx += 1
+        elif line.startswith(" ") or line == "":
+            # Context line (blank context may lack the leading space)
+            result.append(content[orig_idx])
+            orig_idx += 1
+        # Other markers ("\\ No newline at end of file", etc.) are ignored
 
-    # Skip any remaining old lines (in case of hunk mismatches)
-    orig_idx = old_end
-
-    # Add remaining lines after the old section
     result.extend(content[orig_idx:])
-
     return result
 
 

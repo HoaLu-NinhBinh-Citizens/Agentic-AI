@@ -342,6 +342,10 @@ class TestGDBClientIntegration:
         """IT4.2: Full debug session flow."""
         with patch("asyncio.open_connection") as mock_conn:
             mock_reader = AsyncMock()
+            # Reads must return bytes; a bare AsyncMock returns MagicMock,
+            # which spun _receive_packet's read loop forever (suite hang).
+            # b"" = EOF -> GDBError -> read_all_registers falls back to {}.
+            mock_reader.read = AsyncMock(return_value=b"")
             mock_writer = AsyncMock()
             mock_conn.return_value = (mock_reader, mock_writer)
             
@@ -379,14 +383,14 @@ class TestGDBClientErrorHandling:
         mock_reader = AsyncMock()
         client._reader = mock_reader
         
-        # Mock incorrect checksum
+        # Mock incorrect checksum. _receive_packet reads 1 byte at a time
+        # (then 2 for the checksum); the old mock returned b"$" for every
+        # read(1), so the read-until-# loop never terminated.
+        seq = [b"$", b"O", b"K", b"#", b"00"]  # checksum of "OK" is 0x9a, not 0x00
+
         async def mock_read(n):
-            if n == 1:
-                return b"$"
-            elif n == 100:
-                return b"OK#00"  # Wrong checksum
-            return b""
-        
+            return seq.pop(0) if seq else b""
+
         mock_reader.read = mock_read
         
         with pytest.raises(GDBError, match="Checksum"):

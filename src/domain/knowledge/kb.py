@@ -341,6 +341,77 @@ class KnowledgeBase:
             tags=["error-analysis", error_code],
         )
 
+    async def upsert_entries(
+        self,
+        chunks: list[dict[str, Any]],
+        embeddings: list[list[float]] | None = None,
+    ) -> list[KBEntry]:
+        """Bulk-upsert indexer-produced chunks, replacing prior entries per source.
+
+        This is the integration point for the IncrementalIndexer: each chunk is
+        a dict with at least ``text`` and ``source`` keys (see
+        ``IncrementalIndexer._chunk_content``). All existing entries for each
+        source are deleted first so re-indexing a file never leaves stale chunks.
+
+        Args:
+            chunks: Chunk dicts with keys ``text``, ``source`` and optional ``type``.
+            embeddings: Pre-computed vectors aligned 1:1 with ``chunks``.
+                        Missing/short lists fall back to self._embed per chunk.
+
+        Returns:
+            The created KBEntry objects.
+        """
+        import hashlib
+
+        sources = {c.get("source", "") for c in chunks}
+        for source in sources:
+            if source:
+                await self._store.delete_by_source(source)
+
+        entries: list[KBEntry] = []
+        per_source_index: dict[str, int] = {}
+        for i, chunk in enumerate(chunks):
+            text = chunk.get("text", "")
+            source = chunk.get("source", "")
+            idx = per_source_index.get(source, 0)
+            per_source_index[source] = idx + 1
+
+            # Deterministic ID so the same (source, position) re-upserts in place
+            entry_id = hashlib.sha1(f"{source}#{idx}".encode("utf-8")).hexdigest()[:16]
+
+            if embeddings is not None and i < len(embeddings) and embeddings[i]:
+                embedding = embeddings[i]
+            else:
+                embedding = await self._embed(text)
+
+            entry = KBEntry(
+                id=entry_id,
+                type=KBEntryType.CODE_SNIPPET,
+                title=f"{source}#chunk{idx}",
+                content=text,
+                source=source,
+                source_type=SourceType.CODE,
+                chip_family=None,
+                peripheral=None,
+                register=None,
+                tags=[chunk.get("type", "code"), "indexed"],
+                embedding=embedding,
+            )
+            await self._store.add_entry(entry)
+            entries.append(entry)
+
+        logger.debug(
+            "kb_entries_upserted", count=len(entries), sources=len(sources)
+        )
+        return entries
+
+    async def delete_by_source(self, source: str) -> int:
+        """Remove all entries that originated from `source` (e.g. a file path)."""
+        deleted = await self._store.delete_by_source(source)
+        if deleted:
+            logger.debug("kb_entries_deleted", source=source, count=deleted)
+        return deleted
+
     # ─── Query ────────────────────────────────────────────────────────
 
     async def query(self, query: KBQuery) -> list[KBSearchResult]:
