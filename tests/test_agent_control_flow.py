@@ -1,9 +1,9 @@
 import asyncio
 
-from src.agent.core import AgentCore
-from src.agent.planner import AgentPlanner
-from src.models.build import BuildError, BuildResult
-from src.models import ActionObservation, AgentState, TaskPlan, TaskResult
+from src.core.agent.core import AgentCore
+from src.core.agent.planner import AgentPlanner
+from src.infrastructure.models.build import BuildError, BuildResult
+from src.infrastructure.models import ActionObservation, AgentState, TaskPlan, TaskResult
 
 
 class StubQueryAnalyzer:

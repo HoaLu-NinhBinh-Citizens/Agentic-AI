@@ -5,8 +5,8 @@ from types import SimpleNamespace
 
 import pytest
 
-from src.app.aikicad_orchestrator import AIKiCadOrchestrator
-from src.app.review_ui import ReviewUIServer
+from src.application.api.app.aikicad_orchestrator import AIKiCadOrchestrator
+from src.application.api.app.review_ui import ReviewUIServer
 from src.domains.eda.kicad import KiCadCliRunner, KiCadLibraryResolver, KiCadSkeletonGenerator, KiCadValidator
 from src.domains.firmware import FirmwareCompileRunner, FirmwareGenerator, FirmwareSourceGenerator, FirmwareValidator
 from src.domains.knowledge import AIKiCadKnowledgeAgent, KnowledgeCache

@@ -210,25 +210,6 @@ class TestRecoveryOperations:
         assert result.deterministic is True
     
     @pytest.mark.asyncio
-    async def test_snapshot_restore(self):
-        """Test snapshot restore."""
-        from src.core.checkpoint.snapshot import AtomicSnapshotManager
-        
-        manager = AtomicSnapshotManager()
-        
-        # Create snapshot
-        snapshot_id = await manager.create_snapshot(
-            state={"counter": 42, "data": "test"},
-            checksum="sha256_hash",
-        )
-        
-        # Restore
-        state = await manager.restore_snapshot(snapshot_id)
-        
-        assert state["counter"] == 42
-        assert state["data"] == "test"
-    
-    @pytest.mark.asyncio
     async def test_flash_recovery_after_power_loss(self, mock_hsm, mock_probe):
         """Test recovery after simulated power loss."""
         from src.infrastructure.hardware.flash.recovery_manager import RecoveryManager

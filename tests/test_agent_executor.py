@@ -1,8 +1,8 @@
 import asyncio
 
-from src.agent.executor import AgentExecutor
-from src.models import AgentState, TaskPlan
-from src.models.build import RuntimeDiagnosis, ToolResult
+from src.core.agent.executor import AgentExecutor
+from src.infrastructure.models import AgentState, TaskPlan
+from src.infrastructure.models.build import RuntimeDiagnosis, ToolResult
 
 
 class StubBuildTools:

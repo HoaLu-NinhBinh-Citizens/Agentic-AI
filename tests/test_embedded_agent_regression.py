@@ -7,24 +7,24 @@ import pytest
 from pathlib import Path
 from typing import Any, cast
 
-from src.app.embedded_agent import (
+from src.application.api.app.embedded_agent import EmbeddedCAgent
+from src.core.memory import AgentMemory
+from src.core.tools import BuildTools
+from src.infrastructure.models import (
     AgentState,
-    AgentMemory,
     BenchmarkResult,
-    BuildTools,
     ChunkRecord,
-    EmbeddedCAgent,
     EvidenceBundle,
-    HybridRetriever,
-    QueryAnalyzer,
+    ExperienceEntry,
     RetrievalHit,
     TaskResult,
     ToolResult,
 )
-from src.config.agent_prompts import RAG_REGISTER_SCHEMA_FILE, RAG_SCHEMA_VERSION
-from src.llm.ollama import OllamaLLM
-from src.models import ExperienceEntry
-from src.parsing.response_parser import ResponseParser
+from src.infrastructure.retrieval import HybridRetriever
+from src.infrastructure.retrieval.query_analyzer import QueryAnalyzer
+from src.core.config.agent_prompts import RAG_REGISTER_SCHEMA_FILE, RAG_SCHEMA_VERSION
+from src.infrastructure.llm.ollama import OllamaLLM
+from src.core.parsing import ResponseParser
 
 # Skip legacy tests that require full EmbeddedCAgent initialization
 pytestmark = pytest.mark.skip(reason="Legacy test requires full EmbeddedCAgent - needs refactoring")
