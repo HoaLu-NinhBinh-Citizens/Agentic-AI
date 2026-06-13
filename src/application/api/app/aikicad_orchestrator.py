@@ -12,7 +12,6 @@ from src.domains.runtime import BoardProfileManager
 from src.domains.safety import WriteBoundaryGuard
 from src.domains.validation import CrossValidator
 from src.domains.autonomy.planner import AutonomyPlanner
-from src.core.multi_agent.pdf_knowledge_agent import PDFKnowledgeAgent
 
 
 class AIKiCadOrchestrator:

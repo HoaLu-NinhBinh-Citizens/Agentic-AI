@@ -95,31 +95,6 @@ async def agent_reasoning_scenario(user_id: int, iteration: int) -> None:
     )
 
 
-async def multi_agent_scenario(user_id: int, iteration: int) -> None:
-    """Simulate multi-agent coordination."""
-    from src.core.multi_agent.coordination.coordinator import AgentCoordinator
-    
-    coordinator = AgentCoordinator()
-    
-    # Register agents
-    num_agents = min(5, user_id + 1)
-    for i in range(num_agents):
-        await coordinator.register_agent(
-            f"agent_{i}",
-            {"type": ["debugger", "analyzer", "reporter"][i % 3]}
-        )
-    
-    # Send message through chain
-    await coordinator.send_message(
-        from_agent="agent_0",
-        to_agent=f"agent_{num_agents - 1}",
-        message={
-            "type": "analysis",
-            "user": user_id,
-            "iteration": iteration,
-        }
-    )
-
 
 # ============================================================================
 # Retrieval Operations Load Tests  

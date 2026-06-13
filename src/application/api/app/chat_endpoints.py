@@ -12,16 +12,6 @@ from typing import Dict, List, Any, Optional
 from datetime import datetime
 from pydantic import BaseModel, Field
 
-from src.core.multi_agent.agent import (
-    Task,
-    FirmwareAgent,
-    SecurityAgent,
-    MonitoringAgent,
-    CodeGenAgent,
-    ReviewAgent,
-    DevOpsAgent,
-    UnifiedAgent,
-)
 from src.shared.utils import detect_language, get_language_display_name
 
 logger = logging.getLogger(__name__)
