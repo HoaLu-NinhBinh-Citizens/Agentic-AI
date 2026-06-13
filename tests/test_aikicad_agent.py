@@ -20,7 +20,6 @@ from src.domains.autonomy.state import AutonomyState
 from src.domains.safety import WriteBoundaryGuard
 from src.domains.schema_validator import ContractSchemaValidator
 from src.domains.validation import CrossValidator
-from src.multi_agent.pdf_knowledge_agent import PDFKnowledgeAgent
 
 
 # Skip this module - requires full AIKiCadKnowledgeAgent implementation

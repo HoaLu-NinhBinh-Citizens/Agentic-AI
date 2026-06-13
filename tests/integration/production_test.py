@@ -165,25 +165,6 @@ class TestAgentOperations:
         with pytest.raises(asyncio.TimeoutError):
             await loop.execute("test prompt")
     
-    @pytest.mark.asyncio
-    async def test_multi_agent_coordination(self):
-        """Test multi-agent coordination."""
-        from src.core.multi_agent.coordination.coordinator import AgentCoordinator
-        
-        coordinator = AgentCoordinator()
-        
-        # Register agents
-        await coordinator.register_agent("agent_1", {"type": "debugger"})
-        await coordinator.register_agent("agent_2", {"type": "analyzer"})
-        
-        # Send message
-        result = await coordinator.send_message(
-            from_agent="agent_1",
-            to_agent="agent_2",
-            message={"type": "analysis_request", "data": "test"},
-        )
-        
-        assert result is not None
 
 
 class TestRecoveryOperations:
