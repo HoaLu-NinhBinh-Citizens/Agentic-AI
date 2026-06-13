@@ -153,8 +153,8 @@ servers:
             temp_path = f.name
 
         try:
-            with patch("mcp.ClientSession", return_value=mock_session):
-                with patch("mcp.client.stdio.stdio_client", return_value=mock_context):
+            with patch("infrastructure.mcp.manager.ClientSession", return_value=mock_session):
+                with patch("infrastructure.mcp.manager.stdio_client", return_value=mock_context):
                     manager = MCPClientManager(temp_path)
                     await manager.initialize()
 
@@ -222,8 +222,8 @@ servers:
                 session_index[0] += 1
                 return s
 
-            with patch("mcp.ClientSession", side_effect=mock_client_session):
-                with patch("mcp.client.stdio.stdio_client", return_value=mock_context):
+            with patch("infrastructure.mcp.manager.ClientSession", side_effect=mock_client_session):
+                with patch("infrastructure.mcp.manager.stdio_client", return_value=mock_context):
                     manager = MCPClientManager(temp_path)
                     await manager.initialize()
 
@@ -295,8 +295,8 @@ servers:
             temp_path = f.name
 
         try:
-            with patch("mcp.ClientSession", return_value=mock_session):
-                with patch("mcp.client.stdio.stdio_client", return_value=mock_context):
+            with patch("infrastructure.mcp.manager.ClientSession", return_value=mock_session):
+                with patch("infrastructure.mcp.manager.stdio_client", return_value=mock_context):
                     manager = MCPClientManager(temp_path)
                     await manager.initialize()
 
@@ -347,8 +347,8 @@ servers:
             temp_path = f.name
 
         try:
-            with patch("mcp.ClientSession", return_value=mock_session):
-                with patch("mcp.client.stdio.stdio_client", return_value=mock_context):
+            with patch("infrastructure.mcp.manager.ClientSession", return_value=mock_session):
+                with patch("infrastructure.mcp.manager.stdio_client", return_value=mock_context):
                     manager = MCPClientManager(temp_path)
                     await manager.initialize()
                     assert manager.is_ready() is True
@@ -397,8 +397,8 @@ servers:
             temp_path = f.name
 
         try:
-            with patch("mcp.ClientSession", return_value=mock_session):
-                with patch("mcp.client.stdio.stdio_client", return_value=mock_context):
+            with patch("infrastructure.mcp.manager.ClientSession", return_value=mock_session):
+                with patch("infrastructure.mcp.manager.stdio_client", return_value=mock_context):
                     manager = MCPClientManager(temp_path)
                     await manager.initialize()
 
@@ -470,8 +470,8 @@ servers:
             temp_path = f.name
 
         try:
-            with patch("mcp.ClientSession", return_value=mock_session):
-                with patch("mcp.client.stdio.stdio_client", return_value=mock_context):
+            with patch("infrastructure.mcp.manager.ClientSession", return_value=mock_session):
+                with patch("infrastructure.mcp.manager.stdio_client", return_value=mock_context):
                     manager = MCPClientManager(temp_path)
                     await manager.initialize()
 
@@ -512,8 +512,8 @@ servers:
             temp_path = f.name
 
         try:
-            with patch("mcp.ClientSession", return_value=mock_session):
-                with patch("mcp.client.stdio.stdio_client", return_value=mock_context):
+            with patch("infrastructure.mcp.manager.ClientSession", return_value=mock_session):
+                with patch("infrastructure.mcp.manager.stdio_client", return_value=mock_context):
                     manager = MCPClientManager(temp_path)
                     await manager.initialize()
 
