@@ -175,6 +175,9 @@ async def lifespan(app: FastAPI):
             logger.warning("Workspace indexing failed to start: %s", e)
             indexing_service = None
 
+    workspace_root = Path(os.getenv("AI_SUPPORT_WORKSPACE", ".")).resolve()
+    app.state.workspace_root = workspace_root
+
     app.state.server_state = ServerState(
         session_manager=session_manager,
         connection_manager=connection_manager,
@@ -184,6 +187,8 @@ async def lifespan(app: FastAPI):
     )
     app.state.mcp_manager = mcp_manager
     app.state.indexing_service = indexing_service
+
+    logger.info("Workspace root: %s", workspace_root)
 
     logger.info(
         "AI_support Phase 2B server started. "
@@ -211,9 +216,16 @@ app = FastAPI(
     lifespan=lifespan,
 )
 
+_DEFAULT_CORS_ORIGINS = [
+    "http://localhost:5173",
+    "http://localhost:8000",
+]
+_cors_env = os.getenv("AI_SUPPORT_CORS_ORIGINS", "")
+CORS_ORIGINS = [o.strip() for o in _cors_env.split(",") if o.strip()] if _cors_env else _DEFAULT_CORS_ORIGINS
+
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],
+    allow_origins=CORS_ORIGINS,
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
@@ -284,22 +296,29 @@ async def get_score() -> dict[str, Any]:
 @app.get("/api/fs/read")
 async def read_file(path: str) -> dict[str, str]:
     """Read a file from the workspace.
-    
+
     Args:
         path: Path to the file to read.
-        
+
     Returns:
         File content.
     """
-    from pathlib import Path
-    
+    workspace_root = app.state.workspace_root
+
     try:
-        file_path = Path(path)
-        if not file_path.is_file():
-            raise HTTPException(status_code=404, detail="File not found")
-        
-        content = file_path.read_text(encoding="utf-8", errors="replace")
-        return {"content": content, "path": str(file_path)}
+        resolved = Path(path).resolve()
+    except (ValueError, OSError):
+        raise HTTPException(status_code=400, detail="Invalid path")
+
+    if not resolved.is_relative_to(workspace_root):
+        raise HTTPException(status_code=403, detail="Access denied: path is outside workspace")
+
+    if not resolved.is_file():
+        raise HTTPException(status_code=404, detail="File not found")
+
+    try:
+        content = resolved.read_text(encoding="utf-8", errors="replace")
+        return {"content": content, "path": str(resolved)}
     except Exception as e:
         logger.error("Error reading file %s: %s", path, e)
         raise HTTPException(status_code=500, detail=str(e))
@@ -308,32 +327,38 @@ async def read_file(path: str) -> dict[str, str]:
 @app.get("/api/fs/dir")
 async def read_directory(path: str) -> dict[str, Any]:
     """Read a directory listing.
-    
+
     Args:
         path: Path to the directory to read.
-        
+
     Returns:
         Directory contents.
     """
-    from pathlib import Path
-    
+    workspace_root = app.state.workspace_root
+
     try:
-        dir_path = Path(path)
-        if not dir_path.is_dir():
-            raise HTTPException(status_code=404, detail="Directory not found")
-        
+        resolved = Path(path).resolve()
+    except (ValueError, OSError):
+        raise HTTPException(status_code=400, detail="Invalid path")
+
+    if not resolved.is_relative_to(workspace_root):
+        raise HTTPException(status_code=403, detail="Access denied: path is outside workspace")
+
+    if not resolved.is_dir():
+        raise HTTPException(status_code=404, detail="Directory not found")
+
+    try:
         items = []
-        for item in dir_path.iterdir():
+        for item in resolved.iterdir():
             items.append({
                 "name": item.name,
                 "path": str(item),
                 "isDir": item.is_dir(),
             })
-        
-        # Sort: directories first, then alphabetically
+
         items.sort(key=lambda x: (not x["isDir"], x["name"].lower()))
-        
-        return {"path": str(dir_path), "items": items}
+
+        return {"path": str(resolved), "items": items}
     except Exception as e:
         logger.error("Error reading directory %s: %s", path, e)
         raise HTTPException(status_code=500, detail=str(e))

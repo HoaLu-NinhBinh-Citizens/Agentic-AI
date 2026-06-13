@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import os
 from typing import TYPE_CHECKING, Any
 
 if TYPE_CHECKING:
@@ -20,7 +21,7 @@ if TYPE_CHECKING:
 
 logger = logging.getLogger(__name__)
 
-STREAM_TIMEOUT_SEC = 30.0
+STREAM_TIMEOUT_SEC = float(os.getenv("STREAM_TIMEOUT_SEC", "300"))
 
 
 class StreamInfo:
