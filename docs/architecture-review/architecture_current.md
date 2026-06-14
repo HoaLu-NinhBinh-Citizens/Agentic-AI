@@ -1,7 +1,7 @@
 # Architecture — Current State
 
 > **Date**: 2026-06-14
-> **As of commit**: `a2042cb` (post PR-003)
+> **As of commit**: `01f3d35` (post PR-004)
 
 ---
 
@@ -24,7 +24,7 @@ Client (WebSocket/REST)
         └─► interfaces/server/websocket/       — ConnectionManager
 ```
 
-**Single orchestration path**: `RealAgent` is the sole agent orchestrator. All alternative orchestration systems (LangGraph, multi-agent coordination, application-layer supervisor) were deleted in PR-003.
+**Single orchestration path**: `RealAgent` is the sole agent orchestrator. All alternative orchestration systems were deleted in PR-003. All legacy redirect packages were deleted in PR-004.
 
 ---
 
@@ -36,13 +36,13 @@ src/
 ├── application/         — Use-case orchestration, API app, workflows, evaluation, planner
 │   └── orchestration/
 │       └── tool_execution/   — LIVE: config + service + middleware
-├── core/                — Agent, runtime, session, memory, tools, parsing, events, config
+├── core/                — Agent, runtime, session, memory, tools, parsing, config
 │   ├── agent/           — RealAgent + memory, metrics, middleware, prompts
 │   ├── runtime/         — Dispatcher, scheduler, admission, retry, DLQ, workflow
 │   ├── session/         — Lifecycle, state, store
 │   ├── memory/          — ChromaDB, compression, decision traces, governance
 │   ├── tools/           — Built-in tool definitions
-│   ├── events/          — EventEmitter (dead — zero importers, PR-004 scope)
+│   ├── config/          — Output policy, AI support config, agent prompts
 │   ├── execution/       — Code executor, execution graph, worker (stubs remaining)
 │   └── workspace/       — File watcher, multi-root, ownership
 ├── domain/              — Firmware, hardware (flash/GDB/HAL/serial/SVD), knowledge, events
@@ -68,7 +68,6 @@ src/
 | LLM Gateway | `infrastructure/llm/` | **Live** — providers, routing, tokenizer |
 | Session Management | `core/session/` + `infrastructure/persistence/sqlite/` | **Live** — SQLite-backed |
 | Runtime Manager | `core/runtime/runtime_manager.py` | **Live** — stream execution |
-| EventEmitter | `core/events/` | **Dead** — zero production importers (PR-004 scope) |
 | Analysis/Rules | `infrastructure/analysis/` | **Live** — ML detectors, language parsers |
 | Router | `infrastructure/router/` | **Live** — fairness, policy, observation |
 | Hardware/HIL | `infrastructure/hardware/` + `infrastructure/hil/` | **Live** — flash, JLink, GDB, OpenOCD |
@@ -79,40 +78,30 @@ src/
 
 | Directory | .py files |
 |-----------|-----------|
-| `src/` (Python) | ~1,296 |
-| `tests/` | ~351 |
-| **Total** | ~1,647 |
+| `src/` (Python) | ~1,241 |
+| `tests/` | ~344 |
+| **Total** | ~1,585 |
 
 ---
 
-## 5. Deleted in PR-003
+## 5. Cleanup History
 
-| Package | Files Removed |
-|---------|---------------|
-| `core/orchestration/` (LangGraph) | 6 |
-| `core/multi_agent/` (coordination) | 42 |
-| `multi_agent/` (redirect layer) | 3 |
-| `application/orchestration/` dead subtrees (agents, supervisor, coordination, recovery, routing) | 14 |
-| `infrastructure/distributed/` | 8 |
-| `infrastructure/chaos/` | 1 |
-| `infrastructure/fleet/predictive_failure.py` | 1 |
-| `infrastructure/sharding/` | 1 |
-| `infrastructure/testing/production_scenarios.py` | 1 |
-| `core/checkpoint/` | 5 |
-| `core/execution/` (executor, task_queue, worker_pool stubs) | 3 |
-| `core/health/` | 4 |
-| `agent/` (top-level stubs) | 5 |
-| `app/` (top-level stubs) | 4 |
-| Test files | 24 |
-| `langgraph` dependency from pyproject.toml | — |
-| **Total** | ~132 files, ~33,524 lines |
+| PR | Files Removed | Lines Removed | Scope |
+|----|---------------|---------------|-------|
+| PR-002 | ~32 | ~4,000 | Dead code Tier 1+2 (zero-importer stubs, test-only packages) |
+| PR-003 | ~132 | ~33,524 | Orchestration consolidation (LangGraph, multi-agent, supervisor) |
+| PR-004 | ~64 | ~7,076 | Redirect packages, core/events, orphan files, dead tests |
+| Docs cleanup | 53 | ~11,064 | Stale planning artifacts |
+| **Cumulative** | **~281** | **~55,664** | |
 
 ---
 
 ## 6. Known Issues
 
-1. **Stale `__pycache__`** in `core/multi_agent/`, `core/orchestration/`, `multi_agent/` — .pyc files from deleted modules remain on disk.
-2. **Stale `egg-info`** — `src/AI_support.egg-info/` references deleted files and `langgraph`. Regenerated on next `pip install -e .`.
-3. **16 test collection errors** — all pre-existing (missing `src.events`, `src.hardware`, `src.learning`, `src.observability`, `src.benchmarking`, broken symbol imports in `domains.safety`, `domains.hardware_engine`, `core.tools.flash_tools`, `models`). Not caused by PR-003.
-4. **`core/events/`** — zero production importers, scheduled for PR-004.
-5. **`application/api/app/chat_endpoints.py`** — imports from deleted `core.multi_agent.agent` but file itself is orphan (only imported by orphan `api_server.py`). Should be deleted in a follow-up.
+1. **2 test collection errors** — both pre-existing production code bugs:
+   - `test_aikicad_agent.py`: `WriteBoundaryGuard` missing from `domains.safety`
+   - `test_embedded_agent_regression.py`: `component_factory.py` → `src.benchmarking` (never existed)
+2. **5 pre-existing test failures** — logic bugs in `test_p3_observability`, `test_tools`, `test_flash_tools` (×3)
+3. **Orphan dependency**: `langchain>=0.3.0` in `pyproject.toml` — zero importers in `src/`
+4. **Dual import convention**: `src.` prefix vs bare imports coexist (PR-009 scope)
+5. **Stale `egg-info`** — `src/AI_support.egg-info/` references deleted files. Regenerated on `pip install -e .`
