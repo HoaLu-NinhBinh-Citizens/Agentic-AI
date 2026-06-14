@@ -88,7 +88,7 @@ from src.infrastructure.models import (
     TaskResult,
     ToolResult,
 )
-from src.benchmarking import BenchmarkSuite
+from src.infrastructure.benchmark import BenchmarkSuite
 from src.core.parsing import OutputSanitizer, ResponseParser
 from src.reporting import ReportWriter, TraceReporter
 from src.application.services.review_support import ReviewSupport

@@ -1,7 +1,7 @@
 # Dependency Map — Current State
 
 > **Date**: 2026-06-14
-> **As of commit**: `a2042cb` (post PR-003)
+> **As of commit**: `01f3d35` (post PR-004)
 
 ---
 
@@ -17,7 +17,7 @@
 | pydantic-settings | >=2.10.0 | Settings management |
 | aiosqlite | >=0.19.0 | Async SQLite (session persistence) |
 | aiohttp | >=3.12.0 | Async HTTP client |
-| asyncpg | >=0.31.0 | PostgreSQL (unused in production path) |
+| asyncpg | >=0.31.0 | PostgreSQL (used by `core/runtime/workflow/postgres_event_store.py`) |
 | httpx | >=0.28.0 | HTTP client |
 
 ### AI/LLM
@@ -27,7 +27,7 @@
 | openai | >=2.31.0 | OpenAI provider |
 | anthropic | >=0.40.0 | Anthropic provider |
 | ollama | >=0.5.0 | Local Ollama provider |
-| langchain | >=0.3.0 | LLM framework utilities |
+| langchain | >=0.3.0 | **Orphan** — zero importers in `src/`, candidate for removal |
 | chromadb | >=1.0.0 | Vector database |
 
 ### Observability
@@ -63,11 +63,11 @@
 | prompt-toolkit | >=3.0.0 | Interactive prompts |
 | pygments | >=2.17.0 | Syntax highlighting |
 
-### Removed in PR-003
+### Removed
 
-| Package | Version | Reason |
-|---------|---------|--------|
-| ~~langgraph~~ | ~~>=0.2.0~~ | All LangGraph orchestration code deleted |
+| Package | Removed In | Reason |
+|---------|-----------|--------|
+| ~~langgraph~~ | PR-003 | All LangGraph orchestration code deleted |
 
 ---
 
@@ -87,7 +87,7 @@ interfaces.server.main
 └── (optional) infrastructure.indexing.service
 ```
 
-All imports resolve successfully. No broken chains in the production path.
+All imports resolve successfully. No broken chains in the production path. Zero legacy redirect packages remain.
 
 ---
 
@@ -111,24 +111,9 @@ All imports resolve successfully. No broken chains in the production path.
 
 ---
 
-## 5. Orphan Internal Dependencies (not reachable from main.py)
-
-These source files import from deleted or non-existent modules:
+## 5. Known Broken Internal Dependencies
 
 | File | Broken Import | Impact |
 |------|--------------|--------|
-| `application/api/app/chat_endpoints.py` | `core.multi_agent.agent` (deleted) | File is orphan — not imported by production path |
 | `application/api/app/component_factory.py` | `src.benchmarking` (never existed) | Transitively breaks `embedded_agent.py` test imports |
-| `application/api/app/aikicad_orchestrator.py` | `domains.safety.WriteBoundaryGuard` (symbol missing) | File works at module level but symbol doesn't exist in target |
-
----
-
-## 6. Stale Artifacts
-
-| Artifact | Issue | Resolution |
-|----------|-------|------------|
-| `src/AI_support.egg-info/SOURCES.txt` | Lists deleted orchestration files | Auto-fixed on `pip install -e .` |
-| `src/AI_support.egg-info/requires.txt` | Lists `langgraph>=0.2.0` | Auto-fixed on `pip install -e .` |
-| `src/core/multi_agent/coordination/__pycache__/` | 26 stale .pyc files | Delete manually or `find . -name __pycache__ -exec rm -rf {} +` |
-| `src/core/orchestration/__pycache__/` | 5 stale .pyc files | Same |
-| `src/multi_agent/__pycache__/` | 2 stale .pyc files | Same |
+| `application/api/app/aikicad_orchestrator.py` | `domains.safety.WriteBoundaryGuard` (symbol missing) | Module-level ImportError when imported |

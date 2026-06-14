@@ -4,7 +4,7 @@ from typing import Any, Callable, Dict, List, Tuple, cast
 from src.core.agent import AgentCore, AgentExecutor, AgentPlanner
 from src.core.agent.plan_mode_agent import PlanModeAgent
 from src.application.services.agent_services import AgentSupportService
-from src.benchmarking import BenchmarkSuite
+from src.infrastructure.benchmark import BenchmarkSuite
 from src.application.services.document_workers import DocumentWorkerSupport
 from src.application.services.evidence_support import EvidenceSupport
 from src.application.services.experience_support import ExperienceSupport

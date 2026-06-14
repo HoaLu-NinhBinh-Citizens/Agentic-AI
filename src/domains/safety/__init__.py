@@ -17,6 +17,7 @@ Complements the CAN/LIN/UDS protocol analyzers with functional safety reasoning.
 from __future__ import annotations
 
 import logging
+import os
 from dataclasses import dataclass, field
 from datetime import datetime
 from enum import Enum
@@ -693,3 +694,57 @@ class SafetyValidator:
             "D": ASIL.ASIL_D,
         }
         return mapping.get(str(asil_str).upper().replace("ASIL-", ""), ASIL.QM)
+
+
+# ─── Write Boundary Guard ────────────────────────────────────────
+
+class WriteBoundaryGuard:
+    """Guard that validates file-write paths against workspace boundaries.
+
+    Default policy: allow writes under ``main/`` and ``AI_support/outputs/``,
+    block writes to agent runtime code (``AI_support/domains/``, etc.) unless
+    ``mode="agent_upgrade"`` is passed.  A custom policy JSON can override
+    the allowed-root list.
+    """
+
+    _DEFAULT_ALLOWED_ROOTS = ("main", "AI_support/outputs")
+    _RUNTIME_PREFIXES = ("AI_support/domains", "AI_support/core", "AI_support/infrastructure")
+
+    def __init__(self, workspace_root: str, policy_path: str | None = None) -> None:
+        self.workspace_root = os.path.normpath(workspace_root)
+        self.policy_load_error: str | None = None
+        self._allowed_roots: list[str] = list(self._DEFAULT_ALLOWED_ROOTS)
+
+        if policy_path is not None:
+            self._load_policy(policy_path)
+
+    def validate_write(self, path: str, mode: str | None = None) -> dict[str, Any]:
+        if not path:
+            return {"allowed": False, "reason": "WRITE_EMPTY_PATH"}
+
+        abs_path = os.path.normpath(os.path.abspath(path))
+
+        if not abs_path.startswith(self.workspace_root + os.sep) and abs_path != self.workspace_root:
+            return {"allowed": False, "reason": "WRITE_OUTSIDE_WORKSPACE"}
+
+        rel = os.path.relpath(abs_path, self.workspace_root).replace("\\", "/")
+
+        if mode == "agent_upgrade":
+            return {"allowed": True, "reason": "AGENT_UPGRADE_MODE"}
+
+        for prefix in self._RUNTIME_PREFIXES:
+            if rel == prefix or rel.startswith(prefix + "/"):
+                return {"allowed": False, "reason": "WRITE_BOUNDARY_VIOLATION"}
+
+        return {"allowed": True, "reason": "OK"}
+
+    def _load_policy(self, policy_path: str) -> None:
+        try:
+            with open(policy_path, encoding="utf-8") as f:
+                import json
+                data = json.load(f)
+            roots = data.get("allowed_write_roots", self._DEFAULT_ALLOWED_ROOTS)
+            if isinstance(roots, list):
+                self._allowed_roots = roots
+        except Exception as exc:
+            self.policy_load_error = str(exc)
