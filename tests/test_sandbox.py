@@ -21,7 +21,7 @@ from pathlib import Path
 
 import pytest
 
-from src.tools.sandbox import (
+from src.core.tools.sandbox import (
     SandboxManager,
     SandboxConfig,
     SandboxMode,
@@ -35,7 +35,7 @@ from src.tools.sandbox import (
     get_sandbox_manager,
     reset_sandbox_manager,
 )
-from src.tools.audit import (
+from src.core.tools.audit import (
     AuditLogger,
     AuditRecord,
     AuditQuery,
@@ -46,22 +46,22 @@ from src.tools.audit import (
     get_audit_logger,
     reset_audit_logger,
 )
-from src.tools.context import (
+from src.core.tools.context import (
     ToolContext,
     ToolExecutionMode,
     ResourceLimits,
     create_sandbox_context,
     create_strict_sandbox_context,
 )
-from src.tools.schema import (
+from src.core.tools.schema import (
     Tool,
     ToolParameter,
     ToolPermission,
     ToolCategory,
     ParameterType,
 )
-from src.tools.registry import ToolRegistry
-from src.tools.executor import ToolExecutor
+from src.core.tools.registry import ToolRegistry
+from src.core.tools.executor import ToolExecutor
 
 
 # ============ SandboxConfig Tests ============
@@ -507,7 +507,7 @@ class TestAuditLogger:
         """Test tool execution logging."""
         logger = AuditLogger()
 
-        from src.tools.schema import ToolResult
+        from src.core.tools.schema import ToolResult
 
         result = ToolResult(
             tool_name="test_tool",

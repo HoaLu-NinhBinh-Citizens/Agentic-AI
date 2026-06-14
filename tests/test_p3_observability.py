@@ -23,13 +23,13 @@ from pathlib import Path
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-from src.runtime.journal import (
+from src.core.runtime.journal import (
     EventJournal,
     JournalEntry,
     JournalPartition,
     PartitionStrategy,
 )
-from src.runtime.replayer import (
+from src.core.runtime.replayer import (
     EventReplayer,
     ReplayFilter,
     ReplayResult,

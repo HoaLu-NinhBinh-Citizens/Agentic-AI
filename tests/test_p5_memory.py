@@ -24,7 +24,7 @@ from dataclasses import dataclass, field
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-from src.memory.advanced_memory import (
+from src.core.memory.advanced_memory import (
     MemoryRecord,
     EpisodicMemoryRecord,
     SemanticMemoryRecord,

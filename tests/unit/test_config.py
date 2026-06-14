@@ -1,7 +1,7 @@
 """Unit tests for config system."""
 import os
 import pytest
-from src.config.ai_support_config import AISupportConfig, RuleConfig, MLRuleConfig, IndexingConfig, OutputConfig
+from src.core.config.ai_support_config import AISupportConfig, RuleConfig, MLRuleConfig, IndexingConfig, OutputConfig
 
 
 class TestAISupportConfig:

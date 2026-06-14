@@ -7,8 +7,8 @@ Tests FlashPermissionGuard, flash tools, and permission enforcement.
 import pytest
 from pathlib import Path
 
-from src.tools.schema import ToolPermission, ToolCategory
-from src.tools.flash_tools import (
+from src.core.tools.schema import ToolPermission, ToolCategory
+from src.core.tools.flash_tools import (
     FlashPermissionGuard,
     FlashConfig,
     FlashProgress,

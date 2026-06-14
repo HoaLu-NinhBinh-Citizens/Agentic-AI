@@ -20,7 +20,7 @@ from typing import List
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-from src.tools.sandbox import (
+from src.core.tools.sandbox import (
     SandboxManager,
     SandboxConfig,
     SandboxMode,

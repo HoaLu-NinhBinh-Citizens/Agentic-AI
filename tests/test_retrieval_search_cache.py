@@ -6,7 +6,7 @@ import time
 
 import pytest
 
-from src.retrieval.search_cache import SearchCache, get_search_cache, clear_search_cache
+from src.infrastructure.retrieval.search_cache import SearchCache, get_search_cache, clear_search_cache
 
 
 class TestSearchCache:

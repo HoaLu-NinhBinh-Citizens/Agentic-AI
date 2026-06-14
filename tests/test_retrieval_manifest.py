@@ -10,7 +10,7 @@ from unittest.mock import patch
 
 import pytest
 
-from src.retrieval.manifest import IndexManifest, compute_content_hash, MANIFEST_FILE
+from src.infrastructure.retrieval.manifest import IndexManifest, compute_content_hash, MANIFEST_FILE
 
 
 class TestIndexManifest:
@@ -48,7 +48,7 @@ class TestIndexManifest:
 
     def test_needs_full_rebuild_schema_mismatch(self, manifest):
         """Full rebuild needed when schema version doesn't match."""
-        from src.config.agent_prompts import RAG_SCHEMA_VERSION
+        from src.core.config.agent_prompts import RAG_SCHEMA_VERSION
 
         # Current schema version
         assert manifest.schema_version == RAG_SCHEMA_VERSION
@@ -72,7 +72,7 @@ class TestIndexManifest:
         manifest.save()
 
         # Should detect version mismatch
-        from src.config.agent_prompts import RAG_SCHEMA_VERSION
+        from src.core.config.agent_prompts import RAG_SCHEMA_VERSION
         assert manifest.schema_version == "v8"
         assert manifest.schema_version != RAG_SCHEMA_VERSION
         assert manifest.needs_full_rebuild() is True
@@ -80,7 +80,7 @@ class TestIndexManifest:
     def test_no_full_rebuild_when_schema_matches(self, manifest):
         """Matching schema version should not trigger full rebuild."""
         # Record a build with current schema version
-        from src.config.agent_prompts import RAG_SCHEMA_VERSION
+        from src.core.config.agent_prompts import RAG_SCHEMA_VERSION
         manifest.record_build(RAG_SCHEMA_VERSION, 50)
 
         # Verify schema version matches

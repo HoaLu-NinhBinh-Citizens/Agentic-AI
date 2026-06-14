@@ -1,4 +1,4 @@
-from src.config.output_policy import OutputPolicy
+from src.core.config.output_policy import OutputPolicy
 
 
 def test_output_policy_uses_chip_and_capability_for_embedded_profile():

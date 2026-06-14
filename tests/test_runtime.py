@@ -12,18 +12,24 @@ from datetime import datetime
 from pathlib import Path
 from unittest.mock import MagicMock, AsyncMock
 
-from src.runtime import (
+from src.core.runtime.controller import (
     RuntimeController,
     RuntimeState,
     LifecycleEvent,
+)
+from src.core.runtime.journal import (
     EventJournal,
     JournalEntry,
     JournalPartition,
     PartitionStrategy,
+)
+from src.core.runtime.dlq import (
     DeadLetterQueue,
     DLQEntry,
     DLQReason,
     DLQStatus,
+)
+from src.core.runtime.replayer import (
     EventReplayer,
     ReplayFilter,
     ReplayResult,
@@ -642,7 +648,7 @@ class TestEventReplayer:
     @pytest.mark.asyncio
     async def test_replay_with_events(self, replayer, mock_journal):
         """Test replay with events."""
-        from src.runtime.journal import JournalEntry
+        from src.core.runtime.journal import JournalEntry
 
         # Mock journal to return entries
         mock_journal.scan = AsyncMock(return_value=[
@@ -670,7 +676,7 @@ class TestEventReplayer:
     @pytest.mark.asyncio
     async def test_preview(self, replayer, mock_journal):
         """Test preview without replay."""
-        from src.runtime.journal import JournalEntry
+        from src.core.runtime.journal import JournalEntry
 
         mock_journal.scan = AsyncMock(return_value=[
             JournalEntry(

@@ -21,7 +21,7 @@ from dataclasses import dataclass, field
 
 sys.path.insert(0, "C:/Users/thang/Desktop/carv")
 
-from src.hardware_engine.core.models import (
+from src.domains.hardware_engine.core.models import (
     Chip,
     Peripheral,
     Register,
@@ -32,7 +32,7 @@ from src.hardware_engine.core.models import (
     ValidationSeverity,
     RegisterAccess,
 )
-from src.tools.flash_tools import (
+from src.core.tools.flash_tools import (
     FlashConfig,
     FlashProgress,
     FlashResult,

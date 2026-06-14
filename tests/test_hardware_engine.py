@@ -2,8 +2,8 @@
 
 import pytest
 
-from src.hardware_engine import HardwareSemanticEngine
-from src.hardware_engine.core.models import (
+from src.domains.hardware_engine import HardwareSemanticEngine
+from src.domains.hardware_engine.core.models import (
     Peripheral,
     Register,
     Bitfield,
@@ -20,21 +20,21 @@ from src.hardware_engine.core.models import (
     ValidationSeverity,
     HardwareConstraint,
 )
-from src.hardware_engine.core.peripheral_graph import PeripheralGraph
-from src.hardware_engine.core.register_schema import RegisterSchemaDB
-from src.hardware_engine.core.pin_map import PinMap
-from src.hardware_engine.core.clock_tree import ClockTree
-from src.hardware_engine.core.interrupt_model import InterruptModel
-from src.hardware_engine.engine.pinmux_engine import PinMuxEngine
-from src.hardware_engine.engine.clock_engine import ClockEngine
-from src.hardware_engine.engine.interrupt_engine import InterruptEngine
-from src.hardware_engine.engine.register_engine import RegisterEngine
-from src.hardware_engine.engine.allocator import ResourceAllocator
-from src.hardware_engine.validator.hw_validator import HardwareValidator
-from src.hardware_engine.validator.rules import HardwareRules
-from src.hardware_engine.codegen.templates import RegisterAccessTemplates
-from src.hardware_engine.codegen.assertions import HardwareAssertions
-from src.hardware_engine.integration.hw_agent import HardwareAgent
+from src.domains.hardware_engine.core.peripheral_graph import PeripheralGraph
+from src.domains.hardware_engine.core.register_schema import RegisterSchemaDB
+from src.domains.hardware_engine.core.pin_map import PinMap
+from src.domains.hardware_engine.core.clock_tree import ClockTree
+from src.domains.hardware_engine.core.interrupt_model import InterruptModel
+from src.domains.hardware_engine.engine.pinmux_engine import PinMuxEngine
+from src.domains.hardware_engine.engine.clock_engine import ClockEngine
+from src.domains.hardware_engine.engine.interrupt_engine import InterruptEngine
+from src.domains.hardware_engine.engine.register_engine import RegisterEngine
+from src.domains.hardware_engine.engine.allocator import ResourceAllocator
+from src.domains.hardware_engine.validator.hw_validator import HardwareValidator
+from src.domains.hardware_engine.validator.rules import HardwareRules
+from src.domains.hardware_engine.codegen.templates import RegisterAccessTemplates
+from src.domains.hardware_engine.codegen.assertions import HardwareAssertions
+from src.domains.hardware_engine.integration.hw_agent import HardwareAgent
 
 
 # ═══════════════════════════════════════════════════════════════
@@ -483,7 +483,7 @@ class TestHardwareValidator:
 
 class TestHardwareConstrainedGenerator:
     def setup_method(self):
-        from src.hardware_engine.codegen.hw_constrained_gen import HardwareConstrainedGenerator
+        from src.domains.hardware_engine.codegen.hw_constrained_gen import HardwareConstrainedGenerator
         self.graph = PeripheralGraph()
         self.db = RegisterSchemaDB()
         self.pin_map = PinMap()

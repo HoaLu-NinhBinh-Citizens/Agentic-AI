@@ -8,7 +8,7 @@ from pathlib import Path
 
 import pytest
 
-from src.tools.schema import (
+from src.core.tools.schema import (
     Tool,
     ToolParameter,
     ToolResult,
@@ -18,19 +18,19 @@ from src.tools.schema import (
     ToolExecutionRequest,
     tool,
 )
-from src.tools.registry import ToolRegistry, get_tool_registry
-from src.tools.executor import (
+from src.core.tools.registry import ToolRegistry, get_tool_registry
+from src.core.tools.executor import (
     ToolExecutor,
     ToolNotFoundError,
     ToolValidationError,
 )
-from src.tools.context import (
+from src.core.tools.context import (
     ToolContext,
     ToolExecutionMode,
     create_sandbox_context,
     create_dry_run_context,
 )
-from src.tools.cache import ToolResultCache
+from src.core.tools.cache import ToolResultCache
 
 
 # ============ Schema Tests ============
