@@ -9,12 +9,14 @@ Features:
 - Parse plugin.xml with proper namespace handling
 - Parse C/H files using pycparser for accurate AST extraction
 - Extract documentation links and copy PDF files
+- Convert PDF files to Markdown (optional, with --convert-pdf)
 - Generate structured Markdown with API references
 - Support incremental updates
 
 Usage:
     python convert_plugins_to_markdown.py <plugins_dir> [-o output_dir]
     python convert_plugins_to_markdown.py . -o docs --single Dio_TS_T40D34M30I0R0
+    python convert_plugins_to_markdown.py . -o docs --convert-pdf
 """
 
 import os
@@ -2614,11 +2616,12 @@ class IndexGenerator:
 
 class PluginConverter:
     """Main plugin converter class."""
-    
-    def __init__(self, plugins_dir: Path, output_dir: Path, extra_excludes: List[str] = None):
+     
+    def __init__(self, plugins_dir: Path, output_dir: Path, extra_excludes: List[str] = None, convert_pdf: bool = False):
         self.plugins_dir = plugins_dir
         self.output_dir = output_dir
         self.extra_excludes = extra_excludes or []
+        self.convert_pdf = convert_pdf
         self.plugins: List[PluginInfo] = []
         self._stats = {
             'total': 0,
@@ -2714,8 +2717,8 @@ class PluginConverter:
         copied_pdfs = pdf_handler.copy_pdfs(plugin_info.doc_links)
         self._stats['pdfs_copied'] += len(copied_pdfs)
         
-        # Extract PDF content if PyPDF2 is available
-        if HAS_PYPDF2:
+        # Extract PDF content if PyPDF2 is available and convert-pdf flag is set
+        if HAS_PYPDF2 and self.convert_pdf:
             pdf_dir = plugin_output / "pdf"
             for link in plugin_info.doc_links:
                 local_path = link.get('local_path', '')
@@ -2807,6 +2810,7 @@ def main():
 Examples:
   python convert_plugins_to_markdown.py . -o docs
   python convert_plugins_to_markdown.py . --single Dio_TS_T40D34M30I0R0
+  python convert_plugins_to_markdown.py . -o docs --convert-pdf
   python convert_plugins_to_markdown.py /path/to/plugins -o output --verbose
         """
     )
@@ -2817,6 +2821,8 @@ Examples:
     parser.add_argument('--exclude-dir', action='append', default=[],
                         help='Additional directories to exclude (can be specified multiple times)')
     parser.add_argument('-v', '--verbose', action='store_true', help='Enable verbose output')
+    parser.add_argument('--convert-pdf', action='store_true',
+                        help='Convert PDF files to Markdown (extract text). Requires PyPDF2.')
     parser.add_argument('--json', help='Also export to JSON file')
     
     args = parser.parse_args()
@@ -2833,7 +2839,7 @@ Examples:
         print(f"Error: Directory not found: {plugins_dir}")
         return 1
     
-    converter = PluginConverter(plugins_dir, output_dir, extra_excludes=args.exclude_dir)
+    converter = PluginConverter(plugins_dir, output_dir, extra_excludes=args.exclude_dir, convert_pdf=args.convert_pdf)
     converter.run(single_plugin=args.single)
     
     # Export to JSON if requested
