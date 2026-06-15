@@ -32,6 +32,10 @@ from .prompts import (
 from .prompt_engine import PromptEngine, PromptTemplate, PromptContext
 from .context_builder import ContextBuilder, LLMContext
 from .response_parser import ResponseParser, ParsedResponse, ValidationError
+from .base import BaseLLM
+from .ollama import OllamaLLM
+from .anthropic_llm import AnthropicLLM
+from .gemini_llm import GeminiLLM
 
 __all__ = [
     # From client
@@ -71,4 +75,9 @@ __all__ = [
     "ResponseParser",
     "ParsedResponse",
     "ValidationError",
+    # Provider adapters
+    "BaseLLM",
+    "OllamaLLM",
+    "AnthropicLLM",
+    "GeminiLLM",
 ]

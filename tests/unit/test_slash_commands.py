@@ -55,8 +55,11 @@ class TestParseFlags:
 
 class TestCommandRegistry:
     def test_all_commands_registered(self):
-        expected = {"review", "fix", "explain", "stats", "rules", "help"}
-        assert set(_BUILTIN_COMMANDS.keys()) == expected
+        # Core commands that must always be present. The registry may also
+        # carry additional commands (e.g. test, refactor, fix-chat,
+        # review-agent), so assert the core set is a subset rather than equal.
+        core = {"review", "fix", "explain", "stats", "rules", "help"}
+        assert core.issubset(set(_BUILTIN_COMMANDS.keys()))
 
     def test_review_has_alias(self):
         cmd = _BUILTIN_COMMANDS["review"]
@@ -134,3 +137,73 @@ class TestParseAndExecute:
         )
         # Should either succeed or fail gracefully (no crash)
         assert isinstance(result.success, bool)
+
+
+class TestSummarizeVerification:
+    """Apply-and-verify: compare findings before/after applying fixes."""
+
+    from dataclasses import dataclass, field
+
+    @dataclass
+    class _Finding:
+        rule_id: str
+        file: str
+        line: int = 1
+
+    def _f(self, rule_id, file="a.py", line=1):
+        return self._Finding(rule_id=rule_id, file=file, line=line)
+
+    def test_resolved_when_finding_gone_after(self):
+        from src.interfaces.cli.commands.slash import summarize_verification
+
+        pre = [self._f("ML001"), self._f("SEC001")]
+        attempted = [self._f("ML001")]
+        post = [self._f("SEC001")]  # ML001 gone, SEC001 untouched
+
+        out = summarize_verification(pre, post, attempted)
+        assert len(out["resolved"]) == 1
+        assert out["resolved"][0].rule_id == "ML001"
+        assert out["unresolved"] == []
+        assert out["regressions"] == []
+
+    def test_unresolved_when_finding_still_present(self):
+        from src.interfaces.cli.commands.slash import summarize_verification
+
+        pre = [self._f("ML001")]
+        attempted = [self._f("ML001")]
+        post = [self._f("ML001")]  # fix did not remove it
+
+        out = summarize_verification(pre, post, attempted)
+        assert out["resolved"] == []
+        assert len(out["unresolved"]) == 1
+        assert out["regressions"] == []
+
+    def test_regression_detects_new_issue(self):
+        from src.interfaces.cli.commands.slash import summarize_verification
+
+        pre = [self._f("ML001")]
+        attempted = [self._f("ML001")]
+        post = [self._f("SEC001")]  # ML001 fixed but introduced SEC001
+
+        out = summarize_verification(pre, post, attempted)
+        assert len(out["resolved"]) == 1
+        assert out["regressions"] == [("SEC001", "a.py")]
+
+    def test_multiple_instances_same_rule_counted_individually(self):
+        from src.interfaces.cli.commands.slash import summarize_verification
+
+        # Two ML001 in same file pre; one survives post.
+        pre = [self._f("ML001", line=1), self._f("ML001", line=9)]
+        attempted = [self._f("ML001", line=1), self._f("ML001", line=9)]
+        post = [self._f("ML001", line=9)]
+
+        out = summarize_verification(pre, post, attempted)
+        assert len(out["resolved"]) == 1
+        assert len(out["unresolved"]) == 1
+        assert out["regressions"] == []
+
+    def test_no_attempts_no_results(self):
+        from src.interfaces.cli.commands.slash import summarize_verification
+
+        out = summarize_verification([], [], [])
+        assert out == {"resolved": [], "unresolved": [], "regressions": []}

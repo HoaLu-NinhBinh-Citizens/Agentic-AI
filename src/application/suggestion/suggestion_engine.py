@@ -24,10 +24,13 @@ import json
 import logging
 from dataclasses import dataclass, field
 from enum import Enum
-from typing import Any, Optional
+from typing import TYPE_CHECKING, Any, Optional
 
 from src.application.workflows.unified.code_context import CodeContext
 from src.application.workflows.unified.detector_base import Finding, FindingSeverity
+
+if TYPE_CHECKING:
+    from src.application.suggestion.context_fusion import ContextFusion
 
 logger = logging.getLogger(__name__)
 
@@ -149,6 +152,10 @@ class SuggestionConfig:
     prefer_automated: bool = True
     context_radius: int = 5
     enable_batch_processing: bool = True
+    # Token budget for the assembled LLM prompt (incl. fused related code).
+    llm_prompt_max_tokens: int = 4000
+    # Token budget for the fused "related code" block within the prompt.
+    fused_context_max_tokens: int = 800
 
 
 @dataclass
@@ -196,10 +203,20 @@ class UnifiedSuggestionEngine:
         self,
         config: Optional[SuggestionConfig] = None,
         llm_provider: Optional[LLMProviderInterface] = None,
+        context_fusion: Optional["ContextFusion"] = None,
     ) -> None:
-        """Initialize the suggestion engine."""
+        """Initialize the suggestion engine.
+
+        Args:
+            config: Suggestion engine configuration.
+            llm_provider: Optional LLM provider for AI-generated fixes.
+            context_fusion: Optional context-fusion component that retrieves,
+                reranks, and packs related code into the LLM prompt. When
+                ``None``, prompts use only the local snippet (prior behavior).
+        """
         self.config = config or SuggestionConfig()
         self._llm_provider = llm_provider
+        self._context_fusion = context_fusion
         self._templates = self._load_templates()
         self._rule_patterns = self._load_rule_patterns()
         self._common_patterns = self._load_common_patterns()
@@ -403,7 +420,9 @@ class UnifiedSuggestionEngine:
             logger.debug("LLM provider not available, skipping LLM fixes")
             return []
 
-        prompt = self._build_llm_prompt(finding, context, count)
+        retrieved_context = await self._fuse_context(finding, context)
+        prompt = self._build_llm_prompt(finding, context, count, retrieved_context)
+        prompt = self._apply_prompt_budget(prompt)
         system_prompt = """You are a code fix assistant. Generate fix options for code issues.
 Respond ONLY with valid JSON array of fix options. Each option must have:
 - id: unique identifier
@@ -423,14 +442,56 @@ Respond ONLY with valid JSON array of fix options. Each option must have:
             logger.warning("LLM fix generation failed: %s", e)
             return []
 
+    async def _fuse_context(
+        self,
+        finding: Finding,
+        context: Optional[CodeContext],
+    ) -> str:
+        """Retrieve + rerank + pack related code for the prompt (may be empty)."""
+        if self._context_fusion is None:
+            return ""
+        # Query blends the issue description with the offending code so
+        # retrieval surfaces both semantically- and lexically-related code.
+        query = f"{finding.rule_id} {finding.message}\n{finding.context or ''}".strip()
+        try:
+            return await self._context_fusion.build_context(
+                query, max_tokens=self.config.fused_context_max_tokens
+            )
+        except Exception as e:  # pragma: no cover - defensive
+            logger.warning("Context fusion failed, continuing without it: %s", e)
+            return ""
+
+    def _apply_prompt_budget(self, prompt: str) -> str:
+        """Truncate the assembled prompt to the configured token budget."""
+        max_tokens = self.config.llm_prompt_max_tokens
+        if max_tokens <= 0:
+            return prompt
+        try:
+            from src.infrastructure.llm.token_tracker import TokenCounter
+
+            counter = TokenCounter()
+            if counter.count(prompt) > max_tokens:
+                return counter.truncate_prompt(prompt, max_tokens)
+        except Exception as e:  # pragma: no cover - defensive
+            logger.debug("Token budgeting unavailable, sending full prompt: %s", e)
+        return prompt
+
     def _build_llm_prompt(
         self,
         finding: Finding,
         context: Optional[CodeContext],
         count: int,
+        retrieved_context: str = "",
     ) -> str:
         """Build prompt for LLM fix generation."""
         context_snippet = self._get_context_snippet(finding, context)
+
+        related_section = ""
+        if retrieved_context:
+            related_section = f"""
+
+{retrieved_context}
+"""
 
         return f"""Generate {count} fix options for this code issue:
 
@@ -450,7 +511,7 @@ Problematic Code:
 Surrounding Context:
 ```
 {context_snippet}
-```
+```{related_section}
 
 Generate {count} distinct fix options, each with different approach.
 Respond with JSON array."""
@@ -556,7 +617,12 @@ Respond with JSON array."""
         return options
 
     def _rank_options(self, options: list[FixOption]) -> list[FixOption]:
-        """Rank options by confidence and risk."""
+        """Rank options so the most actionable, trustworthy fix comes first.
+
+        Order of precedence: higher confidence, then lower risk, then (when
+        configured) automated fixes, then fixes that can be applied without
+        manual review, then id for a stable deterministic tie-break.
+        """
         def sort_key(opt: FixOption) -> tuple:
             risk_score = opt.risk.to_numeric()
             confidence_score = -opt.confidence
@@ -566,7 +632,10 @@ Respond with JSON array."""
             else:
                 automated_bonus = 0
 
-            return (confidence_score, risk_score, automated_bonus, opt.id)
+            # Prefer fixes the user can take as-is over ones needing review.
+            review_bonus = 1 if opt.requires_review else 0
+
+            return (confidence_score, risk_score, automated_bonus, review_bonus, opt.id)
 
         return sorted(options, key=sort_key)
 
