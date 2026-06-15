@@ -601,6 +601,111 @@ async def cmd_review_agent(ctx: CommandContext) -> CommandResult:
     )
 
 
+async def cmd_composer(ctx: CommandContext) -> CommandResult:
+    """Cursor Composer-style chat editing via the ComposerWorkflow.
+
+    Usage: /composer <natural language request>
+    Wires the previously orphaned ComposerWorkflow onto the CLI.
+    """
+    from pathlib import Path
+
+    message = (ctx.raw_args or "").strip()
+    if not message:
+        return CommandResult(
+            success=False,
+            output="Usage: /composer <request>\n"
+                   "  /composer create a function to parse config\n"
+                   "  /composer refactor the auth module",
+        )
+
+    try:
+        from src.application.workflows.composer import ComposerWorkflow
+    except ImportError as e:
+        return CommandResult(success=False, output=f"Composer unavailable: {e}")
+
+    try:
+        composer = ComposerWorkflow(project_root=Path(ctx.workspace_root))
+        reply = await composer.chat(message)
+    except Exception as e:
+        import logging
+        logging.warning("Composer failed: %s", e)
+        return CommandResult(success=False, output=f"Composer failed: {e}")
+
+    lines = [f"## Composer", "", reply.content]
+    if reply.files_referenced:
+        lines.append("\n**Files:** " + ", ".join(f"`{f}`" for f in reply.files_referenced))
+    if reply.code_changes:
+        lines.append(f"\n**Proposed changes:** {len(reply.code_changes)}")
+
+    return CommandResult(
+        success=True,
+        output="\n".join(lines),
+        data={
+            "files_referenced": list(reply.files_referenced),
+            "change_count": len(reply.code_changes),
+            "confidence": reply.confidence,
+        },
+    )
+
+
+async def cmd_review_session(ctx: CommandContext) -> CommandResult:
+    """Collaborative review sessions via CollaborativeReview.
+
+    Usage:
+      /review-session --action=create --title="..." [--pr=ID]
+      /review-session --action=summary --session=ID
+      /review-session --action=export  --session=ID
+    Wires the previously orphaned CollaborativeReview onto the CLI.
+    """
+    try:
+        from src.application.workflows.collaborative import CollaborativeReview
+    except ImportError as e:
+        return CommandResult(success=False, output=f"Collaborative review unavailable: {e}")
+
+    action = (ctx.raw_flags.get("action") or "").strip().lower()
+    session_id = ctx.raw_flags.get("session")
+
+    if action not in ("create", "summary", "export"):
+        return CommandResult(
+            success=False,
+            output="Usage: /review-session --action=create|summary|export\n"
+                   "  --action=create  --title=\"...\" [--pr=ID]\n"
+                   "  --action=summary --session=ID\n"
+                   "  --action=export  --session=ID",
+        )
+
+    try:
+        review = CollaborativeReview()
+        try:
+            if action == "create":
+                title = ctx.raw_flags.get("title", "Untitled review")
+                pr_id = ctx.raw_flags.get("pr")
+                sid = review.create_session(title=title, pr_id=pr_id)
+                out = f"Created review session `{sid}` — {title}"
+                data = {"session_id": sid}
+            else:  # summary | export
+                if not session_id:
+                    return CommandResult(
+                        success=False,
+                        output=f"--session=ID is required for action={action}",
+                    )
+                if action == "summary":
+                    summary = review.get_summary(session_id)
+                    out = f"## Session Summary `{session_id}`\n```json\n{summary}\n```"
+                    data = {"summary": summary}
+                else:
+                    out = review.export_report(session_id)
+                    data = {"exported": True}
+        finally:
+            review.close()
+    except Exception as e:
+        import logging
+        logging.warning("Review session failed: %s", e)
+        return CommandResult(success=False, output=f"Review session failed: {e}")
+
+    return CommandResult(success=True, output=out, data=data)
+
+
 def _finding_key(finding) -> tuple[str, str]:
     """Stable identity for a finding across a re-review.
 
@@ -1671,6 +1776,29 @@ _BUILTIN_COMMANDS: dict[str, Command] = {
         examples=[
             "/review-agent @src/",
             "/review-agent --focus=security,ml",
+        ],
+    ),
+    "composer": Command(
+        name="composer",
+        description="Cursor Composer-style chat editing (create/refactor/explain/debug)",
+        category=CommandCategory.FIX,
+        aliases=["co"],
+        handler=cmd_composer,
+        examples=[
+            "/composer create a config parser",
+            "/composer refactor the auth module",
+        ],
+    ),
+    "review-session": Command(
+        name="review-session",
+        description="Collaborative review sessions (create/list/summary/export)",
+        category=CommandCategory.REVIEW,
+        aliases=["rs"],
+        handler=cmd_review_session,
+        examples=[
+            "/review-session --action=create --title=\"PR 12 review\"",
+            "/review-session --action=summary --session=ID",
+            "/review-session --action=export --session=ID",
         ],
     ),
     "fix": Command(
