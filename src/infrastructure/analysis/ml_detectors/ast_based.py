@@ -43,6 +43,49 @@ _SEED_PATTERNS = [
     r"PYTHONHASHSEED",
 ]
 
+_MODEL_NAME_TOKENS = {
+    "model", "net", "network", "classifier", "encoder", "decoder",
+}
+_DATA_NAME_TOKENS = {
+    "x", "y", "data", "input", "inputs", "batch", "batches", "loader",
+    "dataset", "images", "labels", "features", "targets", "tensor",
+}
+
+
+def _identifier_tokens(name: str) -> set[str]:
+    """Split an identifier into lowercase word tokens.
+
+    Handles snake_case and camelCase so device-variable classification matches
+    whole words rather than substrings (e.g. ``max_epochs`` -> {"max","epochs"},
+    not a match for the single-letter token ``"x"``).
+    """
+    tokens: list[str] = []
+    for part in re.split(r"[^A-Za-z0-9]+", name):
+        if not part:
+            continue
+        tokens.extend(re.findall(r"[A-Z]+(?=[A-Z][a-z])|[A-Z]?[a-z]+|[A-Z]+|\d+", part))
+    return {t.lower() for t in tokens if t}
+
+
+def _device_literal(device_arg: str) -> Optional[str]:
+    """Return the literal device family (e.g. ``cuda``/``cpu``) or None.
+
+    ``device_arg`` is the raw text of a ``.to(...)`` argument list. Only string
+    literals yield a value; bare identifiers/expressions (e.g. ``device``)
+    return None so two variable-driven placements are never flagged as a
+    mismatch (we cannot prove they differ).
+    """
+    s = device_arg.strip()
+    if s.startswith("(") and s.endswith(")"):
+        s = s[1:-1].strip()
+    # Drop a trailing kwarg list if present, keep first positional.
+    s = s.split(",")[0].strip()
+    if len(s) >= 2 and s[0] in "\"'" and s[-1] == s[0]:
+        value = s[1:-1]
+        return value.split(":")[0].strip().lower()  # cuda:0 -> cuda
+    return None
+
+
 # Confidence levels for detection methods
 AST_CONFIDENCE_BOOST = 0.15
 CONTEXT_CLARITY_BOOST = 0.10
@@ -275,10 +318,16 @@ class MLDetectorAST:
                 elif self._is_data_variable(var_name):
                     data_devices[var_name] = (line_no, device_arg)
 
-            # Check for mismatches
+            # Check for mismatches. Only flag when BOTH placements use a
+            # concrete string-literal device and the device families genuinely
+            # differ (e.g. "cuda" vs "cpu"). If either side is a variable/expr
+            # (e.g. .to(device)) we cannot prove a mismatch, so we stay silent
+            # to avoid false positives.
             for model_var, (model_line, model_dev) in model_devices.items():
                 for data_var, (data_line, data_dev) in data_devices.items():
-                    if model_dev != data_dev and model_dev != "" and data_dev != "":
+                    model_fam = _device_literal(model_dev)
+                    data_fam = _device_literal(data_dev)
+                    if model_fam is not None and data_fam is not None and model_fam != data_fam:
                         findings.append({
                             "rule_id": "ML003",
                             "severity": "HIGH",
@@ -907,14 +956,20 @@ class MLDetectorAST:
         return to_calls
 
     def _is_model_variable(self, var_name: str) -> bool:
-        """Heuristic to identify model variables."""
-        model_patterns = ["model", "net", "network", "classifier", "encoder", "decoder"]
-        return any(p in var_name.lower() for p in model_patterns)
+        """Heuristic to identify model variables (token-aware)."""
+        return bool(_identifier_tokens(var_name) & _MODEL_NAME_TOKENS)
 
     def _is_data_variable(self, var_name: str) -> bool:
-        """Heuristic to identify data variables."""
-        data_patterns = ["x", "y", "data", "input", "batch", "loader", "dataset"]
-        return any(p in var_name.lower() for p in data_patterns)
+        """Heuristic to identify data variables (token-aware).
+
+        Token-based matching avoids substring false positives such as
+        ``max_epochs`` / ``index`` / ``context`` matching ``"x"`` or
+        ``query`` / ``layer`` matching ``"y"``. A variable already classified
+        as a model is never also treated as data.
+        """
+        if self._is_model_variable(var_name):
+            return False
+        return bool(_identifier_tokens(var_name) & _DATA_NAME_TOKENS)
 
     def _find_inference_functions(
         self,

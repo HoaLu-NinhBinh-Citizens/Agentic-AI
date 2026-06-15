@@ -437,6 +437,27 @@ def get_extended_rules() -> dict[str, MLExtendedRule]:
     return ML_EXTENDED_RULES
 
 
+def _strip_comments_and_docstrings(code: str) -> str:
+    """Remove triple-quoted blocks and ``#`` comments from Python source.
+
+    Reduces false positives where extended-rule regexes would otherwise match
+    commented-out or documented code. Line structure is preserved (blocks are
+    blanked, not deleted) so multi-line patterns still behave predictably.
+    """
+    import re
+
+    def _blank(match: "re.Match") -> str:
+        # Preserve newlines so line-based patterns are not distorted.
+        return re.sub(r"[^\n]", " ", match.group(0))
+
+    # Triple-quoted strings/docstrings first.
+    code = re.sub(r"\"\"\".*?\"\"\"", _blank, code, flags=re.DOTALL)
+    code = re.sub(r"'''.*?'''", _blank, code, flags=re.DOTALL)
+    # Then line comments (best-effort; does not parse strings containing '#').
+    code = re.sub(r"#[^\n]*", "", code)
+    return code
+
+
 def check_extended_rules(
     code: str,
     language: str = "python",
@@ -453,11 +474,12 @@ def check_extended_rules(
     import re
 
     findings = []
+    scan_code = _strip_comments_and_docstrings(code) if language == "python" else code
 
     for rule_id, rule in ML_EXTENDED_RULES.items():
         for pattern in rule.patterns:
             try:
-                if re.search(pattern, code, re.MULTILINE | re.DOTALL | re.IGNORECASE):
+                if re.search(pattern, scan_code, re.MULTILINE | re.DOTALL | re.IGNORECASE):
                     findings.append({
                         "rule_id": rule_id,
                         "name": rule.name,
