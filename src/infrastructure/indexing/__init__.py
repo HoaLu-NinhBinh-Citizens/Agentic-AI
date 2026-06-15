@@ -1,5 +1,9 @@
 """Incremental Indexer — only re-index changed files since last run."""
 
+from src.infrastructure.indexing.ast_chunker import (
+    ASTCodeChunker,
+    CodeChunk,
+)
 from src.infrastructure.indexing.hash_utils import (
     compute_content_hash,
     compute_file_hash,
@@ -41,4 +45,7 @@ __all__ = [
     "FileChange",
     "WATCHDOG_AVAILABLE",
     "WatcherIndexer",
+    # AST chunker
+    "ASTCodeChunker",
+    "CodeChunk",
 ]

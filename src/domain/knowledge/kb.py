@@ -417,9 +417,8 @@ class KnowledgeBase:
     async def query(self, query: KBQuery) -> list[KBSearchResult]:
         """
         Query the knowledge base with semantic search.
-
-        W-012 Fix: Removed global _lock to allow concurrent queries.
-        Vector store implementations are thread-safe.
+        
+        Uses HNSW index if available for O(log N) search.
 
         Args:
             query: KBQuery with text, filters, and top_k
@@ -427,7 +426,6 @@ class KnowledgeBase:
         Returns:
             List of KBSearchResult sorted by relevance
         """
-        # Build filter
         filter_meta: dict[str, Any] = {}
         if query.chip_family:
             filter_meta["chip_family"] = query.chip_family
@@ -436,10 +434,7 @@ class KnowledgeBase:
         if query.entry_types:
             filter_meta["type"] = {"$in": [t.value for t in query.entry_types]}
 
-        # Generate query embedding
         query_embedding = await self._embed(query.text)
-
-        # Search vector store
         raw_results = await self._store.search(
             query_embedding=query_embedding,
             top_k=query.top_k,
