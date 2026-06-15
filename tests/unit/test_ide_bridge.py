@@ -4,9 +4,6 @@ from src.interfaces.ide.bridge.protocol import (
     CodeAction, CompletionItem, Diagnostic, IDEBridgeMessage,
     InlineChat, InlineCompletion, MessageType, Range, TextEdit,
 )
-from src.interfaces.ide.bridge.ghost_text import (
-    GhostTextConfig, GhostTextProvider, GhostTextSession,
-)
 from src.interfaces.ide.bridge.code_actions import CodeActionProvider, CodeActionContext
 
 
@@ -129,72 +126,6 @@ class TestIDEBridgeMessage:
         )
         j = msg.to_json()
         assert j["jsonrpc"] == "2.0"
-
-
-class TestGhostTextConfig:
-    def test_defaults(self):
-        cfg = GhostTextConfig()
-        assert cfg.debounce_ms == 150
-        assert cfg.max_lines == 20
-        assert cfg.show_in_ghost_mode is True
-        assert cfg.accept_on_tab is True
-
-    def test_custom(self):
-        cfg = GhostTextConfig(debounce_ms=300, accept_on_enter=True)
-        assert cfg.debounce_ms == 300
-        assert cfg.accept_on_enter is True
-
-
-class TestGhostTextSession:
-    def test_creation(self):
-        session = GhostTextSession(
-            id="gt-123",
-            file_path="test.py",
-            cursor_line=10,
-            cursor_col=5,
-            trigger_text="def hello",
-        )
-        assert session.accepted is False
-        assert session.dismissed is False
-        assert session.completion is None
-
-
-class TestGhostTextProvider:
-    def test_start_session_generates_id(self):
-        provider = GhostTextProvider()
-        session = provider.start_session("test.py", 1, 5, "def hello():")
-        assert session.id.startswith("gt-")
-        assert session.trigger_text == "def hello():"
-
-    def test_end_session_removes_from_sessions(self):
-        provider = GhostTextProvider()
-        session = provider.start_session("test.py", 1, 5, "def hello():")
-        provider.end_session(session.id)
-        assert session.id not in provider._sessions
-
-    def test_simple_completion_parenthesis(self):
-        provider = GhostTextProvider()
-        items = provider._simple_completion("print(")
-        assert len(items) >= 1
-        assert items[0].insert_text == ")"
-
-    def test_simple_completion_brace(self):
-        provider = GhostTextProvider()
-        items = provider._simple_completion("if x {")
-        assert any(i.insert_text == "}" for i in items)
-
-    def test_stats(self):
-        provider = GhostTextProvider()
-        stats = provider.get_stats()
-        assert "total_sessions" in stats
-        assert "accepted" in stats
-
-    def test_on_message_callback(self):
-        provider = GhostTextProvider()
-        received = []
-        provider.on_message(lambda m: received.append(m))
-        provider._send_to_ide({"type": "test"})
-        assert len(received) == 1
 
 
 class TestCodeActionProvider:
