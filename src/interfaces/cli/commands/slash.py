@@ -521,6 +521,137 @@ async def _fallback_to_legacy_review(
     )
 
 
+async def cmd_review_agent(ctx: CommandContext) -> CommandResult:
+    """Run a planned, dependency-ordered review via the ReviewAgentLoop.
+
+    Unlike /review (a flat scan), this decomposes the request into per-file
+    subtasks, orders them so imported files are reviewed first, executes them
+    resiliently (one failing file does not abort the run), and aggregates
+    de-duplicated findings. This is the planner wired onto the review engine.
+    """
+    from pathlib import Path
+
+    try:
+        from src.application.workflows.unified.review_engine import (
+            UnifiedReviewEngine,
+            ReviewEngineConfig,
+        )
+        from src.application.workflows.review_agent_loop import ReviewAgentLoop
+    except ImportError as e:
+        return await _fallback_to_legacy_review(ctx, error_msg=f"Agent loop unavailable: {e}")
+
+    files = list(ctx.files) if ctx.files else []
+    if not files:
+        workspace = Path(ctx.workspace_root)
+        if workspace.exists() and workspace.is_dir():
+            for ext in [".py", ".js", ".ts", ".c", ".cpp"]:
+                source_files = list(workspace.rglob(f"*{ext}"))[:50]
+                if source_files:
+                    files = [str(f) for f in source_files]
+                    break
+        if not files:
+            return CommandResult(
+                success=True,
+                output="No source files found. Use /review-agent @file.py to specify files.",
+            )
+
+    focus = ctx.raw_flags.get("focus", "all").split(",")
+    if "all" in focus:
+        focus = ["security", "quality", "ml", "embedded"]
+    focus = [f for f in focus if f in {"security", "quality", "ml", "embedded"}]
+
+    config = ReviewEngineConfig(
+        focus_areas=focus or ["security", "quality", "ml"],
+        output_format="markdown",
+        confidence_threshold=0.5,
+    )
+
+    try:
+        engine = UnifiedReviewEngine(config)
+        loop = ReviewAgentLoop(engine)
+        result = await loop.run(files, focus_areas=focus or None)
+    except Exception as e:
+        import logging
+        logging.warning("Review agent loop failed: %s", e)
+        return await _fallback_to_legacy_review(ctx, error_msg=f"Agent loop failed: {e}")
+
+    lines = [
+        f"## Planned Review ({len(result.plan)} files, "
+        f"{result.total_findings} findings)\n",
+        "### Execution plan (dependency order)",
+    ]
+    for i, subtask in enumerate(result.plan, 1):
+        deps = subtask.get("depends_on") or []
+        dep_note = f" (after {', '.join(deps)})" if deps else ""
+        lines.append(f"{i}. `{subtask['file']}`{dep_note}")
+    if result.failed_subtasks:
+        lines.append(f"\n**Warning:** {result.failed_subtasks} file(s) failed to review.")
+        for r in result.subtask_results:
+            if r.status == "error":
+                lines.append(f"  - `{r.file}`: {r.error}")
+
+    return CommandResult(
+        success=result.failed_subtasks == 0,
+        output="\n".join(lines),
+        data={
+            "files_reviewed": len(result.plan),
+            "total_findings": result.total_findings,
+            "failed_subtasks": result.failed_subtasks,
+        },
+    )
+
+
+def _finding_key(finding) -> tuple[str, str]:
+    """Stable identity for a finding across a re-review.
+
+    Line numbers shift once an edit is applied, so identity is keyed on
+    (rule_id, file) rather than line. Counting is handled by the caller so
+    multiple instances of the same rule in one file are tracked individually.
+    """
+    return (str(getattr(finding, "rule_id", "")), str(getattr(finding, "file", "")))
+
+
+def summarize_verification(pre_findings, post_findings, attempted) -> dict[str, list]:
+    """Compare findings before/after applying fixes to verify they resolved.
+
+    Args:
+        pre_findings: All findings from the review BEFORE applying fixes.
+        post_findings: All findings from a fresh review AFTER applying fixes.
+        attempted: The findings we actually applied a fix for.
+
+    Returns:
+        Dict with ``resolved`` / ``unresolved`` (Finding objects from
+        ``attempted``) and ``regressions`` (new finding instances introduced
+        by the edits, as (rule_id, file) keys).
+    """
+    from collections import Counter
+
+    pre_counts = Counter(_finding_key(f) for f in pre_findings)
+    post_counts = Counter(_finding_key(f) for f in post_findings)
+
+    # Regressions: post instances beyond what existed before the edits.
+    regressions: list[tuple[str, str]] = []
+    for key, cnt in post_counts.items():
+        extra = cnt - pre_counts.get(key, 0)
+        if extra > 0:
+            regressions.extend([key] * extra)
+
+    # An attempted fix is "resolved" if its finding no longer appears in the
+    # post-review. Consume one post instance per attempt so two attempts on the
+    # same (rule_id, file) are not both credited against a single survivor.
+    remaining = dict(post_counts)
+    resolved, unresolved = [], []
+    for finding in attempted:
+        key = _finding_key(finding)
+        if remaining.get(key, 0) > 0:
+            unresolved.append(finding)
+            remaining[key] -= 1
+        else:
+            resolved.append(finding)
+
+    return {"resolved": resolved, "unresolved": unresolved, "regressions": regressions}
+
+
 async def cmd_fix(ctx: CommandContext) -> CommandResult:
     """Show and apply fixes for a specific file or line using UnifiedReviewEngine.
 
@@ -621,6 +752,7 @@ async def cmd_fix(ctx: CommandContext) -> CommandResult:
 
         applied_count = 0
         failed_count = 0
+        applied_findings = []
 
         for fix in fixable:
             sev_icon = {
@@ -656,6 +788,7 @@ async def cmd_fix(ctx: CommandContext) -> CommandResult:
                 success, msg = await applicator.apply_finding_fix(fix, create_backup=True)
                 if success:
                     applied_count += 1
+                    applied_findings.append(fix)
                     output_lines.append(f"\n✓ Applied: {msg}")
                 else:
                     failed_count += 1
@@ -663,12 +796,57 @@ async def cmd_fix(ctx: CommandContext) -> CommandResult:
 
             output_lines.append("")
 
+        # Apply-and-verify: re-run the review on the edited files and confirm the
+        # fixes actually resolved the findings (instead of trusting syntax-only
+        # validation). Skipped when nothing was applied.
+        verification = None
+        if auto_apply and applied_findings:
+            try:
+                post_result = await engine.review(
+                    [Path(f) for f in files], incremental=False
+                )
+                verification = summarize_verification(
+                    pre_findings=result.findings,
+                    post_findings=post_result.findings,
+                    attempted=applied_findings,
+                )
+            except Exception as verify_err:  # pragma: no cover - defensive
+                import logging
+                logging.warning("Apply-and-verify re-review failed: %s", verify_err)
+
         # Summary
         if auto_apply:
             output_lines.append(f"\n### Summary\n")
             output_lines.append(f"- Applied: {applied_count}")
             output_lines.append(f"- Failed: {failed_count}")
             output_lines.append(f"- Backups: {applicator.get_backup_count()}")
+
+            if verification is not None:
+                resolved = verification["resolved"]
+                unresolved = verification["unresolved"]
+                regressions = verification["regressions"]
+                output_lines.append("\n### Verification (re-review)\n")
+                output_lines.append(f"- Resolved: {len(resolved)}/{len(applied_findings)}")
+                output_lines.append(f"- Still present: {len(unresolved)}")
+                output_lines.append(f"- New issues introduced: {len(regressions)}")
+                for f in unresolved:
+                    output_lines.append(
+                        f"  - [!] `{f.file}:{f.line}` **[{f.rule_id}]** still detected after fix"
+                    )
+                for rule_id, fpath in regressions:
+                    output_lines.append(
+                        f"  - [REGRESSION] `{fpath}` **[{rule_id}]** newly introduced by an applied fix"
+                    )
+                if unresolved or regressions:
+                    output_lines.append(
+                        "\n**Warning:** verification found unresolved or new issues. "
+                        "Review the edits or restore from `.ai_support/backups/`."
+                    )
+            elif auto_apply and applied_findings:
+                output_lines.append(
+                    "\n_Note: applied fixes passed syntax validation but the "
+                    "verification re-review could not be completed._"
+                )
 
             if failed_count > 0:
                 output_lines.append(f"\n**Warning:** {failed_count} fixes failed. Check backups in `.ai_support/backups/`.")
@@ -680,6 +858,11 @@ async def cmd_fix(ctx: CommandContext) -> CommandResult:
                 "fix_count": len(fixable),
                 "applied_count": applied_count if auto_apply else 0,
                 "failed_count": failed_count,
+                "verification": {
+                    "resolved": len(verification["resolved"]),
+                    "unresolved": len(verification["unresolved"]),
+                    "regressions": len(verification["regressions"]),
+                } if verification is not None else None,
                 "fixes": [
                     {
                         "id": f.rule_id,
@@ -711,14 +894,74 @@ async def _fallback_to_legacy_fix(
     )
 
 
-async def cmd_fix_interactive(ctx: CommandContext) -> CommandResult:
+async def _confirm_and_apply_findings(
+    fixable,
+    applicator,
+    prompt_provider,
+):
+    """Confirmation gate: prompt before applying each finding's fix.
+
+    Prompts y/n/a/q per finding (a = yes-to-all, q = abort). Confirmed fixes
+    are applied to disk via ``applicator.apply_finding_fix`` (with backup).
+    Returns a dict with applied findings, skip count, abort flag, and a log.
+
+    The prompt_provider is injected (``async prompt(message, choices, default)``)
+    so the gate is unit-testable without real stdin.
+    """
+    applied_findings = []
+    skipped = 0
+    aborted = False
+    yes_to_all = False
+    log: list[str] = []
+
+    for finding in fixable:
+        if not yes_to_all:
+            message = (
+                f"[{finding.rule_id}] {finding.file}:{finding.line}\n"
+                f"  {finding.message}\n  Apply this fix?"
+            )
+            choice = await prompt_provider.prompt(
+                message=message, choices=["y", "n", "a", "q"], default="n"
+            )
+            choice = (choice or "n").strip().lower()
+            if choice == "q":
+                aborted = True
+                break
+            if choice == "a":
+                yes_to_all = True
+            elif choice != "y":
+                skipped += 1
+                log.append(f"- skipped `{finding.file}:{finding.line}` [{finding.rule_id}]")
+                continue
+
+        success, msg = await applicator.apply_finding_fix(finding, create_backup=True)
+        if success:
+            applied_findings.append(finding)
+            log.append(f"- ✓ applied `{finding.file}:{finding.line}` [{finding.rule_id}]")
+        else:
+            log.append(f"- ✗ failed `{finding.file}:{finding.line}` [{finding.rule_id}]: {msg}")
+
+    return {
+        "applied": applied_findings,
+        "skipped": skipped,
+        "aborted": aborted,
+        "log": log,
+    }
+
+
+async def cmd_fix_interactive(ctx: CommandContext, prompt_provider=None) -> CommandResult:
     """Interactive fix mode with user confirmation before each fix.
+
+    Prompts the user before applying each fix, actually writes confirmed fixes
+    to disk (with backup), then re-reviews to verify they resolved the issue.
 
     Args:
         ctx: Command context with files, lines, and flags
+        prompt_provider: Optional prompt provider (``async prompt(message,
+            choices, default)``); defaults to the console provider.
 
     Returns:
-        CommandResult with fix application results
+        CommandResult with fix application + verification results
     """
     from pathlib import Path
 
@@ -736,7 +979,6 @@ async def cmd_fix_interactive(ctx: CommandContext) -> CommandResult:
             ReviewEngineConfig,
         )
         from src.interfaces.cli.commands.fix_interactive import (
-            run_interactive_fix,
             ConsolePromptProvider,
         )
     except ImportError as e:
@@ -772,50 +1014,64 @@ async def cmd_fix_interactive(ctx: CommandContext) -> CommandResult:
         output_lines = [
             f"## Interactive Fix Mode",
             f"",
-            f"Found {len(fixable)} fixable issue(s).",
-            f"",
-            f"Options:",
-            f"  [y] Yes - apply this fix",
-            f"  [n] No - skip this fix",
-            f"  [a] Yes to all - apply all remaining fixes",
-            f"  [q] Quit - skip all remaining fixes",
-            f"  [e] Edit - open in editor for manual fix",
-            f"  [s] Skip - skip this fix only",
-            f"  [h] Help - show more details",
+            f"Found {len(fixable)} fixable issue(s). For each: "
+            f"[y] apply  [n] skip  [a] apply all  [q] quit",
             f"",
         ]
 
-        session_result = await run_interactive_fix(
-            fixes=fixable,
-            workspace_root=ctx.workspace_root,
-            prompt_provider=ConsolePromptProvider(),
-        )
+        provider = prompt_provider or ConsolePromptProvider()
+        applicator = FixApplicator()
+
+        gate = await _confirm_and_apply_findings(fixable, applicator, provider)
+        applied_findings = gate["applied"]
+
+        output_lines.extend(gate["log"])
+
+        # Apply-and-verify: re-review to confirm the confirmed fixes resolved
+        # the findings (same guarantee as non-interactive /fix --apply).
+        verification = None
+        if applied_findings:
+            try:
+                post_result = await engine.review(
+                    [Path(f) for f in files], incremental=False
+                )
+                verification = summarize_verification(
+                    pre_findings=result.findings,
+                    post_findings=post_result.findings,
+                    attempted=applied_findings,
+                )
+            except Exception as verify_err:  # pragma: no cover - defensive
+                import logging
+                logging.warning("Interactive apply-and-verify failed: %s", verify_err)
 
         output_lines.append("")
-        output_lines.append(f"### Session Summary")
-        output_lines.append(f"- Applied: {session_result.applied_count}")
-        output_lines.append(f"- Skipped: {session_result.skipped_count}")
-        output_lines.append(f"- Total processed: {session_result.total_processed}")
+        output_lines.append("### Session Summary")
+        output_lines.append(f"- Applied: {len(applied_findings)}")
+        output_lines.append(f"- Skipped: {gate['skipped']}")
+        if gate["aborted"]:
+            output_lines.append("- **Aborted by user**")
 
-        if session_result.was_aborted:
-            output_lines.append("")
-            output_lines.append("**Note:** Session was aborted by user.")
-
-        applied = session_result.session.applied_fixes
-        if applied:
-            output_lines.append("")
-            output_lines.append("### Applied Fixes")
-            for fix in applied:
-                output_lines.append(f"- `{fix.file_path}:{fix.line_start}` [{fix.rule_id}]")
+        if verification is not None:
+            output_lines.append("\n### Verification (re-review)")
+            output_lines.append(
+                f"- Resolved: {len(verification['resolved'])}/{len(applied_findings)}"
+            )
+            output_lines.append(f"- Still present: {len(verification['unresolved'])}")
+            output_lines.append(f"- New issues introduced: {len(verification['regressions'])}")
 
         return CommandResult(
             success=True,
             output="\n".join(output_lines),
             data={
                 "fix_count": len(fixable),
-                "applied_count": session_result.applied_count,
-                "skipped_count": session_result.skipped_count,
-                "was_aborted": session_result.was_aborted,
+                "applied_count": len(applied_findings),
+                "skipped_count": gate["skipped"],
+                "was_aborted": gate["aborted"],
+                "verification": {
+                    "resolved": len(verification["resolved"]),
+                    "unresolved": len(verification["unresolved"]),
+                    "regressions": len(verification["regressions"]),
+                } if verification is not None else None,
             },
         )
 
@@ -1404,6 +1660,17 @@ _BUILTIN_COMMANDS: dict[str, Command] = {
             "/review @src/",
             "/review --focus=security",
             "/review --files=src/a.py --focus=ml --auto",
+        ],
+    ),
+    "review-agent": Command(
+        name="review-agent",
+        description="Planned, dependency-ordered review via the agent loop",
+        category=CommandCategory.REVIEW,
+        aliases=["ra"],
+        handler=cmd_review_agent,
+        examples=[
+            "/review-agent @src/",
+            "/review-agent --focus=security,ml",
         ],
     ),
     "fix": Command(

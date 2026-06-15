@@ -24,6 +24,25 @@ if TYPE_CHECKING:
 
 logger = logging.getLogger(__name__)
 
+# Reproducibility seed-setting patterns recognized by ML005. Covers PyTorch,
+# NumPy, stdlib, Lightning, TensorFlow, plus the determinism knobs people most
+# often forget (cuDNN determinism and the PYTHONHASHSEED env var). Recognizing
+# more valid forms reduces ML005 false positives on already-seeded code.
+_SEED_PATTERNS = [
+    r"torch\.manual_seed",
+    r"torch\.cuda\.manual_seed",
+    r"np\.random\.seed",
+    r"random\.seed",
+    r"set_random_seed",
+    r"seed_everything",
+    r"pl\.seed_everything",
+    r"tf\.random\.set_seed",
+    r"tf\.set_random_seed",
+    r"tf\.config\.experimental\.enable_op_determinism",
+    r"torch\.backends\.cudnn\.deterministic",
+    r"PYTHONHASHSEED",
+]
+
 # Confidence levels for detection methods
 AST_CONFIDENCE_BOOST = 0.15
 CONTEXT_CLARITY_BOOST = 0.10
@@ -993,14 +1012,7 @@ class MLDetectorAST:
     def _function_has_seed_setting(self, func_node: Any) -> bool:
         """Check if function sets random seeds."""
         content = self._get_node_text(func_node)
-        seed_patterns = [
-            r"torch\.manual_seed",
-            r"torch\.cuda\.manual_seed",
-            r"np\.random\.seed",
-            r"random\.seed",
-            r"set_random_seed",
-        ]
-        return any(re.search(p, content) for p in seed_patterns)
+        return any(re.search(p, content) for p in _SEED_PATTERNS)
 
     def _check_seed_from_args(self, content: str, line_no: int) -> bool:
         """Check if seed is passed as function argument."""
@@ -2236,14 +2248,7 @@ class MLDetectorAST:
         findings = []
 
         # Find training functions without seed
-        seed_patterns = [
-            r"torch\.manual_seed",
-            r"torch\.cuda\.manual_seed",
-            r"np\.random\.seed",
-            r"random\.seed",
-        ]
-
-        has_seed = any(re.search(p, content) for p in seed_patterns)
+        has_seed = any(re.search(p, content) for p in _SEED_PATTERNS)
         if not has_seed:
             func_pattern = re.compile(
                 r"(def\s+(?:train|fit|main)\s*\([^)]*\):)",
