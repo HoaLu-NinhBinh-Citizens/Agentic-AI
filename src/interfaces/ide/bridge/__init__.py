@@ -11,11 +11,6 @@ from src.interfaces.ide.bridge.protocol import (
     Range,
     TextEdit,
 )
-from src.interfaces.ide.bridge.ghost_text import (
-    GhostTextConfig,
-    GhostTextProvider,
-    GhostTextSession,
-)
 from src.interfaces.ide.bridge.code_actions import (
     CodeActionContext,
     CodeActionProvider,
@@ -32,10 +27,6 @@ __all__ = [
     "Diagnostic",
     "InlineChat",
     "IDEBridgeMessage",
-    # Ghost text
-    "GhostTextProvider",
-    "GhostTextConfig",
-    "GhostTextSession",
     # Code actions
     "CodeActionProvider",
     "CodeActionContext",
