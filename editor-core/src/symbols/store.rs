@@ -34,6 +34,17 @@ pub struct SymbolRow {
     pub signature: String,
 }
 
+/// A stored definition, read back for edit classification (OLD state, captured
+/// before a file is re-upserted).
+#[derive(Debug, Clone)]
+pub struct StoredDef {
+    pub name: String,
+    pub kind: String,
+    pub qualified_name: String,
+    pub signature_hash: String,
+    pub start_byte: usize,
+}
+
 /// A call-site row — the unit Next Edit Prediction iterates over.
 #[derive(Debug, Serialize)]
 pub struct RefRow {
@@ -241,6 +252,29 @@ impl SymbolStore {
                     qualified_name: r.get(3)?,
                     start_row: r.get::<_, i64>(4)? as usize,
                     signature: r.get(5)?,
+                })
+            })?
+            .collect::<rusqlite::Result<Vec<_>>>()?;
+        Ok(rows)
+    }
+
+    /// All definitions of one file, ordered by position. Captured as the OLD
+    /// state right before a re-upsert so the classifier can diff it against the
+    /// freshly parsed defs.
+    pub fn symbols_of_file(&self, file: &str) -> Result<Vec<StoredDef>> {
+        let mut stmt = self.conn.prepare(
+            "SELECT s.name, s.kind, s.qualified_name, s.signature_hash, s.start_byte
+             FROM symbols s JOIN files f ON f.id = s.file_id
+             WHERE f.path = ?1 ORDER BY s.start_byte",
+        )?;
+        let rows = stmt
+            .query_map(params![file], |r| {
+                Ok(StoredDef {
+                    name: r.get(0)?,
+                    kind: r.get(1)?,
+                    qualified_name: r.get(2)?,
+                    signature_hash: r.get(3)?,
+                    start_byte: r.get::<_, i64>(4)? as usize,
                 })
             })?
             .collect::<rusqlite::Result<Vec<_>>>()?;

@@ -17,6 +17,7 @@ use tracing::{debug, info};
 
 use merkle::{build_snapshot, diff, mtime_to_ns, Candidate, Snapshot, SyncDelta};
 
+use crate::symbols::classifier::EditSuggestion;
 use crate::symbols::store::{RefRow, SymbolRow};
 use crate::symbols::{SymbolGraph, SymbolSyncStats};
 
@@ -100,7 +101,7 @@ impl IndexEngine {
         let snapshot = &self.snapshot;
         let hash_of =
             |path: &str| snapshot.entries.get(path).map(|e| e.hash.clone());
-        let symbols = self.graph.apply_delta(&added, &modified, &removed, &hash_of)?;
+        let outcome = self.graph.apply_delta(&added, &modified, &removed, &hash_of)?;
 
         let delta = SyncDelta {
             added,
@@ -120,7 +121,11 @@ impl IndexEngine {
             ms = delta.elapsed_ms,
             "sync complete"
         );
-        Ok(SyncResult { delta, symbols })
+        Ok(SyncResult {
+            delta,
+            symbols: outcome.stats,
+            suggestions: outcome.suggestions,
+        })
     }
 
     /// Find symbol definitions by exact name.
@@ -204,10 +209,12 @@ pub struct IndexStatus {
     pub workspace: String,
 }
 
-/// Full result of a sync pass: Merkle delta plus symbol-graph update stats.
+/// Full result of a sync pass: Merkle delta, symbol-graph stats, and any
+/// Next-Edit suggestions for the editor to render as "Tab to jump" indicators.
 #[derive(Debug, serde::Serialize)]
 pub struct SyncResult {
     #[serde(flatten)]
     pub delta: SyncDelta,
     pub symbols: SymbolSyncStats,
+    pub suggestions: Vec<EditSuggestion>,
 }
