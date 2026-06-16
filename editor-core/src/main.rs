@@ -8,6 +8,7 @@
 //!   index/status     {}                  -> IndexStatus
 //!   symbol/find      { name }            -> SymbolRow[]
 //!   symbol/callSites { name }            -> RefRow[]
+//!   context/completion { file, cursorByte, maxTokens?, query? } -> BuiltPrompt
 //!   telemetry/log    TelemetryEvent      -> (notification; opt-in, async sink)
 //!   shutdown         {}                  -> { ok: true }   (then exits)
 //!
@@ -49,6 +50,7 @@ impl Daemon {
             "index/status" => self.index_status(),
             "symbol/find" => self.symbol_find(params),
             "symbol/callSites" => self.symbol_call_sites(params),
+            "context/completion" => self.context_completion(params),
             "telemetry/log" => self.telemetry_log(params),
             _ => Err(RpcError::new(
                 ErrorCode::MethodNotFound,
@@ -115,6 +117,29 @@ impl Daemon {
         let engine = self.engine_mut()?;
         let rows = engine.call_sites(&name).map_err(internal)?;
         serde_json::to_value(rows).map_err(internal)
+    }
+
+    /// Build a FIM completion prompt for a cursor position.
+    fn context_completion(&mut self, params: Value) -> std::result::Result<Value, RpcError> {
+        let file = params
+            .get("file")
+            .and_then(Value::as_str)
+            .ok_or_else(|| RpcError::new(ErrorCode::InvalidParams, "missing 'file' string param"))?
+            .to_string();
+        let cursor_byte = params
+            .get("cursorByte")
+            .and_then(Value::as_u64)
+            .ok_or_else(|| {
+                RpcError::new(ErrorCode::InvalidParams, "missing 'cursorByte' number param")
+            })? as usize;
+        let max_tokens = params.get("maxTokens").and_then(Value::as_u64).unwrap_or(2000) as usize;
+        let query = params.get("query").and_then(Value::as_str).map(str::to_string);
+
+        let engine = self.engine_mut()?;
+        let prompt = engine
+            .build_completion_context(&file, cursor_byte, max_tokens, query)
+            .map_err(internal)?;
+        serde_json::to_value(prompt).map_err(internal)
     }
 
     fn name_param(params: &Value) -> std::result::Result<String, RpcError> {
