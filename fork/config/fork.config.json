@@ -1,0 +1,12 @@
+{
+  "_comment": "Single source of truth for the fork build. Edit here, scripts read this.",
+  "upstream": "https://github.com/microsoft/vscode.git",
+  "pinnedTag": "1.97.0",
+  "cloneDir": "build/vscode",
+  "extensionDir": "../editor-extension",
+  "extensionId": "aircode",
+  "builtinExtensionFolder": "aircode",
+  "daemonCrateDir": "../editor-core",
+  "daemonBinary": "aircore",
+  "resourcesDaemonSubdir": "resources/app/bin"
+}

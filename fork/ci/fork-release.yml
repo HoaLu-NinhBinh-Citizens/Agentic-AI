@@ -1,0 +1,94 @@
+# Fork build + sign + release pipeline.
+#
+# To activate: move this file to .github/workflows/ (kept here so it doesn't run
+# on every push to the monorepo until you opt in). Signing steps are gated on
+# repository secrets; without them the build still produces unsigned artifacts.
+#
+# Required secrets (set in repo settings):
+#   WIN_CERT_PFX_BASE64, WIN_CERT_PASS                 (Windows Authenticode)
+#   APPLE_CERT_P12_BASE64, APPLE_CERT_PASS,
+#   APPLE_NOTARY_KEY_BASE64, APPLE_NOTARY_KEY_ID,
+#   APPLE_NOTARY_ISSUER, SIGN_IDENTITY                 (macOS)
+
+name: fork-release
+on:
+  workflow_dispatch:
+  push:
+    tags: ["fork-v*"]
+
+jobs:
+  build:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { os: windows-latest, target: win32-x64 }
+          - { os: macos-14, target: darwin-arm64 }
+          - { os: ubuntu-latest, target: linux-x64 }
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with: { node-version: "20" }
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: actions/setup-python@v5
+        with: { python-version: "3.12" }
+
+      - name: Install protoc
+        uses: arduino/setup-protoc@v3
+        with: { repo-token: "${{ secrets.GITHUB_TOKEN }}" }
+
+      # Linux native-module build deps for VS Code.
+      - name: Linux build deps
+        if: runner.os == 'Linux'
+        run: sudo apt-get update && sudo apt-get install -y libx11-dev libxkbfile-dev libsecret-1-dev
+
+      - name: Build fork (clone + rebrand + bundle + gulp)
+        shell: bash
+        env:
+          PROTOC: protoc
+          TARGET: ${{ matrix.target }}
+        run: |
+          if [ "${{ runner.os }}" = "Windows" ]; then
+            pwsh fork/scripts/build.ps1
+          else
+            fork/scripts/build.sh
+          fi
+
+      - name: Sign (Windows)
+        if: runner.os == 'Windows' && env.WIN_CERT_PFX_BASE64 != ''
+        env:
+          WIN_CERT_PFX_BASE64: ${{ secrets.WIN_CERT_PFX_BASE64 }}
+          WIN_CERT_PASS: ${{ secrets.WIN_CERT_PASS }}
+        shell: pwsh
+        run: |
+          [IO.File]::WriteAllBytes("$env:RUNNER_TEMP\cert.pfx", [Convert]::FromBase64String($env:WIN_CERT_PFX_BASE64))
+          $env:WIN_CERT_PFX = "$env:RUNNER_TEMP\cert.pfx"
+          pwsh fork/scripts/sign-win.ps1 -AppDir ..\VSCode-win32-x64
+
+      - name: Sign + notarize (macOS)
+        if: runner.os == 'macOS' && env.SIGN_IDENTITY != ''
+        env:
+          SIGN_IDENTITY: ${{ secrets.SIGN_IDENTITY }}
+          NOTARY_PROFILE: aircode-notary
+        run: |
+          # Import cert + store notary creds (omitted here for brevity; see README).
+          APP=../VSCode-darwin-arm64/aircode.app fork/scripts/sign-mac.sh
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: aircode-${{ matrix.target }}
+          path: |
+            ../VSCode-*
+          if-no-files-found: warn
+
+  release:
+    needs: build
+    if: startsWith(github.ref, 'refs/tags/fork-v')
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/download-artifact@v4
+      - uses: softprops/action-gh-release@v2
+        with:
+          files: "aircode-*/**"
