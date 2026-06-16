@@ -1,0 +1,5 @@
+# Rust build output (debug/ + release/ artifacts)
+/target/
+
+# Local index/symbol-graph state (regenerated on sync)
+.agentic/
