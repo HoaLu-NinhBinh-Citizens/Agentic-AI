@@ -63,10 +63,31 @@ Three decisions shape everything — full records in [docs/ADR.md](docs/ADR.md):
 
 ## Build & test
 
+**Build requirement:** LanceDB's `lance-encoding` compiles protobuf, so a
+`protoc` binary must be available. Install it (`winget install Google.Protobuf`,
+`brew install protobuf`, or `apt install protobuf-compiler`) and, if it isn't on
+`PATH`, point the build at it:
+
 ```bash
+export PROTOC=/path/to/protoc        # e.g. .../WinGet/Packages/Google.Protobuf.../bin/protoc.exe
 cargo build
-cargo test
-cargo build --release   # opt-level 3 + thin LTO for the hot path
+cargo test                            # the live Ollama test is #[ignore]
+cargo build --release                 # opt-level 3 + thin LTO for the hot path
+```
+
+### Retrieval backends
+
+`initialize` accepts an optional `retrieval` config; absent ⇒ offline defaults
+(HashEmbedder + in-memory store):
+
+```jsonc
+"retrieval": {
+  "ollama": true,                 // use OllamaEmbedder instead of HashEmbedder
+  "ollamaModel": "nomic-embed-text",
+  "ollamaDim": 768,
+  "ollamaHost": "http://localhost:11434",
+  "lance": true                   // persist vectors in .agentic/index/vectors.lance
+}
 ```
 
 State is persisted under `<workspace>/.agentic/index/merkle.json`.

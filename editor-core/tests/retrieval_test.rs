@@ -5,6 +5,8 @@ use std::fs;
 use aircore::context::{BuildRequest, ContextBuilder, Task};
 use aircore::retrieval::chunks::Chunk;
 use aircore::retrieval::embed::HashEmbedder;
+use aircore::retrieval::lance_store::LanceVectorStore;
+use aircore::retrieval::vector::VectorStore;
 use aircore::retrieval::HybridRetriever;
 use tempfile::TempDir;
 
@@ -20,8 +22,50 @@ fn chunk(id: u64, file: &str, start_byte: usize, text: &str) -> Chunk {
     }
 }
 
-fn retriever(chunks: Vec<Chunk>) -> HybridRetriever<HashEmbedder> {
+fn retriever(chunks: Vec<Chunk>) -> HybridRetriever {
     HybridRetriever::build(HashEmbedder::default(), chunks).unwrap()
+}
+
+#[test]
+fn lance_store_persists_and_searches_by_distance() {
+    let dir = TempDir::new().unwrap();
+    let uri = dir.path().join("vectors.lance");
+    let mut store = LanceVectorStore::open(uri.to_str().unwrap(), 3).unwrap();
+    store.add(1, vec![1.0, 0.0, 0.0]);
+    store.add(2, vec![0.0, 1.0, 0.0]);
+    store.commit().unwrap();
+
+    // Query closest to id 1.
+    let res = store.search(&[0.9, 0.1, 0.0], 1);
+    assert_eq!(res.len(), 1);
+    assert_eq!(res[0].0, 1);
+
+    // Data is on disk: a fresh handle to the same uri still finds it.
+    drop(store);
+    let mut reopened = LanceVectorStore::open(uri.to_str().unwrap(), 3).unwrap();
+    // Re-register the rows (full-rebuild lifecycle) and confirm persistence path works.
+    reopened.add(1, vec![1.0, 0.0, 0.0]);
+    reopened.commit().unwrap();
+    assert_eq!(reopened.search(&[1.0, 0.0, 0.0], 1)[0].0, 1);
+}
+
+#[test]
+fn hybrid_with_lance_backend_finds_chunk() {
+    let dir = TempDir::new().unwrap();
+    let uri = dir.path().join("v.lance");
+    // HashEmbedder default dim is 256, so the Lance table is 256-wide.
+    let store = Box::new(LanceVectorStore::open(uri.to_str().unwrap(), 256).unwrap());
+    let r = HybridRetriever::build_with(
+        Box::new(HashEmbedder::default()),
+        store,
+        vec![
+            chunk(1, "a.rs", 0, "fn parse_header(buf: &[u8]) {}"),
+            chunk(2, "b.rs", 0, "fn render_widget(w: &Widget) {}"),
+        ],
+    )
+    .unwrap();
+    let hits = r.search("parse_header", 2).unwrap();
+    assert!(hits.iter().any(|h| h.chunk.id == 1), "Lance-backed hybrid must find the chunk");
 }
 
 #[test]

@@ -23,7 +23,7 @@ use tracing_subscriber::EnvFilter;
 
 use std::path::Path;
 
-use aircore::index::IndexEngine;
+use aircore::index::{IndexEngine, RetrievalConfig};
 use aircore::ipc;
 use aircore::protocol::{ErrorCode, Request, Response, RpcError};
 use aircore::telemetry::{TelemetryEvent, TelemetrySink};
@@ -76,7 +76,26 @@ impl Daemon {
             }
         }
 
-        let engine = IndexEngine::open(workspace_root).map_err(internal)?;
+        let mut engine = IndexEngine::open(workspace_root).map_err(internal)?;
+
+        // Optional retrieval backends: { retrieval: { ollama, lance, ollamaModel,
+        // ollamaDim, ollamaHost } }. Absent => offline defaults.
+        if let Some(r) = params.get("retrieval") {
+            let mut cfg = RetrievalConfig::default();
+            cfg.use_ollama = r.get("ollama").and_then(Value::as_bool).unwrap_or(false);
+            cfg.use_lance = r.get("lance").and_then(Value::as_bool).unwrap_or(false);
+            if let Some(h) = r.get("ollamaHost").and_then(Value::as_str) {
+                cfg.ollama_host = h.to_string();
+            }
+            if let Some(m) = r.get("ollamaModel").and_then(Value::as_str) {
+                cfg.ollama_model = m.to_string();
+            }
+            if let Some(d) = r.get("ollamaDim").and_then(Value::as_u64) {
+                cfg.ollama_dim = d as usize;
+            }
+            engine.set_retrieval_config(cfg);
+        }
+
         let status = engine.status();
         self.engine = Some(engine);
         Ok(json!({

@@ -12,7 +12,12 @@
 pub trait VectorStore {
     fn clear(&mut self);
     fn add(&mut self, id: u64, vector: Vec<f32>);
-    /// Top-`k` `(id, score)` by descending cosine similarity.
+    /// Finalize pending adds so `search` can run. No-op for stores that index
+    /// eagerly (in-memory); batch-oriented stores (LanceDB) flush here.
+    fn commit(&mut self) -> anyhow::Result<()> {
+        Ok(())
+    }
+    /// Top-`k` `(id, score)` by descending similarity (higher = closer).
     fn search(&self, query: &[f32], k: usize) -> Vec<(u64, f32)>;
     fn len(&self) -> usize;
     fn is_empty(&self) -> bool {
