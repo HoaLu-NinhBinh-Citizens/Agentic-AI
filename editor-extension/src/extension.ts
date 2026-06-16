@@ -108,7 +108,10 @@ function resolveDaemonPath(context: vscode.ExtensionContext): string | undefined
   const configured = vscode.workspace.getConfiguration("aircode").get<string>("daemonPath");
   if (configured && fs.existsSync(configured)) return configured;
   const exe = process.platform === "win32" ? "aircore.exe" : "aircore";
-  // Look under a sibling editor-core/target (dev layout).
+  // Packaged app: the daemon is bundled next to the extension (see fork/bundle.mjs).
+  const bundled = path.join(context.extensionPath, "bin", exe);
+  if (fs.existsSync(bundled)) return bundled;
+  // Dev layout: a sibling editor-core/target build.
   const root = vscode.workspace.workspaceFolders?.[0]?.uri.fsPath ?? "";
   for (const profile of ["release", "debug"]) {
     const candidate = path.join(root, "editor-core", "target", profile, exe);

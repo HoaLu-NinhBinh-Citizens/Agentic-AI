@@ -1,0 +1,30 @@
+{
+  "nameShort": "aircode",
+  "nameLong": "aircode",
+  "applicationName": "aircode",
+  "serverApplicationName": "aircode-server",
+  "serverDataFolderName": ".aircode-server",
+  "dataFolderName": ".aircode",
+  "urlProtocol": "aircode",
+  "win32MutexName": "aircode",
+  "win32DirName": "aircode",
+  "win32NameVersion": "aircode",
+  "win32RegValueName": "aircode",
+  "win32AppUserModelId": "aircode.aircode",
+  "win32ShellNameShort": "aircode",
+  "darwinBundleIdentifier": "com.aircode.aircode",
+  "linuxIconName": "aircode",
+  "reportIssueUrl": "https://github.com/HoaLu-NinhBinh-Citizens/Agentic-AI/issues/new",
+  "licenseUrl": "https://github.com/HoaLu-NinhBinh-Citizens/Agentic-AI/blob/main/LICENSE",
+  "quality": "stable",
+  "extensionsGallery": {
+    "serviceUrl": "https://open-vsx.org/vscode/gallery",
+    "itemUrl": "https://open-vsx.org/vscode/item",
+    "resourceUrlTemplate": "https://open-vsx.org/vscode/unpkg/{publisher}/{name}/{version}/{path}"
+  },
+  "extensionEnabledApiProposals": {
+    "aircode.aircode": ["inlineCompletionsAdditions"]
+  },
+  "_comment_updateUrl": "Point this at your static update server (see fork/README.md). Leave empty to disable auto-update.",
+  "updateUrl": ""
+}
