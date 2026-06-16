@@ -34,6 +34,12 @@ anyhow = "1"
 thiserror = "2"
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+ureq = { version = "2", features = ["json"] }  # json feature = send_json/into_json
+lancedb = "0.30.0"
+arrow-array = "58"
+arrow-schema = "58"
+futures = "0.3"
+tokio = { version = "1", features = ["rt-multi-thread"] }
 
 [profile.release]
 opt-level = 3

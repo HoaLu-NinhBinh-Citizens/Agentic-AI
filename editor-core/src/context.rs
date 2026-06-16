@@ -15,7 +15,6 @@ use std::path::{Path, PathBuf};
 use anyhow::Result;
 use serde::Serialize;
 
-use crate::retrieval::embed::Embedder;
 use crate::retrieval::{HybridRetriever, ScoredChunk};
 
 /// How many candidates to pull from retrieval before budget packing.
@@ -77,8 +76,8 @@ pub struct BuiltPrompt {
     pub dropped: usize,
 }
 
-pub struct ContextBuilder<'a, E: Embedder> {
-    retriever: &'a HybridRetriever<E>,
+pub struct ContextBuilder<'a> {
+    retriever: &'a HybridRetriever,
     workspace_root: PathBuf,
 }
 
@@ -90,8 +89,8 @@ fn dir_of(path: &str) -> &str {
     path.rsplit_once('/').map(|(d, _)| d).unwrap_or("")
 }
 
-impl<'a, E: Embedder> ContextBuilder<'a, E> {
-    pub fn new(retriever: &'a HybridRetriever<E>, workspace_root: impl AsRef<Path>) -> Self {
+impl<'a> ContextBuilder<'a> {
+    pub fn new(retriever: &'a HybridRetriever, workspace_root: impl AsRef<Path>) -> Self {
         Self { retriever, workspace_root: workspace_root.as_ref().to_path_buf() }
     }
 

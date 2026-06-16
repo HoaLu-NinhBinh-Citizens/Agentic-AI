@@ -19,7 +19,10 @@ use merkle::{build_snapshot, diff, mtime_to_ns, Candidate, Snapshot, SyncDelta};
 
 use crate::context::{BuildRequest, BuiltPrompt, ContextBuilder, Task};
 use crate::retrieval::chunks::chunk_file;
-use crate::retrieval::embed::HashEmbedder;
+use crate::retrieval::embed::{Embedder, HashEmbedder};
+use crate::retrieval::lance_store::LanceVectorStore;
+use crate::retrieval::ollama::OllamaEmbedder;
+use crate::retrieval::vector::{InMemoryVectorStore, VectorStore};
 use crate::retrieval::HybridRetriever;
 use crate::symbols::classifier::EditSuggestion;
 use crate::symbols::extract::extract;
@@ -39,7 +42,32 @@ pub struct IndexEngine {
     /// Hybrid retriever, built lazily and invalidated on each sync. A full
     /// rebuild (not incremental) for now — fine for moderate repos; the cost is
     /// logged so it's never a silent surprise.
-    retriever: Option<HybridRetriever<HashEmbedder>>,
+    retriever: Option<HybridRetriever>,
+    retrieval_cfg: RetrievalConfig,
+}
+
+/// Selects which embedder + vector store the retriever uses. Default is the
+/// offline HashEmbedder + in-memory store (no external deps); production wires
+/// Ollama + LanceDB.
+#[derive(Clone)]
+pub struct RetrievalConfig {
+    pub use_ollama: bool,
+    pub ollama_host: String,
+    pub ollama_model: String,
+    pub ollama_dim: usize,
+    pub use_lance: bool,
+}
+
+impl Default for RetrievalConfig {
+    fn default() -> Self {
+        Self {
+            use_ollama: false,
+            ollama_host: "http://localhost:11434".to_string(),
+            ollama_model: "nomic-embed-text".to_string(),
+            ollama_dim: 768,
+            use_lance: false,
+        }
+    }
 }
 
 impl IndexEngine {
@@ -65,7 +93,20 @@ impl IndexEngine {
             root = %snapshot.root,
             "opened index engine"
         );
-        Ok(Self { workspace_root, snapshot, graph, retriever: None })
+        Ok(Self {
+            workspace_root,
+            snapshot,
+            graph,
+            retriever: None,
+            retrieval_cfg: RetrievalConfig::default(),
+        })
+    }
+
+    /// Override retrieval backends (Ollama embedder / LanceDB store). Invalidates
+    /// any built retriever so the next build uses the new config.
+    pub fn set_retrieval_config(&mut self, cfg: RetrievalConfig) {
+        self.retrieval_cfg = cfg;
+        self.retriever = None;
     }
 
     fn snapshot_path(root: &Path) -> PathBuf {
@@ -171,8 +212,35 @@ impl IndexEngine {
             all_chunks.extend(chunk_file(path, &source, &defs));
         }
         let n = all_chunks.len();
-        let retriever = HybridRetriever::build(HashEmbedder::default(), all_chunks)?;
-        info!(chunks = n, ms = started.elapsed().as_millis(), "built hybrid retriever");
+
+        // Build embedder + vector store from config (Ollama/LanceDB or the
+        // offline defaults).
+        let cfg = &self.retrieval_cfg;
+        let embedder: Box<dyn Embedder> = if cfg.use_ollama {
+            Box::new(OllamaEmbedder::new(
+                cfg.ollama_host.clone(),
+                cfg.ollama_model.clone(),
+                cfg.ollama_dim,
+            ))
+        } else {
+            Box::new(HashEmbedder::default())
+        };
+        let dim = embedder.dim();
+        let store: Box<dyn VectorStore> = if cfg.use_lance {
+            let uri = self.workspace_root.join(INDEX_DIR).join("vectors.lance");
+            Box::new(LanceVectorStore::open(&uri.to_string_lossy(), dim)?)
+        } else {
+            Box::new(InMemoryVectorStore::new())
+        };
+
+        let retriever = HybridRetriever::build_with(embedder, store, all_chunks)?;
+        info!(
+            chunks = n,
+            ollama = cfg.use_ollama,
+            lance = cfg.use_lance,
+            ms = started.elapsed().as_millis(),
+            "built hybrid retriever"
+        );
         self.retriever = Some(retriever);
         Ok(())
     }

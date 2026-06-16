@@ -4,7 +4,9 @@
 
 pub mod chunks;
 pub mod embed;
+pub mod lance_store;
 pub mod lexical;
+pub mod ollama;
 pub mod vector;
 
 use std::collections::HashMap;
@@ -27,9 +29,9 @@ pub struct ScoredChunk {
     pub rrf_score: f32,
 }
 
-pub struct HybridRetriever<E: Embedder> {
-    embedder: E,
-    vector: InMemoryVectorStore,
+pub struct HybridRetriever {
+    embedder: Box<dyn Embedder>,
+    vector: Box<dyn VectorStore>,
     lexical: LexicalIndex,
     chunks: HashMap<u64, Chunk>,
 }
@@ -46,16 +48,28 @@ fn reciprocal_rank_fusion(lists: &[Vec<u64>]) -> HashMap<u64, f32> {
     fused
 }
 
-impl<E: Embedder> HybridRetriever<E> {
-    /// Build both indexes from `chunks`.
-    pub fn build(embedder: E, chunks: Vec<Chunk>) -> Result<Self> {
+impl HybridRetriever {
+    /// Build with the default in-memory vector store.
+    pub fn build(embedder: impl Embedder + 'static, chunks: Vec<Chunk>) -> Result<Self> {
+        Self::build_with(Box::new(embedder), Box::new(InMemoryVectorStore::new()), chunks)
+    }
+
+    /// Build with a caller-provided embedder + vector store (e.g.
+    /// `OllamaEmbedder` + `LanceVectorStore`). The store is committed after all
+    /// vectors are added.
+    pub fn build_with(
+        embedder: Box<dyn Embedder>,
+        mut vector: Box<dyn VectorStore>,
+        chunks: Vec<Chunk>,
+    ) -> Result<Self> {
         let lexical = LexicalIndex::build(&chunks)?;
-        let mut vector = InMemoryVectorStore::new();
+        vector.clear();
         let mut map = HashMap::with_capacity(chunks.len());
         for c in chunks {
             vector.add(c.id, embedder.embed(&c.text));
             map.insert(c.id, c);
         }
+        vector.commit()?;
         Ok(Self { embedder, vector, lexical, chunks: map })
     }
 
