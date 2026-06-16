@@ -1,0 +1,74 @@
+{
+  "name": "aircode",
+  "displayName": "aircode",
+  "description": "Local AI code assistant — inline completion + Next Edit Prediction, powered by the aircore daemon.",
+  "version": "0.1.0",
+  "publisher": "aircode",
+  "license": "MIT",
+  "engines": {
+    "vscode": "^1.90.0"
+  },
+  "categories": ["Programming Languages", "Machine Learning"],
+  "activationEvents": ["onStartupFinished"],
+  "main": "./out/extension.js",
+  "contributes": {
+    "commands": [
+      {
+        "command": "aircode.applyNextEdits",
+        "title": "aircode: Apply Next-Edit suggestions"
+      },
+      {
+        "command": "aircode.resync",
+        "title": "aircode: Re-index workspace"
+      }
+    ],
+    "keybindings": [
+      {
+        "command": "aircode.applyNextEdits",
+        "key": "tab",
+        "when": "aircode.hasSuggestions && !inlineSuggestionVisible && !suggestWidgetVisible"
+      }
+    ],
+    "configuration": {
+      "title": "aircode",
+      "properties": {
+        "aircode.daemonPath": {
+          "type": "string",
+          "default": "",
+          "description": "Path to the aircore daemon binary. Empty = look under editor-core/target."
+        },
+        "aircode.completionModel": {
+          "type": "string",
+          "default": "qwen2.5-coder:3b",
+          "description": "Ollama model used for inline completion (FIM)."
+        },
+        "aircode.ollamaHost": {
+          "type": "string",
+          "default": "http://localhost:11434"
+        },
+        "aircode.maxContextTokens": {
+          "type": "number",
+          "default": 2000
+        },
+        "aircode.useLance": {
+          "type": "boolean",
+          "default": false,
+          "description": "Persist embeddings in LanceDB (requires the daemon built with LanceDB)."
+        },
+        "aircode.useOllamaEmbeddings": {
+          "type": "boolean",
+          "default": false
+        }
+      }
+    }
+  },
+  "scripts": {
+    "compile": "tsc -p ./",
+    "watch": "tsc -watch -p ./"
+  },
+  "devDependencies": {
+    "@types/node": "^20.0.0",
+    "@types/vscode": "^1.90.0",
+    "typescript": "^5.4.0"
+  }
+}
