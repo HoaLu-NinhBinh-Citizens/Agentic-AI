@@ -4,6 +4,7 @@
 //! parsed, `removed` files are dropped. Parsing is pure (`extract`) so it runs
 //! on the rayon pool; inserts are serial on the owning thread (SQLite).
 
+pub mod classifier;
 pub mod extract;
 pub mod lang;
 pub mod store;
@@ -16,6 +17,7 @@ use rayon::prelude::*;
 use serde::Serialize;
 use tracing::{debug, info};
 
+use classifier::{classify, EditKind, EditSite, EditSuggestion, Replacement};
 use extract::{extract, SymbolDef, SymbolRef};
 use lang::Lang;
 use store::{RefRow, SymbolRow, SymbolStore};
@@ -34,6 +36,15 @@ pub struct SymbolSyncStats {
     pub symbols: usize,
     pub refs: usize,
     pub elapsed_ms: u128,
+}
+
+/// The full outcome of a delta: graph stats plus any Next-Edit suggestions the
+/// classifier produced for the files that changed.
+#[derive(Debug, Default, Serialize)]
+pub struct DeltaOutcome {
+    #[serde(flatten)]
+    pub stats: SymbolSyncStats,
+    pub suggestions: Vec<EditSuggestion>,
 }
 
 /// One parsed file's results, carried from the parallel parse to the serial
@@ -68,7 +79,7 @@ impl SymbolGraph {
         modified: &[String],
         removed: &[String],
         hash_of: &dyn Fn(&str) -> Option<String>,
-    ) -> Result<SymbolSyncStats> {
+    ) -> Result<DeltaOutcome> {
         let started = Instant::now();
 
         // Parse phase (parallel, pure). Skip files with no known language.
@@ -95,10 +106,14 @@ impl SymbolGraph {
             })
             .collect();
 
-        // Insert phase (serial, transactional per file).
+        // Insert phase (serial, transactional per file). For each file we
+        // capture the OLD defs *before* overwriting, then classify against the
+        // NEW defs *after* the upsert (so call-site queries see current refs).
         let indexed_at = now_ms();
         let mut stats = SymbolSyncStats::default();
+        let mut suggestions = Vec::new();
         for p in &parsed {
+            let old_defs = self.store.symbols_of_file(&p.file)?;
             let content_hash = hash_of(&p.file).unwrap_or_default();
             self.store.upsert_file(
                 &p.file,
@@ -111,6 +126,13 @@ impl SymbolGraph {
             stats.files_parsed += 1;
             stats.symbols += p.defs.len();
             stats.refs += p.refs.len();
+
+            // Only files that already existed can yield a meaningful diff.
+            if !old_defs.is_empty() {
+                for c in classify(&old_defs, &p.defs) {
+                    suggestions.push(self.build_suggestion(c)?);
+                }
+            }
         }
         for file in removed {
             self.store.delete_file(file)?;
@@ -123,10 +145,53 @@ impl SymbolGraph {
             removed = stats.files_removed,
             symbols = stats.symbols,
             refs = stats.refs,
+            suggestions = suggestions.len(),
             ms = stats.elapsed_ms,
             "symbol graph updated"
         );
-        Ok(stats)
+        Ok(DeltaOutcome { stats, suggestions })
+    }
+
+    /// Turn a classification into an editor-facing suggestion. A rename pulls
+    /// every call site of the OLD name and turns it into a mechanical
+    /// replacement; a signature change lists the sites for the model to revisit.
+    fn build_suggestion(
+        &self,
+        c: classifier::Classification,
+    ) -> Result<EditSuggestion> {
+        let refs = self.store.call_sites(&c.old_name)?;
+        let sites: Vec<EditSite> = refs
+            .iter()
+            .map(|r| EditSite {
+                file: r.file.clone(),
+                start_row: r.start_row,
+                start_byte: r.start_byte,
+                end_byte: r.end_byte,
+            })
+            .collect();
+
+        let mechanical = c.kind == EditKind::Rename;
+        let edits = if mechanical {
+            refs.iter()
+                .map(|r| Replacement {
+                    file: r.file.clone(),
+                    start_byte: r.start_byte,
+                    end_byte: r.end_byte,
+                    new_text: c.new_name.clone(),
+                })
+                .collect()
+        } else {
+            Vec::new()
+        };
+
+        Ok(EditSuggestion {
+            kind: c.kind,
+            old_name: c.old_name,
+            new_name: c.new_name,
+            mechanical,
+            edits,
+            sites,
+        })
     }
 
     pub fn find_symbol(&self, name: &str) -> Result<Vec<SymbolRow>> {

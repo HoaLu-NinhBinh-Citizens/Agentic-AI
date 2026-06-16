@@ -129,6 +129,60 @@ fn deleting_a_file_drops_its_symbols() {
 }
 
 #[test]
+fn rename_produces_mechanical_edits_at_all_call_sites() {
+    let dir = TempDir::new().unwrap();
+    write(&dir, "lib.rs", "pub fn area(w: i32, h: i32) -> i32 { w * h }\n");
+    write(
+        &dir,
+        "main.rs",
+        "fn main() {\n    area(1, 2);\n    area(3, 4);\n}\n",
+    );
+
+    let mut engine = IndexEngine::open(dir.path()).unwrap();
+    engine.sync().unwrap(); // initial index, no suggestions
+
+    // User renames the definition area -> surface (signature unchanged).
+    write(&dir, "lib.rs", "pub fn surface(w: i32, h: i32) -> i32 { w * h }\n");
+    let result = engine.sync().unwrap();
+
+    let rename = result
+        .suggestions
+        .iter()
+        .find(|s| s.old_name == "area")
+        .expect("expected a rename suggestion for area");
+
+    assert!(rename.mechanical, "a pure rename must be mechanical");
+    assert_eq!(rename.new_name, "surface");
+    // Both call sites in main.rs still say `area` and must be rewritten.
+    let main_edits: Vec<_> = rename.edits.iter().filter(|e| e.file == "main.rs").collect();
+    assert_eq!(main_edits.len(), 2);
+    assert!(main_edits.iter().all(|e| e.new_text == "surface"));
+}
+
+#[test]
+fn signature_change_is_semantic_not_mechanical() {
+    let dir = TempDir::new().unwrap();
+    write(&dir, "lib.rs", "pub fn f(a: i32) -> i32 { a }\n");
+    write(&dir, "main.rs", "fn main() {\n    f(1);\n}\n");
+
+    let mut engine = IndexEngine::open(dir.path()).unwrap();
+    engine.sync().unwrap();
+
+    // Add a parameter: signature changed, name unchanged.
+    write(&dir, "lib.rs", "pub fn f(a: i32, b: i32) -> i32 { a + b }\n");
+    let result = engine.sync().unwrap();
+
+    let sig = result
+        .suggestions
+        .iter()
+        .find(|s| s.old_name == "f")
+        .expect("expected a signature-change suggestion for f");
+    assert!(!sig.mechanical, "a signature change needs the model");
+    assert!(sig.edits.is_empty(), "no mechanical edits for semantic change");
+    assert!(!sig.sites.is_empty(), "must still list sites to revisit");
+}
+
+#[test]
 fn reindexing_a_file_replaces_not_duplicates() {
     let dir = TempDir::new().unwrap();
     write(&dir, "a.rs", "fn one() {}\n");

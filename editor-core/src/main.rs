@@ -3,10 +3,13 @@
 //! One process per workspace. Speaks JSON-RPC 2.0 over stdio (LSP-style
 //! framing) to the editor. Phase 1 exposes the index engine:
 //!
-//!   initialize   { workspaceRoot }      -> { ok, status }
-//!   index/sync   {}                     -> SyncDelta
-//!   index/status {}                     -> IndexStatus
-//!   shutdown     {}                     -> { ok: true }   (then exits)
+//!   initialize       { workspaceRoot, telemetry? } -> { ok, status }
+//!   index/sync       {}                  -> SyncResult (delta + symbols + suggestions)
+//!   index/status     {}                  -> IndexStatus
+//!   symbol/find      { name }            -> SymbolRow[]
+//!   symbol/callSites { name }            -> RefRow[]
+//!   telemetry/log    TelemetryEvent      -> (notification; opt-in, async sink)
+//!   shutdown         {}                  -> { ok: true }   (then exits)
 //!
 //! Logs go to stderr only; stdout is reserved for the framed RPC channel.
 
@@ -17,18 +20,24 @@ use serde_json::{json, Value};
 use tracing::{error, info};
 use tracing_subscriber::EnvFilter;
 
+use std::path::Path;
+
 use aircore::index::IndexEngine;
 use aircore::ipc;
 use aircore::protocol::{ErrorCode, Request, Response, RpcError};
+use aircore::telemetry::{TelemetryEvent, TelemetrySink};
+
+const TELEMETRY_FILE: &str = ".agentic/telemetry.jsonl";
 
 /// Daemon state held across requests.
 struct Daemon {
     engine: Option<IndexEngine>,
+    telemetry: TelemetrySink,
 }
 
 impl Daemon {
     fn new() -> Self {
-        Self { engine: None }
+        Self { engine: None, telemetry: TelemetrySink::disabled() }
     }
 
     /// Dispatch one request to its handler. Returns the JSON result on success
@@ -40,6 +49,7 @@ impl Daemon {
             "index/status" => self.index_status(),
             "symbol/find" => self.symbol_find(params),
             "symbol/callSites" => self.symbol_call_sites(params),
+            "telemetry/log" => self.telemetry_log(params),
             _ => Err(RpcError::new(
                 ErrorCode::MethodNotFound,
                 format!("unknown method: {method}"),
@@ -55,6 +65,15 @@ impl Daemon {
                 RpcError::new(ErrorCode::InvalidParams, "missing 'workspaceRoot' string param")
             })?;
 
+        // Telemetry is opt-in (ADR-001): only spin up the sink if asked.
+        if params.get("telemetry").and_then(Value::as_bool).unwrap_or(false) {
+            let path = Path::new(workspace_root).join(TELEMETRY_FILE);
+            match TelemetrySink::open(&path) {
+                Ok(sink) => self.telemetry = sink,
+                Err(e) => error!(error = %e, "failed to open telemetry sink; continuing without"),
+            }
+        }
+
         let engine = IndexEngine::open(workspace_root).map_err(internal)?;
         let status = engine.status();
         self.engine = Some(engine);
@@ -62,6 +81,15 @@ impl Daemon {
             "ok": true,
             "status": serde_json::to_value(status).map_err(internal)?,
         }))
+    }
+
+    /// Record a batched interaction event (notification, no response). Off the
+    /// hot path: the sink's `log` is non-blocking.
+    fn telemetry_log(&mut self, params: Value) -> std::result::Result<Value, RpcError> {
+        let event: TelemetryEvent = serde_json::from_value(params)
+            .map_err(|e| RpcError::new(ErrorCode::InvalidParams, e.to_string()))?;
+        self.telemetry.log(&event);
+        Ok(Value::Null)
     }
 
     fn index_sync(&mut self) -> std::result::Result<Value, RpcError> {
