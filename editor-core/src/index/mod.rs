@@ -17,7 +17,13 @@ use tracing::{debug, info};
 
 use merkle::{build_snapshot, diff, mtime_to_ns, Candidate, Snapshot, SyncDelta};
 
+use crate::context::{BuildRequest, BuiltPrompt, ContextBuilder, Task};
+use crate::retrieval::chunks::chunk_file;
+use crate::retrieval::embed::HashEmbedder;
+use crate::retrieval::HybridRetriever;
 use crate::symbols::classifier::EditSuggestion;
+use crate::symbols::extract::extract;
+use crate::symbols::lang::Lang;
 use crate::symbols::store::{RefRow, SymbolRow};
 use crate::symbols::{SymbolGraph, SymbolSyncStats};
 
@@ -30,6 +36,10 @@ pub struct IndexEngine {
     workspace_root: PathBuf,
     snapshot: Snapshot,
     graph: SymbolGraph,
+    /// Hybrid retriever, built lazily and invalidated on each sync. A full
+    /// rebuild (not incremental) for now — fine for moderate repos; the cost is
+    /// logged so it's never a silent surprise.
+    retriever: Option<HybridRetriever<HashEmbedder>>,
 }
 
 impl IndexEngine {
@@ -55,7 +65,7 @@ impl IndexEngine {
             root = %snapshot.root,
             "opened index engine"
         );
-        Ok(Self { workspace_root, snapshot, graph })
+        Ok(Self { workspace_root, snapshot, graph, retriever: None })
     }
 
     fn snapshot_path(root: &Path) -> PathBuf {
@@ -103,6 +113,9 @@ impl IndexEngine {
             |path: &str| snapshot.entries.get(path).map(|e| e.hash.clone());
         let outcome = self.graph.apply_delta(&added, &modified, &removed, &hash_of)?;
 
+        // The workspace changed; the retriever (full-rebuild) is now stale.
+        self.retriever = None;
+
         let delta = SyncDelta {
             added,
             modified,
@@ -136,6 +149,52 @@ impl IndexEngine {
     /// Find call sites of a name — powers Next Edit Prediction.
     pub fn call_sites(&self, name: &str) -> Result<Vec<RefRow>> {
         self.graph.call_sites(name)
+    }
+
+    /// Build (if needed) the hybrid retriever from the current snapshot by
+    /// re-parsing + chunking every known-language file. Full rebuild; cached
+    /// until the next sync invalidates it.
+    fn ensure_retriever(&mut self) -> Result<()> {
+        if self.retriever.is_some() {
+            return Ok(());
+        }
+        let started = Instant::now();
+        let mut all_chunks = Vec::new();
+        for path in self.snapshot.entries.keys() {
+            let Some(lang) = Lang::from_path(path) else { continue };
+            let abs = self.workspace_root.join(path);
+            let Ok(source) = fs::read(&abs) else { continue };
+            let defs = match extract(lang, &source) {
+                Ok((defs, _refs)) => defs,
+                Err(_) => continue,
+            };
+            all_chunks.extend(chunk_file(path, &source, &defs));
+        }
+        let n = all_chunks.len();
+        let retriever = HybridRetriever::build(HashEmbedder::default(), all_chunks)?;
+        info!(chunks = n, ms = started.elapsed().as_millis(), "built hybrid retriever");
+        self.retriever = Some(retriever);
+        Ok(())
+    }
+
+    /// Build a completion prompt for a cursor position (FIM, proximity-ordered).
+    pub fn build_completion_context(
+        &mut self,
+        file: &str,
+        cursor_byte: usize,
+        max_tokens: usize,
+        query: Option<String>,
+    ) -> Result<BuiltPrompt> {
+        self.ensure_retriever()?;
+        let retriever = self.retriever.as_ref().expect("retriever just built");
+        let cb = ContextBuilder::new(retriever, &self.workspace_root);
+        cb.build(&BuildRequest {
+            task: Task::Completion,
+            file: file.to_string(),
+            cursor_byte,
+            query,
+            max_tokens,
+        })
     }
 
     /// Snapshot summary without re-walking — used by `index/status`.
