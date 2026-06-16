@@ -1,4 +1,5 @@
 # The VS Code clone and build outputs are build inputs/artifacts, never committed.
 build/
+dist/
 *.pfx
 *.p12
