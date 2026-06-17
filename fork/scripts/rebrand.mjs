@@ -3,7 +3,8 @@
 // clone's product.json. Keys beginning with "_comment" are documentation only
 // and are stripped. Exported `applyOverrides` is unit-testable offline.
 
-import { readFileSync, writeFileSync } from "node:fs";
+import { readFileSync, realpathSync, writeFileSync } from "node:fs";
+import { fileURLToPath } from "node:url";
 
 /** Deep-merge `over` into `base` (over wins); arrays replace; _comment* dropped. */
 export function applyOverrides(base, over) {
@@ -31,10 +32,20 @@ function arg(name, fallback) {
   return i !== -1 && process.argv[i + 1] ? process.argv[i + 1] : fallback;
 }
 
+// True when this file is the entry point (cross-platform; the naive
+// `file://${argv[1]}` check fails on Windows path separators).
+function isMain() {
+  try {
+    return process.argv[1] && realpathSync(process.argv[1]) === realpathSync(fileURLToPath(import.meta.url));
+  } catch {
+    return false;
+  }
+}
+
 // CLI entry (skipped when imported by tests).
-if (import.meta.url === `file://${process.argv[1]}`) {
+if (isMain()) {
   const productPath = arg("product");
-  const overridesPath = arg("overrides", new URL("../config/product.overrides.json", import.meta.url).pathname);
+  const overridesPath = arg("overrides", fileURLToPath(new URL("../config/product.overrides.json", import.meta.url)));
   if (!productPath) {
     console.error("usage: rebrand.mjs --product <clone>/product.json [--overrides <file>]");
     process.exit(2);
