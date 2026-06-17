@@ -17,6 +17,33 @@ the extension API can't fully express).
   `aircode.applyNextEdits` (bound to Tab when suggestions exist), via a single
   `WorkspaceEdit`. Byte spans from the daemon are mapped back to positions.
 
+## Internal distribution (VSIX) — fastest way to dogfood
+
+The whole product (completion + Next-Edit + the bundled daemon) ships as a
+`.vsix` that installs into any stock VS Code or VSCodium — no fork build needed.
+
+```bash
+npm run package          # compile + vsce package -> aircode.vsix (bundles bin/aircore)
+```
+
+Before packaging, drop the release daemon into `bin/` so the VSIX is
+self-contained:
+
+```bash
+cp ../editor-core/target/release/aircore.exe bin/aircore.exe   # Windows
+```
+
+Install for the team:
+
+```bash
+code --install-extension aircode.vsix      # or: VSCodium / Code → Extensions → Install from VSIX…
+```
+
+The bundled binary is **platform-specific** (the example bundles the Windows
+`aircore.exe`); build + bundle per-OS for cross-platform teams. The extension
+finds the daemon at `<extension>/bin/aircore[.exe]` first (see
+`resolveDaemonPath`).
+
 ## Prerequisites
 
 1. Build the daemon: in `editor-core`, `cargo build --release` (or debug). The

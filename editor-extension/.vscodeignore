@@ -1,0 +1,10 @@
+# What to EXCLUDE from the packaged .vsix. We ship out/ + bin/ (daemon) only.
+src/**
+node_modules/**
+.gitignore
+tsconfig.json
+**/*.ts
+**/*.map
+**/.commitmsg.tmp
+package-lock.json
+# Keep: out/**, bin/** (bundled aircore daemon), package.json, README.md
