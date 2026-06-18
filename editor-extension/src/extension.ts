@@ -73,6 +73,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
     });
     await client.request("index/sync", {});
     output.appendLine("aircode: initialized + indexed.");
+    warmUpModel(cfg); // fire-and-forget: avoid a multi-second cold load on the first completion
   } catch (e) {
     output.appendLine(`aircode init failed: ${e}`);
   }
@@ -169,6 +170,20 @@ class AirInlineProvider implements vscode.InlineCompletionItemProvider {
   }
 }
 
+/** Load the completion model into memory at startup so the first real
+ *  completion doesn't pay the cold-load penalty (~7s -> ~400ms warm). */
+function warmUpModel(cfg: vscode.WorkspaceConfiguration): void {
+  const host = cfg.get<string>("ollamaHost", "http://localhost:11434");
+  const model = cfg.get<string>("completionModel", "qwen2.5-coder:1.5b-base");
+  fetch(`${host}/api/generate`, {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({ model, prompt: "", raw: true, stream: false, keep_alive: "30m", options: { num_predict: 1 } }),
+  })
+    .then(() => output.appendLine(`aircode: warmed model ${model}`))
+    .catch(() => output.appendLine(`aircode: model warm-up skipped (Ollama not reachable?)`));
+}
+
 /** Send the FIM prompt to Ollama's raw generate endpoint. */
 async function generateFromOllama(
   host: string,
@@ -187,6 +202,9 @@ async function generateFromOllama(
         prompt,
         raw: true, // the FIM prompt already carries the model's control tokens
         stream: false,
+        // Keep the model resident so completions stay warm (~400ms) instead of
+        // paying a multi-second cold load on every idle gap.
+        keep_alive: "30m",
         options: { num_predict: 128, stop: ["<|fim_prefix|>", "<|file_sep|>"] },
       }),
       signal: controller.signal,

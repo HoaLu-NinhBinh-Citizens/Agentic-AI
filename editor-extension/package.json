@@ -43,8 +43,8 @@
         },
         "aircode.completionModel": {
           "type": "string",
-          "default": "qwen2.5-coder:3b",
-          "description": "Ollama model used for inline completion (FIM)."
+          "default": "qwen2.5-coder:1.5b-base",
+          "description": "Ollama model for inline completion (FIM). Use a *-base model for raw FIM; bump to 3b/7b for quality."
         },
         "aircode.ollamaHost": {
           "type": "string",
