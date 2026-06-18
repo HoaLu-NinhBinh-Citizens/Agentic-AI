@@ -11,6 +11,8 @@ use tree_sitter::Language;
 pub enum Lang {
     Rust,
     Python,
+    C,
+    Cpp,
 }
 
 impl Lang {
@@ -21,6 +23,9 @@ impl Lang {
         match ext {
             "rs" => Some(Lang::Rust),
             "py" | "pyi" => Some(Lang::Python),
+            // `.h` defaults to C (firmware); C++ headers use .hpp/.hh/.hxx.
+            "c" | "h" => Some(Lang::C),
+            "cpp" | "cc" | "cxx" | "c++" | "hpp" | "hh" | "hxx" => Some(Lang::Cpp),
             _ => None,
         }
     }
@@ -29,6 +34,8 @@ impl Lang {
         match self {
             Lang::Rust => "rust",
             Lang::Python => "python",
+            Lang::C => "c",
+            Lang::Cpp => "cpp",
         }
     }
 
@@ -36,6 +43,8 @@ impl Lang {
         match self {
             Lang::Rust => tree_sitter_rust::LANGUAGE.into(),
             Lang::Python => tree_sitter_python::LANGUAGE.into(),
+            Lang::C => tree_sitter_c::LANGUAGE.into(),
+            Lang::Cpp => tree_sitter_cpp::LANGUAGE.into(),
         }
     }
 
@@ -60,6 +69,29 @@ impl Lang {
                 (class_definition name: (identifier) @name) @def.class
                 "#
             }
+            Lang::C => {
+                r#"
+                (function_definition declarator: (function_declarator declarator: (identifier) @name)) @def.function
+                (function_definition declarator: (pointer_declarator declarator: (function_declarator declarator: (identifier) @name))) @def.function
+                (struct_specifier name: (type_identifier) @name) @def.struct
+                (enum_specifier name: (type_identifier) @name) @def.enum
+                (union_specifier name: (type_identifier) @name) @def.union
+                (type_definition declarator: (type_identifier) @name) @def.typedef
+                "#
+            }
+            Lang::Cpp => {
+                r#"
+                (function_definition declarator: (function_declarator declarator: (identifier) @name)) @def.function
+                (function_definition declarator: (function_declarator declarator: (field_identifier) @name)) @def.method
+                (function_definition declarator: (function_declarator declarator: (qualified_identifier) @name)) @def.function
+                (function_definition declarator: (pointer_declarator declarator: (function_declarator declarator: (identifier) @name))) @def.function
+                (struct_specifier name: (type_identifier) @name) @def.struct
+                (class_specifier name: (type_identifier) @name) @def.class
+                (enum_specifier name: (type_identifier) @name) @def.enum
+                (namespace_definition name: (namespace_identifier) @name) @def.namespace
+                (type_definition declarator: (type_identifier) @name) @def.typedef
+                "#
+            }
         }
     }
 
@@ -78,6 +110,19 @@ impl Lang {
                 r#"
                 (call function: (identifier) @ref.call)
                 (call function: (attribute attribute: (identifier) @ref.call))
+                "#
+            }
+            Lang::C => {
+                r#"
+                (call_expression function: (identifier) @ref.call)
+                (call_expression function: (field_expression field: (field_identifier) @ref.call))
+                "#
+            }
+            Lang::Cpp => {
+                r#"
+                (call_expression function: (identifier) @ref.call)
+                (call_expression function: (field_expression field: (field_identifier) @ref.call))
+                (call_expression function: (qualified_identifier name: (identifier) @ref.call))
                 "#
             }
         }
