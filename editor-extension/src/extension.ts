@@ -186,7 +186,11 @@ function warmUpModel(cfg: vscode.WorkspaceConfiguration): void {
     .catch(() => output.appendLine(`aircode: model warm-up skipped (Ollama not reachable?)`));
 }
 
-/** Send the FIM prompt to Ollama's raw generate endpoint. */
+/** Stream the FIM completion from Ollama and return as soon as the first
+ *  non-empty line is complete. Streaming + early-stop is the latency win: we
+ *  stop generating once we have a usable single-line suggestion instead of
+ *  waiting for the full 128-token response (~800ms -> ~first-token time). The
+ *  abort also fires the instant the user types again. */
 async function generateFromOllama(
   host: string,
   model: string,
@@ -203,20 +207,45 @@ async function generateFromOllama(
         model,
         prompt,
         raw: true, // the FIM prompt already carries the model's control tokens
-        stream: false,
-        // Keep the model resident so completions stay warm (~400ms) instead of
-        // paying a multi-second cold load on every idle gap.
-        keep_alive: "30m",
+        stream: true,
+        keep_alive: "30m", // keep the model resident; avoids cold loads
         options: { num_predict: 128, stop: ["<|fim_prefix|>", "<|file_sep|>"] },
       }),
       signal: controller.signal,
     });
-    if (!resp.ok) {
+    if (!resp.ok || !resp.body) {
       output.appendLine(`ollama ${resp.status}`);
       return;
     }
-    const data: any = await resp.json();
-    return typeof data.response === "string" ? data.response : undefined;
+
+    const reader = resp.body.getReader();
+    const dec = new TextDecoder();
+    let buf = "";
+    let out = "";
+    for (;;) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      buf += dec.decode(value, { stream: true });
+      let nl: number;
+      while ((nl = buf.indexOf("\n")) >= 0) {
+        const line = buf.slice(0, nl);
+        buf = buf.slice(nl + 1);
+        if (!line.trim()) continue;
+        try {
+          const j = JSON.parse(line);
+          if (typeof j.response === "string") out += j.response;
+          // Early-stop: once we have a full first line of completion, return it.
+          if (out.includes("\n") && out.split("\n")[0].trim().length > 0) {
+            controller.abort();
+            return out.split("\n")[0];
+          }
+          if (j.done) return out.replace(/\s+$/, "");
+        } catch {
+          /* partial JSON line */
+        }
+      }
+    }
+    return out.replace(/\s+$/, "");
   } catch (e) {
     if (!controller.signal.aborted) output.appendLine(`ollama generate failed: ${e}`);
     return;
@@ -410,12 +439,18 @@ async function inlineEdit(): Promise<void> {
         output.appendLine(`retrieve failed (continuing without context): ${e}`);
       }
 
-      const edited = await editViaOllama(cfg, editor.document.languageId, context, instruction, selectionText);
-      if (edited == null) {
+      const produced = await editViaOllamaStream(
+        editor,
+        range,
+        cfg,
+        editor.document.languageId,
+        context,
+        instruction,
+        selectionText
+      );
+      if (!produced) {
         vscode.window.showWarningMessage("aircode: no edit produced (Ollama reachable? model pulled?).");
-        return;
       }
-      await editor.edit((eb) => eb.replace(range, edited));
     }
   );
 }
@@ -426,14 +461,18 @@ function stripCodeFence(s: string): string {
   return (m ? m[1] : s).replace(/\s+$/, "");
 }
 
-/** Ask an instruct model to rewrite `code` per `instruction`. */
-async function editViaOllama(
+/** Stream an instruct-model rewrite of the selection, writing tokens into the
+ *  editor as they arrive (throttled) so the user sees it "type" instead of
+ *  waiting for the whole response. Returns true if any text was produced. */
+async function editViaOllamaStream(
+  editor: vscode.TextEditor,
+  range: vscode.Range,
   cfg: vscode.WorkspaceConfiguration,
   lang: string,
   context: string,
   instruction: string,
   code: string
-): Promise<string | undefined> {
+): Promise<boolean> {
   const host = cfg.get<string>("ollamaHost", "http://localhost:11434");
   const model = cfg.get<string>("editModel", "qwen2.5-coder:7b");
   const system =
@@ -442,13 +481,32 @@ async function editViaOllama(
   const user =
     (context ? `Relevant context:\n${context}\n\n` : "") +
     `Instruction: ${instruction}\n\nLanguage: ${lang}\nSelected code:\n${code}`;
+
+  const startOffset = editor.document.offsetAt(range.start);
+  let prevLen = code.length; // current length of the region we own (starts as the selection)
+  let acc = "";
+  let applying = false;
+
+  // Replace the region we own with the latest stripped accumulation.
+  const apply = async () => {
+    applying = true;
+    const text = stripCodeFence(acc);
+    const endPos = editor.document.positionAt(startOffset + prevLen);
+    await editor.edit((eb) => eb.replace(new vscode.Range(range.start, endPos), text), {
+      undoStopBefore: false,
+      undoStopAfter: false,
+    });
+    prevLen = text.length;
+    applying = false;
+  };
+
   try {
     const resp = await fetch(`${host}/api/chat`, {
       method: "POST",
       headers: { "content-type": "application/json" },
       body: JSON.stringify({
         model,
-        stream: false,
+        stream: true,
         keep_alive: "30m",
         messages: [
           { role: "system", content: system },
@@ -456,16 +514,43 @@ async function editViaOllama(
         ],
       }),
     });
-    if (!resp.ok) {
+    if (!resp.ok || !resp.body) {
       output.appendLine(`ollama chat ${resp.status}`);
-      return;
+      return false;
     }
-    const data: any = await resp.json();
-    const out = data?.message?.content;
-    return typeof out === "string" ? stripCodeFence(out) : undefined;
+
+    const reader = resp.body.getReader();
+    const dec = new TextDecoder();
+    let buf = "";
+    let lastFlush = 0;
+    for (;;) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      buf += dec.decode(value, { stream: true });
+      let nl: number;
+      while ((nl = buf.indexOf("\n")) >= 0) {
+        const line = buf.slice(0, nl);
+        buf = buf.slice(nl + 1);
+        if (!line.trim()) continue;
+        try {
+          const tok = JSON.parse(line)?.message?.content ?? "";
+          if (tok) acc += tok;
+        } catch {
+          /* partial line */
+        }
+      }
+      // Throttle editor writes to ~16/s and never overlap edits.
+      const now = Date.now();
+      if (!applying && acc && now - lastFlush > 60) {
+        lastFlush = now;
+        await apply();
+      }
+    }
+    if (acc) await apply(); // final flush
+    return acc.length > 0;
   } catch (e) {
     output.appendLine(`ollama chat failed: ${e}`);
-    return;
+    return acc.length > 0;
   }
 }
 
