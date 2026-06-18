@@ -185,6 +185,10 @@ fn collect_refs(
             }
         }
     }
+    // De-dup by start byte: broad C/C++ queries can capture the same span via
+    // multiple patterns (e.g. a call's callee is also a bare identifier).
+    refs.sort_by_key(|r| r.start_byte);
+    refs.dedup_by_key(|r| r.start_byte);
     Ok(refs)
 }
 
