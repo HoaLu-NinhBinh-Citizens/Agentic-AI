@@ -118,17 +118,24 @@ impl Lang {
                 (call function: (attribute attribute: (identifier) @ref.call))
                 "#
             }
+            // C/C++ capture every identifier and type_identifier as a reference
+            // (not just calls) so renaming an object macro / typedef / enum
+            // constant / global finds its uses. Over-matches by name (see
+            // SYMBOL_GRAPH_SPEC.md §5) — gated by per-site Tab confirmation.
+            // Overlapping captures (a call's callee identifier) are de-duped in
+            // `extract::collect_refs`.
             Lang::C => {
                 r#"
-                (call_expression function: (identifier) @ref.call)
-                (call_expression function: (field_expression field: (field_identifier) @ref.call))
+                (identifier) @ref.call
+                (type_identifier) @ref.call
+                (field_identifier) @ref.call
                 "#
             }
             Lang::Cpp => {
                 r#"
-                (call_expression function: (identifier) @ref.call)
-                (call_expression function: (field_expression field: (field_identifier) @ref.call))
-                (call_expression function: (qualified_identifier name: (identifier) @ref.call))
+                (identifier) @ref.call
+                (type_identifier) @ref.call
+                (field_identifier) @ref.call
                 "#
             }
         }

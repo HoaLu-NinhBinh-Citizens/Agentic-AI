@@ -81,7 +81,18 @@ fn extracts_c_functions_and_calls() {
     let names: Vec<_> = defs.iter().map(|d| d.name.as_str()).collect();
     assert!(names.contains(&"helper"), "got {names:?}");
     assert!(names.contains(&"main"), "got {names:?}");
-    assert_eq!(refs.iter().filter(|r| r.name == "helper").count(), 2);
+    // Broad C ref capture: 2 call uses (+ the definition's name token).
+    assert!(refs.iter().filter(|r| r.name == "helper").count() >= 2);
+}
+
+#[test]
+fn object_macro_uses_are_tracked_as_refs() {
+    // Gap A: object-macro uses are bare identifiers, not calls — must still be
+    // captured so renaming the macro finds them.
+    let src = b"#define LED_PIN 5\nint f(void) { int a = LED_PIN; int b = LED_PIN; return a + b; }\n";
+    let (_defs, refs) = extract(Lang::C, src).unwrap();
+    let uses = refs.iter().filter(|r| r.name == "LED_PIN").count();
+    assert!(uses >= 2, "object-macro uses not tracked: {:?}", refs.iter().map(|r| &r.name).collect::<Vec<_>>());
 }
 
 #[test]
