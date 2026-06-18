@@ -66,6 +66,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
   try {
     await client.request("initialize", {
       workspaceRoot,
+      telemetry: cfg.get<boolean>("telemetry", true),
       retrieval: {
         ollama: cfg.get<boolean>("useOllamaEmbeddings", false),
         lance: cfg.get<boolean>("useLance", false),
@@ -97,6 +98,9 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
     vscode.commands.registerCommand("aircode.applyNextEdits", applyNextEdits),
     vscode.commands.registerCommand("aircode.resync", refreshSuggestions),
     vscode.commands.registerCommand("aircode.inlineEdit", inlineEdit),
+    vscode.commands.registerCommand("aircode.completionAccepted", (meta: any) =>
+      sendTelemetry({ task: "completion", outcome: "accepted", ...(meta ?? {}) })
+    ),
     vscode.window.registerWebviewViewProvider("aircode.chat", new ChatViewProvider(context))
   );
 
@@ -160,16 +164,35 @@ class AirInlineProvider implements vscode.InlineCompletionItemProvider {
     }
     if (token.isCancellationRequested) return;
 
+    const model = cfg.get<string>("completionModel", "qwen2.5-coder:1.5b-base");
+    const started = Date.now();
     const completion = await generateFromOllama(
       cfg.get<string>("ollamaHost", "http://localhost:11434"),
-      cfg.get<string>("completionModel", "qwen2.5-coder:3b"),
+      model,
       prompt.text,
       token
     );
     if (!completion || token.isCancellationRequested) return;
 
-    return [new vscode.InlineCompletionItem(completion, new vscode.Range(position, position))];
+    const meta = {
+      model,
+      latency_ms: Date.now() - started,
+      prompt_token_estimate: prompt.token_estimate,
+      context: { included: prompt.included, dropped: prompt.dropped },
+    };
+    // Record that a suggestion was shown; the accept command fires if taken.
+    sendTelemetry({ task: "completion", outcome: "shown", ...meta });
+
+    const item = new vscode.InlineCompletionItem(completion, new vscode.Range(position, position));
+    item.command = { command: "aircode.completionAccepted", title: "", arguments: [meta] };
+    return [item];
   }
+}
+
+/** Fire-and-forget a telemetry event to the daemon's async sink (off the hot
+ *  path; the daemon drops on backpressure). Stamps ts here. */
+function sendTelemetry(event: Record<string, unknown>): void {
+  client?.notify("telemetry/log", { ts_ms: Date.now(), ...event });
 }
 
 /** Load the completion model into memory at startup so the first real
