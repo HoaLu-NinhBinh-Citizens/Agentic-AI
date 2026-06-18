@@ -77,6 +77,9 @@ impl Lang {
                 (enum_specifier name: (type_identifier) @name) @def.enum
                 (union_specifier name: (type_identifier) @name) @def.union
                 (type_definition declarator: (type_identifier) @name) @def.typedef
+                (type_definition declarator: (function_declarator declarator: (parenthesized_declarator (pointer_declarator declarator: (type_identifier) @name)))) @def.typedef
+                (preproc_function_def name: (identifier) @name) @def.macro
+                (preproc_def name: (identifier) @name) @def.constant
                 "#
             }
             Lang::Cpp => {
@@ -90,6 +93,9 @@ impl Lang {
                 (enum_specifier name: (type_identifier) @name) @def.enum
                 (namespace_definition name: (namespace_identifier) @name) @def.namespace
                 (type_definition declarator: (type_identifier) @name) @def.typedef
+                (type_definition declarator: (function_declarator declarator: (parenthesized_declarator (pointer_declarator declarator: (type_identifier) @name)))) @def.typedef
+                (preproc_function_def name: (identifier) @name) @def.macro
+                (preproc_def name: (identifier) @name) @def.constant
                 "#
             }
         }

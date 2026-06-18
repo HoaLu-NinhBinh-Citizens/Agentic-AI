@@ -85,6 +85,17 @@ fn extracts_c_functions_and_calls() {
 }
 
 #[test]
+fn extracts_c_hal_macros_and_fnptr_typedef() {
+    // The HAL-heavy patterns the first C query missed.
+    let src = b"#define __HAL_RCC_GPIOA_CLK_ENABLE() do {} while(0)\n#define LED_PIN GPIO_PIN_5\ntypedef void (*pFunc)(void);\n";
+    let (defs, _) = extract(Lang::C, src).unwrap();
+    let got: Vec<_> = defs.iter().map(|d| (d.name.as_str(), d.kind.as_str())).collect();
+    assert!(got.iter().any(|(n, k)| *n == "__HAL_RCC_GPIOA_CLK_ENABLE" && *k == "macro"), "got {got:?}");
+    assert!(got.iter().any(|(n, k)| *n == "LED_PIN" && *k == "constant"), "got {got:?}");
+    assert!(got.iter().any(|(n, _)| *n == "pFunc"), "fn-ptr typedef missed: {got:?}");
+}
+
+#[test]
 fn extracts_c_struct_and_typedef() {
     let src = b"struct Point { int x; int y; };\ntypedef struct Point PointT;\n";
     let (defs, _) = extract(Lang::C, src).unwrap();
