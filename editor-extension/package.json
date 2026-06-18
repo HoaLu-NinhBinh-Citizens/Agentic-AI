@@ -16,6 +16,16 @@
   "activationEvents": ["onStartupFinished"],
   "main": "./out/extension.js",
   "contributes": {
+    "viewsContainers": {
+      "activitybar": [
+        { "id": "aircode", "title": "aircode", "icon": "media/icon.svg" }
+      ]
+    },
+    "views": {
+      "aircode": [
+        { "type": "webview", "id": "aircode.chat", "name": "Chat" }
+      ]
+    },
     "commands": [
       {
         "command": "aircode.applyNextEdits",
@@ -60,6 +70,11 @@
           "type": "string",
           "default": "qwen2.5-coder:7b",
           "description": "Ollama instruct model for Cmd+K inline edits (use an instruct, not -base, model)."
+        },
+        "aircode.chatModel": {
+          "type": "string",
+          "default": "qwen2.5-coder:7b",
+          "description": "Ollama instruct model for the chat panel (codebase Q&A)."
         },
         "aircode.ollamaHost": {
           "type": "string",

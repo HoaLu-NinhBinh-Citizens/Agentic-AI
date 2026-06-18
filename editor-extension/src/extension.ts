@@ -96,7 +96,8 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
   context.subscriptions.push(
     vscode.commands.registerCommand("aircode.applyNextEdits", applyNextEdits),
     vscode.commands.registerCommand("aircode.resync", refreshSuggestions),
-    vscode.commands.registerCommand("aircode.inlineEdit", inlineEdit)
+    vscode.commands.registerCommand("aircode.inlineEdit", inlineEdit),
+    vscode.window.registerWebviewViewProvider("aircode.chat", new ChatViewProvider(context))
   );
 
   context.subscriptions.push({ dispose: () => client?.stop() });
@@ -253,6 +254,128 @@ function decorateSuggestions(): void {
     }
   }
   editor.setDecorations(suggestionDecoration, ranges);
+}
+
+/** Sidebar chat: codebase Q&A. Retrieves context from the daemon, streams an
+ *  answer from an Ollama instruct model token-by-token into the webview. */
+class ChatViewProvider implements vscode.WebviewViewProvider {
+  private history: { role: string; content: string }[] = [];
+  constructor(private readonly context: vscode.ExtensionContext) {}
+
+  resolveWebviewView(view: vscode.WebviewView): void {
+    view.webview.options = { enableScripts: true };
+    view.webview.html = this.html();
+    view.webview.onDidReceiveMessage(async (msg) => {
+      if (msg?.type === "ask" && typeof msg.text === "string") {
+        await this.answer(view, msg.text.trim());
+      } else if (msg?.type === "reset") {
+        this.history = [];
+      }
+    });
+  }
+
+  private async answer(view: vscode.WebviewView, question: string): Promise<void> {
+    if (!question || !client) return;
+    const cfg = vscode.workspace.getConfiguration("aircode");
+
+    // Codebase context via the daemon's retriever.
+    let context = "";
+    try {
+      const s = await client.request<{ file: string; start_row: number; text: string }[]>(
+        "retrieve",
+        { query: question, k: 5 }
+      );
+      context = s.map((x) => `// ${x.file}:${x.start_row}\n${x.text}`).join("\n\n");
+    } catch (e) {
+      output.appendLine(`chat retrieve failed: ${e}`);
+    }
+
+    this.history.push({
+      role: "user",
+      content: (context ? `Relevant code:\n${context}\n\n` : "") + question,
+    });
+    // Bound the context window: keep the last 6 turns.
+    if (this.history.length > 6) this.history = this.history.slice(-6);
+
+    const host = cfg.get<string>("ollamaHost", "http://localhost:11434");
+    const model = cfg.get<string>("chatModel", "qwen2.5-coder:7b");
+    const system =
+      "You are aircode, a coding assistant. Answer questions about the user's codebase using the provided context. Be concise and show code in fenced blocks.";
+
+    view.webview.postMessage({ type: "start" });
+    let answer = "";
+    try {
+      const resp = await fetch(`${host}/api/chat`, {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({
+          model,
+          stream: true,
+          keep_alive: "30m",
+          messages: [{ role: "system", content: system }, ...this.history],
+        }),
+      });
+      if (!resp.ok || !resp.body) {
+        view.webview.postMessage({ type: "token", value: `\n[ollama error ${resp.status}]` });
+      } else {
+        const reader = resp.body.getReader();
+        const dec = new TextDecoder();
+        let buf = "";
+        for (;;) {
+          const { done, value } = await reader.read();
+          if (done) break;
+          buf += dec.decode(value, { stream: true });
+          let nl: number;
+          while ((nl = buf.indexOf("\n")) >= 0) {
+            const line = buf.slice(0, nl);
+            buf = buf.slice(nl + 1);
+            if (!line.trim()) continue;
+            try {
+              const tok = JSON.parse(line)?.message?.content ?? "";
+              if (tok) {
+                answer += tok;
+                view.webview.postMessage({ type: "token", value: tok });
+              }
+            } catch {
+              /* partial line */
+            }
+          }
+        }
+      }
+    } catch (e) {
+      view.webview.postMessage({ type: "token", value: `\n[chat failed: ${e}]` });
+    }
+    if (answer) this.history.push({ role: "assistant", content: answer });
+    view.webview.postMessage({ type: "done" });
+  }
+
+  private html(): string {
+    // Self-contained; minimal vanilla JS. Streams tokens into the last bubble.
+    return `<!DOCTYPE html><html><head><meta charset="utf-8">
+<style>
+ body{font-family:var(--vscode-font-family);font-size:13px;color:var(--vscode-foreground);margin:0;display:flex;flex-direction:column;height:100vh}
+ #log{flex:1;overflow-y:auto;padding:8px}
+ .msg{margin:6px 0;padding:6px 8px;border-radius:6px;white-space:pre-wrap;word-break:break-word}
+ .user{background:var(--vscode-editor-inactiveSelectionBackground)}
+ .bot{background:var(--vscode-textCodeBlock-background)}
+ #bar{display:flex;border-top:1px solid var(--vscode-panel-border);padding:6px;gap:6px}
+ #q{flex:1;background:var(--vscode-input-background);color:var(--vscode-input-foreground);border:1px solid var(--vscode-input-border);border-radius:4px;padding:6px;resize:none}
+ button{background:var(--vscode-button-background);color:var(--vscode-button-foreground);border:none;border-radius:4px;padding:0 12px;cursor:pointer}
+</style></head><body>
+ <div id="log"></div>
+ <div id="bar"><textarea id="q" rows="2" placeholder="Ask about your codebase…  (Enter to send)"></textarea><button id="send">Send</button></div>
+<script>
+ const vscode=acquireVsCodeApi();const log=document.getElementById('log');const q=document.getElementById('q');let bot=null;
+ function add(cls,text){const d=document.createElement('div');d.className='msg '+cls;d.textContent=text;log.appendChild(d);log.scrollTop=log.scrollHeight;return d;}
+ function ask(){const t=q.value.trim();if(!t)return;add('user',t);q.value='';bot=null;vscode.postMessage({type:'ask',text:t});}
+ document.getElementById('send').onclick=ask;
+ q.addEventListener('keydown',e=>{if(e.key==='Enter'&&!e.shiftKey){e.preventDefault();ask();}});
+ window.addEventListener('message',e=>{const m=e.data;
+   if(m.type==='start'){bot=add('bot','');}
+   else if(m.type==='token'){if(!bot)bot=add('bot','');bot.textContent+=m.value;log.scrollTop=log.scrollHeight;}
+ });
+</script></body></html>`;
+  }
 }
 
 /** Cmd+K: rewrite the selection (or current line) per a natural-language
