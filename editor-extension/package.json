@@ -89,6 +89,11 @@
           "default": false,
           "description": "Persist embeddings in LanceDB (requires the daemon built with LanceDB)."
         },
+        "aircode.telemetry": {
+          "type": "boolean",
+          "default": true,
+          "description": "Log completion shown/accepted events to .aircode/telemetry.jsonl (the future fine-tune data flywheel). Set false to disable."
+        },
         "aircode.useOllamaEmbeddings": {
           "type": "boolean",
           "default": false
