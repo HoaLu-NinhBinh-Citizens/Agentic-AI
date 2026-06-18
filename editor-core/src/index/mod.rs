@@ -265,6 +265,23 @@ impl IndexEngine {
         })
     }
 
+    /// Retrieve the top-`k` relevant snippets for a free-form query. Powers
+    /// Cmd+K inline edit (and, later, chat): the editor composes the instruct
+    /// prompt; the daemon supplies the codebase context.
+    pub fn retrieve(&mut self, query: &str, k: usize) -> Result<Vec<RetrievedSnippet>> {
+        self.ensure_retriever()?;
+        let retriever = self.retriever.as_ref().expect("retriever just built");
+        Ok(retriever
+            .search(query, k)?
+            .into_iter()
+            .map(|sc| RetrievedSnippet {
+                file: sc.chunk.file,
+                start_row: sc.chunk.start_row,
+                text: sc.chunk.text,
+            })
+            .collect())
+    }
+
     /// Snapshot summary without re-walking — used by `index/status`.
     pub fn status(&self) -> IndexStatus {
         IndexStatus {
@@ -334,6 +351,14 @@ pub struct IndexStatus {
     pub indexed_files: usize,
     pub symbols: usize,
     pub workspace: String,
+}
+
+/// A retrieved context snippet returned to the editor (Cmd+K / chat).
+#[derive(Debug, serde::Serialize)]
+pub struct RetrievedSnippet {
+    pub file: String,
+    pub start_row: usize,
+    pub text: String,
 }
 
 /// Full result of a sync pass: Merkle delta, symbol-graph stats, and any
