@@ -40,6 +40,8 @@ arrow-array = "58"
 arrow-schema = "58"
 futures = "0.3"
 tokio = { version = "1", features = ["rt-multi-thread"] }
+tree-sitter-c = "0.23"
+tree-sitter-cpp = "0.23"
 
 [profile.release]
 opt-level = 3

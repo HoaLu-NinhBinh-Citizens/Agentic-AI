@@ -75,6 +75,25 @@ fn ref_span_points_at_the_call_identifier() {
 }
 
 #[test]
+fn extracts_c_functions_and_calls() {
+    let src = b"int helper(int x) { return x; }\nint main(void) {\n    helper(1);\n    helper(2);\n    return 0;\n}\n";
+    let (defs, refs) = extract(Lang::C, src).unwrap();
+    let names: Vec<_> = defs.iter().map(|d| d.name.as_str()).collect();
+    assert!(names.contains(&"helper"), "got {names:?}");
+    assert!(names.contains(&"main"), "got {names:?}");
+    assert_eq!(refs.iter().filter(|r| r.name == "helper").count(), 2);
+}
+
+#[test]
+fn extracts_c_struct_and_typedef() {
+    let src = b"struct Point { int x; int y; };\ntypedef struct Point PointT;\n";
+    let (defs, _) = extract(Lang::C, src).unwrap();
+    let kinds: Vec<_> = defs.iter().map(|d| (d.name.as_str(), d.kind.as_str())).collect();
+    assert!(kinds.contains(&("Point", "struct")), "got {kinds:?}");
+    assert!(kinds.contains(&("PointT", "typedef")), "got {kinds:?}");
+}
+
+#[test]
 fn computes_python_method_nesting() {
     let src = br#"
 class Foo:
