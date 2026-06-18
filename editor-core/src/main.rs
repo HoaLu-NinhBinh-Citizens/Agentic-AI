@@ -9,6 +9,7 @@
 //!   symbol/find      { name }            -> SymbolRow[]
 //!   symbol/callSites { name }            -> RefRow[]
 //!   context/completion { file, cursorByte, maxTokens?, query? } -> BuiltPrompt
+//!   retrieve         { query, k? }       -> RetrievedSnippet[]
 //!   telemetry/log    TelemetryEvent      -> (notification; opt-in, async sink)
 //!   shutdown         {}                  -> { ok: true }   (then exits)
 //!
@@ -51,6 +52,7 @@ impl Daemon {
             "symbol/find" => self.symbol_find(params),
             "symbol/callSites" => self.symbol_call_sites(params),
             "context/completion" => self.context_completion(params),
+            "retrieve" => self.retrieve(params),
             "telemetry/log" => self.telemetry_log(params),
             _ => Err(RpcError::new(
                 ErrorCode::MethodNotFound,
@@ -159,6 +161,19 @@ impl Daemon {
             .build_completion_context(&file, cursor_byte, max_tokens, query)
             .map_err(internal)?;
         serde_json::to_value(prompt).map_err(internal)
+    }
+
+    /// Retrieve top-k relevant snippets for a query (Cmd+K inline edit / chat).
+    fn retrieve(&mut self, params: Value) -> std::result::Result<Value, RpcError> {
+        let query = params
+            .get("query")
+            .and_then(Value::as_str)
+            .ok_or_else(|| RpcError::new(ErrorCode::InvalidParams, "missing 'query' string param"))?
+            .to_string();
+        let k = params.get("k").and_then(Value::as_u64).unwrap_or(5) as usize;
+        let engine = self.engine_mut()?;
+        let snippets = engine.retrieve(&query, k).map_err(internal)?;
+        serde_json::to_value(snippets).map_err(internal)
     }
 
     fn name_param(params: &Value) -> std::result::Result<String, RpcError> {

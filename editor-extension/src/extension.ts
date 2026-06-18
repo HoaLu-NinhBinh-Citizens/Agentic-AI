@@ -95,7 +95,8 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
 
   context.subscriptions.push(
     vscode.commands.registerCommand("aircode.applyNextEdits", applyNextEdits),
-    vscode.commands.registerCommand("aircode.resync", refreshSuggestions)
+    vscode.commands.registerCommand("aircode.resync", refreshSuggestions),
+    vscode.commands.registerCommand("aircode.inlineEdit", inlineEdit)
   );
 
   context.subscriptions.push({ dispose: () => client?.stop() });
@@ -252,6 +253,97 @@ function decorateSuggestions(): void {
     }
   }
   editor.setDecorations(suggestionDecoration, ranges);
+}
+
+/** Cmd+K: rewrite the selection (or current line) per a natural-language
+ *  instruction, using codebase context from the daemon + an instruct model. */
+async function inlineEdit(): Promise<void> {
+  const editor = vscode.window.activeTextEditor;
+  if (!editor || !client) return;
+
+  const sel = editor.selection;
+  const range = sel.isEmpty ? editor.document.lineAt(sel.active.line).range : new vscode.Range(sel.start, sel.end);
+  const selectionText = editor.document.getText(range);
+
+  const instruction = await vscode.window.showInputBox({
+    prompt: "aircode — describe the edit",
+    placeHolder: "e.g. make this async · add error handling · convert to a for-loop",
+  });
+  if (!instruction) return;
+
+  const cfg = vscode.workspace.getConfiguration("aircode");
+  await vscode.window.withProgress(
+    { location: vscode.ProgressLocation.Notification, title: "aircode: editing…" },
+    async () => {
+      // Codebase context (best-effort — proceed even if retrieval fails).
+      let context = "";
+      try {
+        const snippets = await client!.request<{ file: string; start_row: number; text: string }[]>(
+          "retrieve",
+          { query: `${instruction}\n${selectionText}`, k: 4 }
+        );
+        context = snippets.map((s) => `// ${s.file}:${s.start_row}\n${s.text}`).join("\n\n");
+      } catch (e) {
+        output.appendLine(`retrieve failed (continuing without context): ${e}`);
+      }
+
+      const edited = await editViaOllama(cfg, editor.document.languageId, context, instruction, selectionText);
+      if (edited == null) {
+        vscode.window.showWarningMessage("aircode: no edit produced (Ollama reachable? model pulled?).");
+        return;
+      }
+      await editor.edit((eb) => eb.replace(range, edited));
+    }
+  );
+}
+
+/** Strip a single ```lang … ``` markdown fence if the model wrapped its output. */
+function stripCodeFence(s: string): string {
+  const m = s.match(/^\s*```[^\n]*\n([\s\S]*?)\n```\s*$/);
+  return (m ? m[1] : s).replace(/\s+$/, "");
+}
+
+/** Ask an instruct model to rewrite `code` per `instruction`. */
+async function editViaOllama(
+  cfg: vscode.WorkspaceConfiguration,
+  lang: string,
+  context: string,
+  instruction: string,
+  code: string
+): Promise<string | undefined> {
+  const host = cfg.get<string>("ollamaHost", "http://localhost:11434");
+  const model = cfg.get<string>("editModel", "qwen2.5-coder:7b");
+  const system =
+    "You are a precise code editor. Rewrite the user's selected code to satisfy the instruction. " +
+    "Output ONLY the replacement code — no markdown fences, no explanation, preserve surrounding indentation.";
+  const user =
+    (context ? `Relevant context:\n${context}\n\n` : "") +
+    `Instruction: ${instruction}\n\nLanguage: ${lang}\nSelected code:\n${code}`;
+  try {
+    const resp = await fetch(`${host}/api/chat`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        model,
+        stream: false,
+        keep_alive: "30m",
+        messages: [
+          { role: "system", content: system },
+          { role: "user", content: user },
+        ],
+      }),
+    });
+    if (!resp.ok) {
+      output.appendLine(`ollama chat ${resp.status}`);
+      return;
+    }
+    const data: any = await resp.json();
+    const out = data?.message?.content;
+    return typeof out === "string" ? stripCodeFence(out) : undefined;
+  } catch (e) {
+    output.appendLine(`ollama chat failed: ${e}`);
+    return;
+  }
 }
 
 /** Apply all mechanical (rename) edits across files via a single WorkspaceEdit. */

@@ -24,6 +24,10 @@
       {
         "command": "aircode.resync",
         "title": "aircode: Re-index workspace"
+      },
+      {
+        "command": "aircode.inlineEdit",
+        "title": "aircode: Edit selection with AI (Cmd+K)"
       }
     ],
     "keybindings": [
@@ -31,6 +35,12 @@
         "command": "aircode.applyNextEdits",
         "key": "tab",
         "when": "aircode.hasSuggestions && !inlineSuggestionVisible && !suggestWidgetVisible"
+      },
+      {
+        "command": "aircode.inlineEdit",
+        "key": "ctrl+alt+k",
+        "mac": "cmd+k",
+        "when": "editorTextFocus && !editorReadonly"
       }
     ],
     "configuration": {
@@ -45,6 +55,11 @@
           "type": "string",
           "default": "qwen2.5-coder:1.5b-base",
           "description": "Ollama model for inline completion (FIM). Use a *-base model for raw FIM; bump to 3b/7b for quality."
+        },
+        "aircode.editModel": {
+          "type": "string",
+          "default": "qwen2.5-coder:7b",
+          "description": "Ollama instruct model for Cmd+K inline edits (use an instruct, not -base, model)."
         },
         "aircode.ollamaHost": {
           "type": "string",

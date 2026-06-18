@@ -81,3 +81,5 @@ src/AgenticAI/dist-release/
 AgenticAI.exe
 
 .coverage
+# aircode daemon index/telemetry state (regenerated)
+.agentic/
