@@ -1,80 +1,99 @@
 ---
-name: code-review
-description: Hướng dẫn review code hiệu quả, tập trung vào chất lượng code, bảo mật và hiệu suất.
-tags: [code-review, quality, best-practices]
+name: clean-code
+description: Hướng dẫn viết code sạch — đặt tên, hàm nhỏ, DRY, comment "why", giảm phức tạp.
+tags: [clean-code, readability, maintainability, best-practices]
 version: 1.0
 ---
 
-# Code Review Skill
+# Clean Code Skill
 
-Bạn là một chuyên gia review code. Hãy thực hiện các bước sau khi review một pull request hoặc đoạn code:
+Hướng dẫn **viết** code sạch ngay từ đầu (khác với `code-review` — vốn tập trung
+vào việc *review* code người khác). Mục tiêu: code dễ đọc, dễ sửa, ít bug.
 
-## 🎯 Nguyên tắc Review
+> Nguyên tắc nền: code được đọc nhiều hơn được viết. Tối ưu cho người đọc tiếp
+> theo (thường là chính bạn 3 tháng sau).
 
-1. **Đọc hiểu mục đích** – PR này giải quyết vấn đề gì? Issue liên quan là gì?
-2. **Kiểm tra thiết kế** – Architecture có phù hợp? Có vi phạm SOLID/KISS/DRY không?
-3. **Kiểm tra logic** – Code có đúng với yêu cầu không? Có edge cases không?
-4. **Kiểm tra bảo mật** – Có lỗ hổng injection, lộ thông tin, xác thực không?
-5. **Kiểm tra hiệu năng** – Có vòng lặp vô hạn, memory leak, query chậm không?
-6. **Kiểm tra khả năng bảo trì** – Code có dễ đọc, dễ hiểu, dễ sửa không?
-7. **Kiểm tra test** – Có test cho feature mới không? Test có đủ coverage không?
+## 1. Đặt tên (naming)
 
-## 📝 Cách Trả Lời
+- Tên nói lên **ý định**, không phải kiểu dữ liệu: `elapsedMs` thay vì `t`,
+  `activeUsers` thay vì `list`.
+- Hàm = động từ (`fetchUser`, `computeBudget`); biến/boolean = tính từ/danh từ
+  (`isReady`, `retryCount`).
+- Tránh viết tắt mơ hồ (`cfg` ok nếu phổ biến; `tmp2`, `data3` thì không).
+- Cùng một khái niệm → cùng một từ trong cả codebase (đừng lẫn `get/fetch/load`).
+- Hằng số có tên thay cho magic number: `const MAX_RETRIES = 3;` thay vì `3`.
 
-- **Tóm tắt** mục đích của PR
-- **Liệt kê các điểm tốt** (positive)
-- **Liệt kê các vấn đề** cần sửa (phân loại: critical, major, minor)
-- **Đề xuất cải tiến cụ thể** (có code mẫu nếu cần)
-- **Đánh giá cuối**: ✅ Approve / ⚠️ Comment / ❌ Request changes
+## 2. Hàm nhỏ, một nhiệm vụ
 
-## 🔍 Checklist Review
+- Một hàm làm **một việc** ở **một mức trừu tượng**. Nếu phải dùng "và" để mô tả
+  → tách.
+- Giữ hàm ngắn (lý tưởng < ~30 dòng). Hàm dài = trích các bước thành hàm con
+  có tên.
+- Ít tham số (≤ 3). Nhiều hơn → gom thành struct/object tham số.
+- Tránh **boolean flag param** (`render(true)`); tách thành 2 hàm hoặc dùng enum.
+- Trả về sớm (guard clause) thay vì lồng `if` sâu:
 
-### Code Quality
-- [ ] Tuân thủ naming conventions
-- [ ] Không có dead code
-- [ ] Functions nhỏ, focused (~20-50 lines)
-- [ ] Không có code duplication
-- [ ] Constants được defined (no magic numbers)
+  ```python
+  # tránh
+  def f(x):
+      if x is not None:
+          if x.ok:
+              return do(x)
+  # nên
+  def f(x):
+      if x is None or not x.ok:
+          return None
+      return do(x)
+  ```
 
-### Security
-- [ ] Input validation
-- [ ] Không có SQL injection
-- [ ] Bảo vệ sensitive data
-- [ ] Authentication/Authorization checks
-- [ ] No hardcoded credentials
+## 3. DRY — nhưng đừng abstraction quá sớm
 
-### Performance
-- [ ] Không có N+1 queries
-- [ ] Caching được sử dụng đúng
-- [ ] Algorithms có complexity hợp lý
-- [ ] Không có memory leaks
+- Lặp lại **kiến thức/quy tắc** → trích ra (hàm, hằng số, config).
+- Nhưng **hai đoạn giống nhau tình cờ** chưa chắc nên gộp — chờ tới lần thứ 3
+  (rule of three) rồi mới trừu tượng hoá, tránh abstraction sai.
+- Trùng lặp dễ sửa hơn abstraction sai.
 
-### Testing
-- [ ] Unit tests cho logic mới
-- [ ] Edge cases được cover
-- [ ] Integration tests nếu cần
-- [ ] Test coverage ≥ 80%
+## 4. Comment — chỉ giải thích "WHY"
 
-## 📚 Ví dụ
+- Code tự nói "what/how" qua tên tốt. Comment dành cho **lý do không hiển nhiên**:
+  ràng buộc protocol, timing, workaround, hằng số suy ra, quyết định đánh đổi.
 
-**PR: "Add authentication module"**
+  ```c
+  // PendSV phải có ưu tiên thấp nhất để context switch chỉ xảy ra khi
+  // không còn ISR nào pending (tránh fault khi switch giữa chừng ngắt).
+  HAL_NVIC_SetPriority(PendSV_IRQn, 15, 0);
+  ```
+- Xoá comment thừa lặp lại code (`i++; // tăng i`).
+- Code chết → xoá, đừng comment-out (đã có git).
 
-✅ **Điểm tốt:**
-- Code rõ ràng, dễ đọc
-- Test coverage 85%
-- Xử lý lỗi đầy đủ
+## 5. Giảm độ phức tạp
 
-⚠️ **Vấn đề cần sửa (major):**
-- Missing rate limiting để tránh brute force attacks
-- Password không được hash (dùng bcrypt)
-- Session timeout không được implement
+- Giảm state khả biến; ưu tiên dữ liệu bất biến khi hợp lý.
+- Tránh side-effect ẩn: hàm nên hoặc tính toán (trả giá trị) hoặc gây tác động,
+  hạn chế làm cả hai.
+- Xử lý lỗi tường minh tại biên; đừng nuốt exception âm thầm.
+- Một mức lồng (nesting) sâu = một tín hiệu nên tách hàm hoặc đảo điều kiện.
 
-❌ **Request changes** → Sửa 2 issues này trước khi merge
+## 6. Tổ chức & nhất quán
 
-## 💡 Tips
+- Nhóm code liên quan gần nhau; thứ tự đọc từ trên xuống như kể chuyện
+  (hàm gọi đứng trên hàm được gọi nếu ngôn ngữ cho phép).
+- **Theo convention sẵn có của dự án** trước khi áp style riêng — nhất quán quan
+  trọng hơn "đúng" theo sở thích cá nhân.
+- Format tự động (formatter/linter) để khỏi tranh luận style thủ công.
 
-- Review trong 24 giờ
-- Không review khi mệt/stressed
-- Focus vào logic, không nitpick code style
-- Suggest, don't demand
-- Appreciate good code
+## Checklist nhanh khi viết xong một hàm
+
+- [ ] Tên nói rõ ý định, không cần đọc thân hàm cũng đoán được?
+- [ ] Làm đúng một việc, một mức trừu tượng?
+- [ ] Không magic number / chuỗi lặp?
+- [ ] Guard clause thay vì lồng sâu?
+- [ ] Comment chỉ còn phần "why" không hiển nhiên?
+- [ ] Đặt tên/style nhất quán với phần còn lại của codebase?
+
+## Khi nào KHÔNG nên "làm sạch"
+
+- Đừng refactor cùng lúc với fix bug/feature (tách commit). → xem `refactoring`.
+- Đừng over-engineer cho nhu cầu chưa tồn tại (YAGNI).
+- Code hot-path có thể đánh đổi độ sạch lấy hiệu năng — khi đó **comment why**.
+  → xem `performance`.
