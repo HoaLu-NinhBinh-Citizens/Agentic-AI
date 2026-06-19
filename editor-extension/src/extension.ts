@@ -195,6 +195,22 @@ function sendTelemetry(event: Record<string, unknown>): void {
   client?.notify("telemetry/log", { ts_ms: Date.now(), ...event });
 }
 
+/** Apply a chat code block to the active editor: replace the selection if there
+ *  is one, otherwise insert at the cursor. */
+async function applyCodeToEditor(code: string): Promise<void> {
+  const editor = vscode.window.activeTextEditor ?? vscode.window.visibleTextEditors[0];
+  if (!editor) {
+    vscode.window.showWarningMessage("aircode: open a file to apply the code into.");
+    return;
+  }
+  const sel = editor.selection;
+  await editor.edit((eb) => {
+    if (sel.isEmpty) eb.insert(sel.active, code);
+    else eb.replace(sel, code);
+  });
+  sendTelemetry({ task: "chat_apply", outcome: "accepted" });
+}
+
 /** Load the completion model into memory at startup so the first real
  *  completion doesn't pay the cold-load penalty (~7s -> ~400ms warm). */
 function warmUpModel(cfg: vscode.WorkspaceConfiguration): void {
@@ -322,6 +338,8 @@ class ChatViewProvider implements vscode.WebviewViewProvider {
         await this.answer(view, msg.text.trim());
       } else if (msg?.type === "reset") {
         this.history = [];
+      } else if (msg?.type === "apply" && typeof msg.code === "string") {
+        await applyCodeToEditor(msg.code);
       }
     });
   }
@@ -412,19 +430,38 @@ class ChatViewProvider implements vscode.WebviewViewProvider {
  .bot{background:var(--vscode-textCodeBlock-background)}
  #bar{display:flex;border-top:1px solid var(--vscode-panel-border);padding:6px;gap:6px}
  #q{flex:1;background:var(--vscode-input-background);color:var(--vscode-input-foreground);border:1px solid var(--vscode-input-border);border-radius:4px;padding:6px;resize:none}
- button{background:var(--vscode-button-background);color:var(--vscode-button-foreground);border:none;border-radius:4px;padding:0 12px;cursor:pointer}
+ button{background:var(--vscode-button-background);color:var(--vscode-button-foreground);border:none;border-radius:4px;padding:2px 10px;cursor:pointer}
+ pre{background:var(--vscode-editor-background);border:1px solid var(--vscode-panel-border);border-radius:4px;padding:6px;overflow-x:auto;margin:4px 0}
+ code{font-family:var(--vscode-editor-font-family,monospace)}
+ .codehdr{display:flex;justify-content:flex-end;margin-top:6px}
 </style></head><body>
  <div id="log"></div>
  <div id="bar"><textarea id="q" rows="2" placeholder="Ask about your codebase…  (Enter to send)"></textarea><button id="send">Send</button></div>
 <script>
- const vscode=acquireVsCodeApi();const log=document.getElementById('log');const q=document.getElementById('q');let bot=null;
+ const vscode=acquireVsCodeApi();const log=document.getElementById('log');const q=document.getElementById('q');let bot=null;let botText="";
  function add(cls,text){const d=document.createElement('div');d.className='msg '+cls;d.textContent=text;log.appendChild(d);log.scrollTop=log.scrollHeight;return d;}
- function ask(){const t=q.value.trim();if(!t)return;add('user',t);q.value='';bot=null;vscode.postMessage({type:'ask',text:t});}
+ function ask(){const t=q.value.trim();if(!t)return;add('user',t);q.value='';bot=null;botText="";vscode.postMessage({type:'ask',text:t});}
  document.getElementById('send').onclick=ask;
  q.addEventListener('keydown',e=>{if(e.key==='Enter'&&!e.shiftKey){e.preventDefault();ask();}});
+ // On done, re-render the bot bubble: plain text + code blocks with Apply buttons.
+ function render(el,text){
+   el.textContent="";el.style.whiteSpace="normal";
+   const re=/\`\`\`[^\\n]*\\n?([\\s\\S]*?)\`\`\`/g;let last=0,m;
+   const addText=(s)=>{if(!s)return;const span=document.createElement('div');span.style.whiteSpace="pre-wrap";span.textContent=s;el.appendChild(span);};
+   while((m=re.exec(text))!==null){
+     addText(text.slice(last,m.index));last=re.lastIndex;
+     const code=m[1].replace(/\\s+$/,"");
+     const hdr=document.createElement('div');hdr.className='codehdr';
+     const btn=document.createElement('button');btn.textContent='Apply';btn.onclick=()=>vscode.postMessage({type:'apply',code});
+     hdr.appendChild(btn);el.appendChild(hdr);
+     const pre=document.createElement('pre');const c=document.createElement('code');c.textContent=code;pre.appendChild(c);el.appendChild(pre);
+   }
+   addText(text.slice(last));
+ }
  window.addEventListener('message',e=>{const m=e.data;
-   if(m.type==='start'){bot=add('bot','');}
-   else if(m.type==='token'){if(!bot)bot=add('bot','');bot.textContent+=m.value;log.scrollTop=log.scrollHeight;}
+   if(m.type==='start'){bot=add('bot','');botText="";}
+   else if(m.type==='token'){if(!bot){bot=add('bot','');}botText+=m.value;bot.textContent=botText;log.scrollTop=log.scrollHeight;}
+   else if(m.type==='done'){if(bot)render(bot,botText);log.scrollTop=log.scrollHeight;}
  });
 </script></body></html>`;
   }
