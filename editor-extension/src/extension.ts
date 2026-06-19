@@ -328,6 +328,8 @@ function decorateSuggestions(): void {
  *  answer from an Ollama instruct model token-by-token into the webview. */
 class ChatViewProvider implements vscode.WebviewViewProvider {
   private history: { role: string; content: string }[] = [];
+  /// Workspace file list (relative paths) for @-mention autocomplete.
+  private files: string[] = [];
   constructor(private readonly context: vscode.ExtensionContext) {}
 
   resolveWebviewView(view: vscode.WebviewView): void {
@@ -342,6 +344,50 @@ class ChatViewProvider implements vscode.WebviewViewProvider {
         await applyCodeToEditor(msg.code);
       }
     });
+    void this.loadFiles(view);
+  }
+
+  /// Populate the @-mention file list and push it to the webview.
+  private async loadFiles(view: vscode.WebviewView): Promise<void> {
+    try {
+      const uris = await vscode.workspace.findFiles(
+        "**/*",
+        "**/{node_modules,.git,target,.agentic,out,dist}/**",
+        5000
+      );
+      this.files = uris
+        .map((u) => vscode.workspace.asRelativePath(u, false).replace(/\\/g, "/"))
+        .sort();
+      view.webview.postMessage({ type: "files", list: this.files });
+    } catch (e) {
+      output.appendLine(`@-mention file list failed: ${e}`);
+    }
+  }
+
+  /// Resolve `@path` mentions in the question to file contents (capped).
+  private async resolveMentions(question: string): Promise<string> {
+    const tokens = [...question.matchAll(/@([\w./\-]+)/g)].map((m) => m[1]);
+    const folder = vscode.workspace.workspaceFolders?.[0];
+    if (!tokens.length || !folder) return "";
+    const seen = new Set<string>();
+    const blocks: string[] = [];
+    for (const t of tokens) {
+      const match = this.files.find(
+        (f) => f === t || f.endsWith("/" + t) || f.split("/").pop() === t
+      );
+      if (!match || seen.has(match)) continue;
+      seen.add(match);
+      try {
+        const bytes = await vscode.workspace.fs.readFile(vscode.Uri.joinPath(folder.uri, match));
+        let text = Buffer.from(bytes).toString("utf8");
+        const CAP = 8000;
+        if (text.length > CAP) text = text.slice(0, CAP) + "\n… (truncated)";
+        blocks.push(`// @${match}\n${text}`);
+      } catch {
+        /* unreadable */
+      }
+    }
+    return blocks.join("\n\n");
   }
 
   private async answer(view: vscode.WebviewView, question: string): Promise<void> {
@@ -360,9 +406,15 @@ class ChatViewProvider implements vscode.WebviewViewProvider {
       output.appendLine(`chat retrieve failed: ${e}`);
     }
 
+    // Explicit @-mentioned files take priority over retrieved snippets.
+    const mentioned = await this.resolveMentions(question);
+
     this.history.push({
       role: "user",
-      content: (context ? `Relevant code:\n${context}\n\n` : "") + question,
+      content:
+        (mentioned ? `Mentioned files:\n${mentioned}\n\n` : "") +
+        (context ? `Relevant code:\n${context}\n\n` : "") +
+        question,
     });
     // Bound the context window: keep the last 6 turns.
     if (this.history.length > 6) this.history = this.history.slice(-6);
@@ -434,15 +486,35 @@ class ChatViewProvider implements vscode.WebviewViewProvider {
  pre{background:var(--vscode-editor-background);border:1px solid var(--vscode-panel-border);border-radius:4px;padding:6px;overflow-x:auto;margin:4px 0}
  code{font-family:var(--vscode-editor-font-family,monospace)}
  .codehdr{display:flex;justify-content:flex-end;margin-top:6px}
+ #ac{position:fixed;left:6px;right:6px;bottom:56px;background:var(--vscode-editorWidget-background,var(--vscode-input-background));border:1px solid var(--vscode-panel-border);border-radius:4px;max-height:160px;overflow-y:auto;display:none;z-index:10}
+ #ac div{padding:3px 8px;cursor:pointer;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+ #ac div.sel,#ac div:hover{background:var(--vscode-list-activeSelectionBackground);color:var(--vscode-list-activeSelectionForeground)}
 </style></head><body>
  <div id="log"></div>
- <div id="bar"><textarea id="q" rows="2" placeholder="Ask about your codebase…  (Enter to send)"></textarea><button id="send">Send</button></div>
+ <div id="ac"></div>
+ <div id="bar"><textarea id="q" rows="2" placeholder="Ask… use @file to add a file to context  (Enter to send)"></textarea><button id="send">Send</button></div>
 <script>
- const vscode=acquireVsCodeApi();const log=document.getElementById('log');const q=document.getElementById('q');let bot=null;let botText="";
+ const vscode=acquireVsCodeApi();const log=document.getElementById('log');const q=document.getElementById('q');const ac=document.getElementById('ac');let bot=null;let botText="";let files=[];let sel=-1;
  function add(cls,text){const d=document.createElement('div');d.className='msg '+cls;d.textContent=text;log.appendChild(d);log.scrollTop=log.scrollHeight;return d;}
- function ask(){const t=q.value.trim();if(!t)return;add('user',t);q.value='';bot=null;botText="";vscode.postMessage({type:'ask',text:t});}
+ function ask(){const t=q.value.trim();if(!t)return;hideAc();add('user',t);q.value='';bot=null;botText="";vscode.postMessage({type:'ask',text:t});}
  document.getElementById('send').onclick=ask;
- q.addEventListener('keydown',e=>{if(e.key==='Enter'&&!e.shiftKey){e.preventDefault();ask();}});
+ // --- @-mention autocomplete ---
+ function token(){const v=q.value.slice(0,q.selectionStart);const m=v.match(/@([\\w./\\-]*)$/);return m?m[1]:null;}
+ function hideAc(){ac.style.display='none';sel=-1;}
+ function showAc(){const t=token();if(t===null){hideAc();return;}
+   const q2=t.toLowerCase();const hits=files.filter(f=>f.toLowerCase().includes(q2)).slice(0,8);
+   if(!hits.length){hideAc();return;}
+   ac.innerHTML='';hits.forEach((f,i)=>{const d=document.createElement('div');d.textContent=f;if(i===0){d.className='sel';sel=0;}d.onmousedown=(e)=>{e.preventDefault();pick(f);};ac.appendChild(d);});
+   ac.style.display='block';}
+ function pick(f){const v=q.value;const cut=q.selectionStart;const before=v.slice(0,cut).replace(/@([\\w./\\-]*)$/,'@'+f+' ');q.value=before+v.slice(cut);q.focus();hideAc();}
+ q.addEventListener('input',showAc);
+ q.addEventListener('keydown',e=>{
+   const open=ac.style.display==='block';const items=[...ac.children];
+   if(open&&(e.key==='ArrowDown'||e.key==='ArrowUp')){e.preventDefault();if(sel>=0)items[sel].className='';sel=(sel+(e.key==='ArrowDown'?1:items.length-1))%items.length;items[sel].className='sel';items[sel].scrollIntoView({block:'nearest'});return;}
+   if(open&&(e.key==='Enter'||e.key==='Tab')&&sel>=0){e.preventDefault();pick(items[sel].textContent);return;}
+   if(e.key==='Escape'){hideAc();return;}
+   if(e.key==='Enter'&&!e.shiftKey){e.preventDefault();ask();}
+ });
  // On done, re-render the bot bubble: plain text + code blocks with Apply buttons.
  function render(el,text){
    el.textContent="";el.style.whiteSpace="normal";
@@ -459,7 +531,8 @@ class ChatViewProvider implements vscode.WebviewViewProvider {
    addText(text.slice(last));
  }
  window.addEventListener('message',e=>{const m=e.data;
-   if(m.type==='start'){bot=add('bot','');botText="";}
+   if(m.type==='files'){files=m.list||[];}
+   else if(m.type==='start'){bot=add('bot','');botText="";}
    else if(m.type==='token'){if(!bot){bot=add('bot','');}botText+=m.value;bot.textContent=botText;log.scrollTop=log.scrollHeight;}
    else if(m.type==='done'){if(bot)render(bot,botText);log.scrollTop=log.scrollHeight;}
  });
