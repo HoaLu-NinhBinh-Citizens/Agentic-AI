@@ -71,6 +71,11 @@
           "default": "qwen2.5-coder:7b",
           "description": "Ollama instruct model for Cmd+K inline edits (use an instruct, not -base, model)."
         },
+        "aircode.diffPreview": {
+          "type": "boolean",
+          "default": true,
+          "description": "Cmd+K shows a diff to Apply/Discard before changing the file (safer). Off = stream the edit straight into the editor."
+        },
         "aircode.chatModel": {
           "type": "string",
           "default": "qwen2.5-coder:7b",
