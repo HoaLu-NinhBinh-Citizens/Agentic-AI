@@ -81,6 +81,40 @@ fn root_hash_is_stable_across_reopen() {
 }
 
 #[test]
+fn retriever_updates_incrementally_on_sync() {
+    let dir = TempDir::new().unwrap();
+    write(&dir, "a.rs", "fn alpha_unique_xyz() {}\n");
+    write(&dir, "b.rs", "fn beta_unique_xyz() {}\n");
+
+    let mut engine = IndexEngine::open(dir.path()).unwrap();
+    engine.sync().unwrap();
+    // First retrieve lazily builds the (in-memory) retriever.
+    let hits = engine.retrieve("alpha_unique_xyz", 5).unwrap();
+    assert!(hits.iter().any(|s| s.file == "a.rs"));
+
+    // Rename the symbol in a.rs and delete b.rs, then sync — this must update
+    // the retriever incrementally (not drop + full rebuild).
+    write(&dir, "a.rs", "fn gamma_unique_xyz() {}\n");
+    fs::remove_file(dir.path().join("b.rs")).unwrap();
+    engine.sync().unwrap();
+
+    let fresh = engine.retrieve("gamma_unique_xyz", 5).unwrap();
+    assert!(fresh.iter().any(|s| s.file == "a.rs"), "new content must be searchable");
+
+    let stale = engine.retrieve("alpha_unique_xyz", 5).unwrap();
+    assert!(
+        !stale.iter().any(|s| s.text.contains("alpha_unique_xyz")),
+        "stale chunk must be purged on incremental update"
+    );
+
+    let removed = engine.retrieve("beta_unique_xyz", 5).unwrap();
+    assert!(
+        !removed.iter().any(|s| s.file == "b.rs"),
+        "a removed file's chunks must be gone"
+    );
+}
+
+#[test]
 fn gitignored_files_are_skipped() {
     let dir = TempDir::new().unwrap();
     write(&dir, ".gitignore", "ignored.rs\n");

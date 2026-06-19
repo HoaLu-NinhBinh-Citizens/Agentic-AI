@@ -7,15 +7,18 @@
 use anyhow::{Context, Result};
 use tantivy::collector::TopDocs;
 use tantivy::query::QueryParser;
-use tantivy::schema::{Schema, Value, STORED, TEXT};
-use tantivy::{doc, Index, TantivyDocument};
+use tantivy::schema::{Field, Schema, Value, STORED, STRING, TEXT};
+use tantivy::{doc, Index, TantivyDocument, Term};
 
 use super::chunks::Chunk;
 
 pub struct LexicalIndex {
     index: Index,
-    id_field: tantivy::schema::Field,
-    text_field: tantivy::schema::Field,
+    id_field: Field,
+    text_field: Field,
+    /// STRING (untokenized) file path, so we can delete a file's docs by term
+    /// for incremental updates.
+    file_field: Field,
 }
 
 /// Strip query punctuation so code like `area(1, 2)` parses as terms, not
@@ -33,6 +36,7 @@ impl LexicalIndex {
         let mut sb = Schema::builder();
         let id_field = sb.add_u64_field("id", STORED);
         let text_field = sb.add_text_field("text", TEXT);
+        let file_field = sb.add_text_field("file", STRING | STORED);
         let schema = sb.build();
 
         let index = Index::create_in_ram(schema);
@@ -40,13 +44,29 @@ impl LexicalIndex {
             let mut writer = index.writer(50_000_000).context("tantivy writer")?;
             for c in chunks {
                 writer
-                    .add_document(doc!(id_field => c.id, text_field => c.text.clone()))
+                    .add_document(doc!(id_field => c.id, text_field => c.text.clone(), file_field => c.file.clone()))
                     .context("tantivy add_document")?;
             }
             writer.commit().context("tantivy commit")?;
         }
 
-        Ok(Self { index, id_field, text_field })
+        Ok(Self { index, id_field, text_field, file_field })
+    }
+
+    /// Incremental update: delete all docs for `stale_files`, then add
+    /// `new_chunks`. One writer + commit covers both.
+    pub fn update(&mut self, stale_files: &[String], new_chunks: &[Chunk]) -> Result<()> {
+        let mut writer = self.index.writer(50_000_000).context("tantivy writer")?;
+        for f in stale_files {
+            writer.delete_term(Term::from_field_text(self.file_field, f));
+        }
+        for c in new_chunks {
+            writer
+                .add_document(doc!(self.id_field => c.id, self.text_field => c.text.clone(), self.file_field => c.file.clone()))
+                .context("tantivy add_document")?;
+        }
+        writer.commit().context("tantivy commit")?;
+        Ok(())
     }
 
     /// Top-`k` `(chunk_id, bm25_score)` for `query`.

@@ -12,6 +12,14 @@
 pub trait VectorStore {
     fn clear(&mut self);
     fn add(&mut self, id: u64, vector: Vec<f32>);
+    /// Remove a vector by id. Used for incremental updates. Default no-op for
+    /// stores that can't remove cheaply (see `supports_incremental`).
+    fn remove(&mut self, _id: u64) {}
+    /// True if `remove` actually works, so the retriever can update in place
+    /// instead of doing a full rebuild on every sync.
+    fn supports_incremental(&self) -> bool {
+        false
+    }
     /// Finalize pending adds so `search` can run. No-op for stores that index
     /// eagerly (in-memory); batch-oriented stores (LanceDB) flush here.
     fn commit(&mut self) -> anyhow::Result<()> {
@@ -47,6 +55,14 @@ impl VectorStore for InMemoryVectorStore {
 
     fn add(&mut self, id: u64, vector: Vec<f32>) {
         self.items.push((id, vector));
+    }
+
+    fn remove(&mut self, id: u64) {
+        self.items.retain(|(i, _)| *i != id);
+    }
+
+    fn supports_incremental(&self) -> bool {
+        true
     }
 
     fn search(&self, query: &[f32], k: usize) -> Vec<(u64, f32)> {

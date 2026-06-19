@@ -34,6 +34,9 @@ pub struct HybridRetriever {
     vector: Box<dyn VectorStore>,
     lexical: LexicalIndex,
     chunks: HashMap<u64, Chunk>,
+    /// file path -> its chunk ids, so an incremental sync can purge a changed
+    /// file's old chunks before adding the new ones.
+    file_chunks: HashMap<String, Vec<u64>>,
 }
 
 /// Fuse several ranked id lists into one fused score per id (Reciprocal Rank
@@ -65,12 +68,14 @@ impl HybridRetriever {
         let lexical = LexicalIndex::build(&chunks)?;
         vector.clear();
         let mut map = HashMap::with_capacity(chunks.len());
+        let mut file_chunks: HashMap<String, Vec<u64>> = HashMap::new();
         for c in chunks {
             vector.add(c.id, embedder.embed(&c.text));
+            file_chunks.entry(c.file.clone()).or_default().push(c.id);
             map.insert(c.id, c);
         }
         vector.commit()?;
-        Ok(Self { embedder, vector, lexical, chunks: map })
+        Ok(Self { embedder, vector, lexical, chunks: map, file_chunks })
     }
 
     pub fn len(&self) -> usize {
@@ -79,6 +84,36 @@ impl HybridRetriever {
 
     pub fn is_empty(&self) -> bool {
         self.chunks.is_empty()
+    }
+
+    /// Whether this retriever can update in place. If false, the caller should
+    /// drop + lazily rebuild on the next sync (e.g. the LanceDB backend).
+    pub fn supports_incremental(&self) -> bool {
+        self.vector.supports_incremental()
+    }
+
+    /// Incrementally update the index: purge chunks of `stale_files`
+    /// (modified + removed) and add `new_chunks` (added + modified). Avoids the
+    /// full rebuild on every sync. Caller must check `supports_incremental`.
+    pub fn apply_delta(&mut self, stale_files: &[String], new_chunks: Vec<Chunk>) -> Result<()> {
+        // Purge old chunks for every stale file.
+        for f in stale_files {
+            if let Some(ids) = self.file_chunks.remove(f) {
+                for id in ids {
+                    self.vector.remove(id);
+                    self.chunks.remove(&id);
+                }
+            }
+        }
+        // Add the freshly chunked files.
+        for c in &new_chunks {
+            self.vector.add(c.id, self.embedder.embed(&c.text));
+            self.file_chunks.entry(c.file.clone()).or_default().push(c.id);
+            self.chunks.insert(c.id, c.clone());
+        }
+        self.vector.commit()?;
+        self.lexical.update(stale_files, &new_chunks)?;
+        Ok(())
     }
 
     /// Retrieve the top-`k` chunks for `query`, fusing vector + lexical ranks.

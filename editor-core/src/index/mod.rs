@@ -18,7 +18,7 @@ use tracing::{debug, info};
 use merkle::{build_snapshot, diff, mtime_to_ns, Candidate, Snapshot, SyncDelta};
 
 use crate::context::{BuildRequest, BuiltPrompt, ContextBuilder, Task};
-use crate::retrieval::chunks::chunk_file;
+use crate::retrieval::chunks::{chunk_file, Chunk};
 use crate::retrieval::embed::{Embedder, HashEmbedder};
 use crate::retrieval::lance_store::LanceVectorStore;
 use crate::retrieval::ollama::OllamaEmbedder;
@@ -154,8 +154,28 @@ impl IndexEngine {
             |path: &str| snapshot.entries.get(path).map(|e| e.hash.clone());
         let outcome = self.graph.apply_delta(&added, &modified, &removed, &hash_of)?;
 
-        // The workspace changed; the retriever (full-rebuild) is now stale.
-        self.retriever = None;
+        // Keep the retriever fresh. If it's built and supports incremental
+        // updates (in-memory backend), patch only the changed files instead of
+        // dropping the whole index (which forced a full rebuild every save).
+        // Otherwise (not built yet, or LanceDB backend) drop for a lazy rebuild.
+        let incremental = self
+            .retriever
+            .as_ref()
+            .map(|r| r.supports_incremental())
+            .unwrap_or(false);
+        if incremental {
+            let stale: Vec<String> =
+                modified.iter().chain(removed.iter()).cloned().collect();
+            let fresh = self.chunk_paths(added.iter().chain(modified.iter()));
+            if let Some(r) = self.retriever.as_mut() {
+                if let Err(e) = r.apply_delta(&stale, fresh) {
+                    debug!(error = %e, "retriever incremental update failed; dropping for rebuild");
+                    self.retriever = None;
+                }
+            }
+        } else {
+            self.retriever = None;
+        }
 
         let delta = SyncDelta {
             added,
@@ -192,16 +212,10 @@ impl IndexEngine {
         self.graph.call_sites(name)
     }
 
-    /// Build (if needed) the hybrid retriever from the current snapshot by
-    /// re-parsing + chunking every known-language file. Full rebuild; cached
-    /// until the next sync invalidates it.
-    fn ensure_retriever(&mut self) -> Result<()> {
-        if self.retriever.is_some() {
-            return Ok(());
-        }
-        let started = Instant::now();
-        let mut all_chunks = Vec::new();
-        for path in self.snapshot.entries.keys() {
+    /// Parse + chunk the given workspace-relative paths (skipping non-code).
+    fn chunk_paths<'a>(&self, paths: impl Iterator<Item = &'a String>) -> Vec<Chunk> {
+        let mut out = Vec::new();
+        for path in paths {
             let Some(lang) = Lang::from_path(path) else { continue };
             let abs = self.workspace_root.join(path);
             let Ok(source) = fs::read(&abs) else { continue };
@@ -209,8 +223,20 @@ impl IndexEngine {
                 Ok((defs, _refs)) => defs,
                 Err(_) => continue,
             };
-            all_chunks.extend(chunk_file(path, &source, &defs));
+            out.extend(chunk_file(path, &source, &defs));
         }
+        out
+    }
+
+    /// Build (if needed) the hybrid retriever from the current snapshot by
+    /// re-parsing + chunking every known-language file. Full rebuild; cached
+    /// and then kept fresh incrementally by `sync`.
+    fn ensure_retriever(&mut self) -> Result<()> {
+        if self.retriever.is_some() {
+            return Ok(());
+        }
+        let started = Instant::now();
+        let all_chunks = self.chunk_paths(self.snapshot.entries.keys());
         let n = all_chunks.len();
 
         // Build embedder + vector store from config (Ollama/LanceDB or the
