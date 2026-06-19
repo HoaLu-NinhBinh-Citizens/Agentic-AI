@@ -40,6 +40,23 @@ let latestSuggestions: EditSuggestion[] = [];
 let output: vscode.OutputChannel;
 let suggestionDecoration: vscode.TextEditorDecorationType;
 
+const PREVIEW_SCHEME = "aircode-preview";
+
+/** Serves the proposed (post-edit) document content for the Cmd+K diff view. */
+class PreviewContentProvider implements vscode.TextDocumentContentProvider {
+  private readonly content = new Map<string, string>();
+  private readonly emitter = new vscode.EventEmitter<vscode.Uri>();
+  readonly onDidChange = this.emitter.event;
+  set(uri: vscode.Uri, text: string): void {
+    this.content.set(uri.toString(), text);
+    this.emitter.fire(uri);
+  }
+  provideTextDocumentContent(uri: vscode.Uri): string {
+    return this.content.get(uri.toString()) ?? "";
+  }
+}
+const previewProvider = new PreviewContentProvider();
+
 export async function activate(context: vscode.ExtensionContext): Promise<void> {
   output = vscode.window.createOutputChannel("aircode");
   suggestionDecoration = vscode.window.createTextEditorDecorationType({
@@ -101,7 +118,8 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
     vscode.commands.registerCommand("aircode.completionAccepted", (meta: any) =>
       sendTelemetry({ task: "completion", outcome: "accepted", ...(meta ?? {}) })
     ),
-    vscode.window.registerWebviewViewProvider("aircode.chat", new ChatViewProvider(context))
+    vscode.window.registerWebviewViewProvider("aircode.chat", new ChatViewProvider(context)),
+    vscode.workspace.registerTextDocumentContentProvider(PREVIEW_SCHEME, previewProvider)
   );
 
   context.subscriptions.push({ dispose: () => client?.stop() });
@@ -572,20 +590,119 @@ async function inlineEdit(): Promise<void> {
         output.appendLine(`retrieve failed (continuing without context): ${e}`);
       }
 
-      const produced = await editViaOllamaStream(
-        editor,
-        range,
-        cfg,
-        editor.document.languageId,
-        context,
-        instruction,
-        selectionText
-      );
-      if (!produced) {
-        vscode.window.showWarningMessage("aircode: no edit produced (Ollama reachable? model pulled?).");
+      if (cfg.get<boolean>("diffPreview", true)) {
+        // Safe path: generate, show a diff, apply only if accepted.
+        const rewrite = await editViaOllamaText(cfg, editor.document.languageId, context, instruction, selectionText);
+        if (!rewrite) {
+          vscode.window.showWarningMessage("aircode: no edit produced (Ollama reachable? model pulled?).");
+          return;
+        }
+        await previewAndApply(editor, range, rewrite, instruction);
+      } else {
+        // Fast path: stream straight into the editor.
+        const produced = await editViaOllamaStream(
+          editor,
+          range,
+          cfg,
+          editor.document.languageId,
+          context,
+          instruction,
+          selectionText
+        );
+        if (!produced) {
+          vscode.window.showWarningMessage("aircode: no edit produced (Ollama reachable? model pulled?).");
+        }
       }
     }
   );
+}
+
+/** Show a diff of the proposed rewrite, then apply it only if the user accepts. */
+async function previewAndApply(
+  editor: vscode.TextEditor,
+  range: vscode.Range,
+  rewrite: string,
+  instruction: string
+): Promise<void> {
+  const doc = editor.document;
+  const startOff = doc.offsetAt(range.start);
+  const endOff = doc.offsetAt(range.end);
+  const proposed = doc.getText().slice(0, startOff) + rewrite + doc.getText().slice(endOff);
+
+  // Virtual doc keeps the original file's extension so the diff is highlighted.
+  const previewUri = vscode.Uri.from({
+    scheme: PREVIEW_SCHEME,
+    path: "/" + vscode.workspace.asRelativePath(doc.uri, false).replace(/\\/g, "/"),
+    query: String(Date.now()),
+  });
+  previewProvider.set(previewUri, proposed);
+
+  await vscode.commands.executeCommand(
+    "vscode.diff",
+    doc.uri,
+    previewUri,
+    `aircode: ${instruction}`,
+    { preview: true }
+  );
+
+  const choice = await vscode.window.showInformationMessage(
+    "Apply aircode edit?",
+    { modal: true },
+    "Apply"
+  );
+  // Close the diff tab regardless of choice.
+  await vscode.commands.executeCommand("workbench.action.closeActiveEditor");
+
+  if (choice === "Apply") {
+    await editor.edit((eb) => eb.replace(range, rewrite));
+    sendTelemetry({ task: "inline_edit", outcome: "accepted" });
+  } else {
+    sendTelemetry({ task: "inline_edit", outcome: "rejected" });
+  }
+}
+
+/** Non-streaming variant of the inline-edit generation (returns the full text)
+ *  for diff-preview mode. */
+async function editViaOllamaText(
+  cfg: vscode.WorkspaceConfiguration,
+  lang: string,
+  context: string,
+  instruction: string,
+  code: string
+): Promise<string | undefined> {
+  const host = cfg.get<string>("ollamaHost", "http://localhost:11434");
+  const model = cfg.get<string>("editModel", "qwen2.5-coder:7b");
+  const system =
+    "You are a precise code editor. Rewrite the user's selected code to satisfy the instruction. " +
+    "Output ONLY the replacement code — no markdown fences, no explanation, preserve surrounding indentation.";
+  const user =
+    (context ? `Relevant context:\n${context}\n\n` : "") +
+    `Instruction: ${instruction}\n\nLanguage: ${lang}\nSelected code:\n${code}`;
+  try {
+    const resp = await fetch(`${host}/api/chat`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        model,
+        stream: false,
+        keep_alive: "30m",
+        messages: [
+          { role: "system", content: system },
+          { role: "user", content: user },
+        ],
+      }),
+    });
+    if (!resp.ok) {
+      output.appendLine(`ollama chat ${resp.status}`);
+      return;
+    }
+    const data: any = await resp.json();
+    const out = data?.message?.content;
+    return typeof out === "string" ? stripCodeFence(out) : undefined;
+  } catch (e) {
+    output.appendLine(`ollama chat failed: ${e}`);
+    return;
+  }
 }
 
 /** Strip a single ```lang … ``` markdown fence if the model wrapped its output. */
