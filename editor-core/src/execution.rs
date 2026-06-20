@@ -7,8 +7,10 @@
 //! * **Execution Engine** (this module) decides *how* — it walks the planner
 //!   schedule wave by wave, drives each task through an explicit
 //!   [state machine](TaskState), selects a model (inference router), assembles
-//!   that task's own context (semantic context builder), dispatches to a
-//!   pluggable [`Tool`] from the [`ToolRegistry`], records every output as a
+//!   that task's own context (semantic context builder), dispatches the task's
+//!   requested *capability* through the
+//!   [`CapabilityLayer`](crate::capability::CapabilityLayer) — which resolves it
+//!   to one or more pluggable [`Tool`]s in the [`ToolRegistry`] — records every output as a
 //!   structured [`Artifact`] downstream tasks consume, and — for mutating tasks —
 //!   runs verification before declaring success. Every transition is reported on
 //!   an [`ExecutionEvent`] stream for observability.
@@ -28,6 +30,7 @@ use std::time::Instant;
 use serde::Serialize;
 use serde_json::{json, Value};
 
+use crate::capability::CapabilityLayer;
 use crate::context::{BuildRequest, BuiltPrompt, Task as CtxTask};
 use crate::detector::Finding;
 use crate::index::{Edit, IndexEngine};
@@ -458,8 +461,10 @@ impl ToolRegistry {
         self.tools.push((kind, tool));
     }
 
-    /// The tool for `kind` (the most recently registered wins).
-    fn tool_for(&self, kind: TaskKind) -> Option<&dyn Tool> {
+    /// The tool for `kind` (the most recently registered wins). Used by the
+    /// [`CapabilityLayer`](crate::capability::CapabilityLayer) to resolve a
+    /// capability's tool(s); the registry's keying and contents are unchanged.
+    pub(crate) fn tool_for(&self, kind: TaskKind) -> Option<&dyn Tool> {
         self.tools.iter().rev().find(|(k, _)| *k == kind).map(|(_, t)| t.as_ref())
     }
 }
@@ -720,6 +725,7 @@ pub struct Executor<'a> {
     edits: &'a dyn EditProvider,
     dry_run: bool,
     registry: ToolRegistry,
+    capabilities: CapabilityLayer,
     artifacts: ArtifactStore,
     log: EventLog,
 }
@@ -745,6 +751,7 @@ impl<'a> Executor<'a> {
             edits,
             dry_run,
             registry: ToolRegistry::with_defaults(),
+            capabilities: CapabilityLayer::new(),
             artifacts: ArtifactStore::default(),
             log: EventLog::new(None),
         }
@@ -842,33 +849,31 @@ impl<'a> Executor<'a> {
     /// Dispatch a ready task to its tool and record the result + events.
     fn run_task(&mut self, task: &PlanTask) -> TaskExecution {
         let started = Instant::now();
-        let route = route_for(task.kind, self.policy);
+        // The capability names the work; its primary tool kind drives model
+        // routing and labels the recorded execution.
+        let kind = task.capability.primary_kind();
+        let route = route_for(kind, self.policy);
 
         self.transition(&task.id, TaskState::Ready, TaskState::Running);
-        self.log.emit(ExecutionEvent::TaskStarted { task: task.id.clone(), kind: task.kind });
+        self.log.emit(ExecutionEvent::TaskStarted { task: task.id.clone(), kind });
 
-        // Run the tool with a context borrowing the engine + upstream artifacts.
+        // Dispatch through the Capability Layer: it resolves the capability to
+        // registered tool(s) and merges their outcome. The runtime stays unaware
+        // of which concrete tools a capability orchestrates.
         let mut outcome = {
-            let tool = self.registry.tool_for(task.kind);
-            match tool {
-                Some(t) => {
-                    let mut cx = ToolCx {
-                        engine: &mut *self.engine,
-                        policy: self.policy,
-                        edits: self.edits,
-                        dry_run: self.dry_run,
-                        upstream: &self.artifacts,
-                    };
-                    t.run(task, &mut cx)
-                }
-                None => ToolOutcome::new(TaskState::Skipped, "no tool registered for this kind"),
-            }
+            let mut cx = ToolCx {
+                engine: &mut *self.engine,
+                policy: self.policy,
+                edits: self.edits,
+                dry_run: self.dry_run,
+                upstream: &self.artifacts,
+            };
+            self.capabilities.execute(task.capability, task, &mut cx, &self.registry)
         };
         outcome.route = route;
 
-        // Verifying state + events for the kinds that actually verify.
-        let verifies = matches!(task.kind, TaskKind::Implement | TaskKind::Verify)
-            && !outcome.verification.is_empty();
+        // Verifying state + events for the capabilities that actually verify.
+        let verifies = task.capability.runs_verification() && !outcome.verification.is_empty();
         if verifies {
             self.transition(&task.id, TaskState::Running, TaskState::Verifying);
             self.log.emit(ExecutionEvent::VerificationStarted {
@@ -899,7 +904,7 @@ impl<'a> Executor<'a> {
 
         TaskExecution {
             id: task.id.clone(),
-            kind: task.kind,
+            kind,
             state: outcome.state,
             summary: outcome.summary,
             route: outcome.route,
@@ -1019,7 +1024,7 @@ fn context_artifact(producer: &str, prompt: &BuiltPrompt) -> Artifact {
 fn stub_task(task: &PlanTask, state: TaskState, summary: &str) -> TaskExecution {
     TaskExecution {
         id: task.id.clone(),
-        kind: task.kind,
+        kind: task.capability.primary_kind(),
         state,
         summary: summary.to_string(),
         route: None,

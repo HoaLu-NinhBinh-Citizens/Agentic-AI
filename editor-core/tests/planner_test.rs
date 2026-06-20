@@ -3,8 +3,9 @@
 //! planning, and verification planning. The Planner is deterministic and never
 //! calls the semantic engine or an LLM — same request in, same plan out.
 
+use aircore::capability::Capability;
 use aircore::planner::{
-    classify_intent, Intent, Plan, PlanRequest, Planner, TaskKind, VerificationKind,
+    classify_intent, Intent, Plan, PlanRequest, Planner, VerificationKind,
 };
 
 fn plan_for(goal: &str, focus: Option<&str>) -> Plan {
@@ -32,10 +33,16 @@ fn bug_fix_decomposes_into_locate_diagnose_fix_verify() {
     let plan = plan_for("fix the crash in run", Some("src/main.rs::run"));
     assert_eq!(plan.intent, Intent::BugFix);
 
-    let kinds: Vec<TaskKind> = plan.tasks.iter().map(|t| t.kind).collect();
+    // The Planner requests capabilities, not concrete tools.
+    let caps: Vec<Capability> = plan.tasks.iter().map(|t| t.capability).collect();
     assert_eq!(
-        kinds,
-        vec![TaskKind::Locate, TaskKind::Analyze, TaskKind::Implement, TaskKind::Verify]
+        caps,
+        vec![
+            Capability::ReadCode,
+            Capability::AnalyzeCode,
+            Capability::ModifyCode,
+            Capability::VerifyCode
+        ]
     );
 
     // Exactly one task mutates source.
@@ -116,7 +123,7 @@ fn each_task_plans_context_independently() {
     let locate = &plan.tasks[0];
     assert!(locate.context.focus.is_some());
     let report = plan.tasks.last().unwrap();
-    assert_eq!(report.kind, TaskKind::Report);
+    assert_eq!(report.capability, Capability::Report);
     assert!(report.context.focus.is_none());
 }
 
