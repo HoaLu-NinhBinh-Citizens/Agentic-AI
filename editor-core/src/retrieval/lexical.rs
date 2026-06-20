@@ -5,6 +5,8 @@
 //! vector store rather than choosing one.
 
 use anyhow::{Context, Result};
+use std::path::Path;
+
 use tantivy::collector::TopDocs;
 use tantivy::query::QueryParser;
 use tantivy::schema::{Field, Schema, Value, STORED, STRING, TEXT};
@@ -32,25 +34,51 @@ fn sanitize(query: &str) -> String {
 
 impl LexicalIndex {
     /// Build a fresh in-RAM index from `chunks`.
-    pub fn build(chunks: &[Chunk]) -> Result<Self> {
+    fn schema() -> (Schema, Field, Field, Field) {
         let mut sb = Schema::builder();
         let id_field = sb.add_u64_field("id", STORED);
         let text_field = sb.add_text_field("text", TEXT);
         let file_field = sb.add_text_field("file", STRING | STORED);
-        let schema = sb.build();
+        (sb.build(), id_field, text_field, file_field)
+    }
 
-        let index = Index::create_in_ram(schema);
-        {
-            let mut writer = index.writer(50_000_000).context("tantivy writer")?;
+    /// Wrap an `Index`, resolving field handles; optionally index initial chunks.
+    fn from_index(index: Index, initial: Option<&[Chunk]>) -> Result<Self> {
+        let schema = index.schema();
+        let id_field = schema.get_field("id").context("id field")?;
+        let text_field = schema.get_field("text").context("text field")?;
+        let file_field = schema.get_field("file").context("file field")?;
+        let me = Self { index, id_field, text_field, file_field };
+        if let Some(chunks) = initial {
+            let mut writer = me.index.writer(50_000_000).context("tantivy writer")?;
             for c in chunks {
                 writer
-                    .add_document(doc!(id_field => c.id, text_field => c.text.clone(), file_field => c.file.clone()))
+                    .add_document(doc!(me.id_field => c.id, me.text_field => c.text.clone(), me.file_field => c.file.clone()))
                     .context("tantivy add_document")?;
             }
             writer.commit().context("tantivy commit")?;
         }
+        Ok(me)
+    }
 
-        Ok(Self { index, id_field, text_field, file_field })
+    /// In-RAM index (default / tests).
+    pub fn build(chunks: &[Chunk]) -> Result<Self> {
+        let (schema, ..) = Self::schema();
+        Self::from_index(Index::create_in_ram(schema), Some(chunks))
+    }
+
+    /// Fresh on-disk index at `dir` (caller wipes the dir first).
+    pub fn build_at(dir: &Path, chunks: &[Chunk]) -> Result<Self> {
+        std::fs::create_dir_all(dir).ok();
+        let (schema, ..) = Self::schema();
+        let index = Index::create_in_dir(dir, schema).context("tantivy create_in_dir")?;
+        Self::from_index(index, Some(chunks))
+    }
+
+    /// Open an existing on-disk index (no re-indexing).
+    pub fn open_at(dir: &Path) -> Result<Self> {
+        let index = Index::open_in_dir(dir).context("tantivy open_in_dir")?;
+        Self::from_index(index, None)
     }
 
     /// Incremental update: delete all docs for `stale_files`, then add

@@ -115,6 +115,31 @@ fn retriever_updates_incrementally_on_sync() {
 }
 
 #[test]
+fn retriever_persists_across_reopen() {
+    let dir = TempDir::new().unwrap();
+    write(&dir, "a.rs", "fn persistme_unique_fn() {}\n");
+
+    {
+        let mut e = IndexEngine::open(dir.path()).unwrap();
+        e.sync().unwrap();
+        // First retrieve builds + persists the retriever.
+        assert!(!e.retrieve("persistme_unique_fn", 5).unwrap().is_empty());
+    }
+
+    // Persisted artifacts exist.
+    let rdir = dir.path().join(".agentic").join("index").join("retriever");
+    assert!(rdir.join("meta.json").exists(), "meta missing");
+    assert!(rdir.join("vectors.json").exists(), "vectors missing");
+    assert!(rdir.join("chunks.json").exists(), "chunks missing");
+    assert!(rdir.join("tantivy").exists(), "tantivy dir missing");
+
+    // Reopen: retrieve still works (loaded from the persisted index).
+    let mut e2 = IndexEngine::open(dir.path()).unwrap();
+    let hits = e2.retrieve("persistme_unique_fn", 5).unwrap();
+    assert!(hits.iter().any(|s| s.file == "a.rs"), "persisted retrieve failed");
+}
+
+#[test]
 fn gitignored_files_are_skipped() {
     let dir = TempDir::new().unwrap();
     write(&dir, ".gitignore", "ignored.rs\n");
