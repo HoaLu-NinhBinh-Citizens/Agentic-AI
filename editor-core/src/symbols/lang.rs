@@ -16,6 +16,10 @@ pub enum Lang {
 }
 
 impl Lang {
+    /// Every supported language, for callers that need to enumerate them (e.g.
+    /// reporting which languages a detector applies to).
+    pub const ALL: &'static [Lang] = &[Lang::Rust, Lang::Python, Lang::C, Lang::Cpp];
+
     /// Map a workspace-relative path to a language by extension. `None` means
     /// "don't build a symbol graph for this file" (still indexed by Merkle).
     pub fn from_path(path: &str) -> Option<Lang> {

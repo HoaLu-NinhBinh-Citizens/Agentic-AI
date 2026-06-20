@@ -18,7 +18,7 @@ use tracing::{debug, info};
 use merkle::{build_snapshot, diff, mtime_to_ns, Candidate, Snapshot, SyncDelta};
 
 use crate::context::{BuildRequest, BuiltPrompt, ContextBuilder, Task};
-use crate::detector::{DetectorRegistry, Finding};
+use crate::detector::{DetectorConfig, DetectorRegistry, Finding, RuleMetadata};
 use crate::retrieval::chunks::{chunk_file, Chunk};
 use crate::retrieval::embed::{Embedder, HashEmbedder};
 use crate::retrieval::lance_store::LanceVectorStore;
@@ -91,6 +91,11 @@ impl IndexEngine {
             snapshot = Snapshot::default();
         }
 
+        // Auto-load a detector config from the workspace; a missing config.toml
+        // is a clean fallback to built-in defaults (a malformed one errors).
+        let detector_cfg = DetectorConfig::discover(&workspace_root)
+            .context("loading detector config")?;
+
         info!(
             files = snapshot.entries.len(),
             root = %snapshot.root,
@@ -102,7 +107,7 @@ impl IndexEngine {
             graph,
             retriever: None,
             retrieval_cfg: RetrievalConfig::default(),
-            detectors: DetectorRegistry::with_defaults(),
+            detectors: DetectorRegistry::with_config(detector_cfg),
         })
     }
 
@@ -114,6 +119,18 @@ impl IndexEngine {
         let abs = self.workspace_root.join(file);
         let source = fs::read(&abs).with_context(|| format!("reading {file} for diagnostics"))?;
         self.detectors.analyze(file, source)
+    }
+
+    /// Replace the detector config at run time (e.g. an inline config passed in
+    /// `initialize`, overriding the auto-discovered file).
+    pub fn set_detector_config(&mut self, cfg: DetectorConfig) {
+        self.detectors.set_config(cfg);
+    }
+
+    /// Metadata for every registered detector under the current config (id,
+    /// description, effective severity, enabled state, languages, options).
+    pub fn detector_metadata(&self) -> Vec<RuleMetadata> {
+        self.detectors.metadata()
     }
 
     /// Override retrieval backends (Ollama embedder / LanceDB store). Invalidates
