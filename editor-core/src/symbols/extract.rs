@@ -42,6 +42,27 @@ pub struct SymbolRef {
     pub start_byte: usize,
     pub end_byte: usize,
     pub start_row: usize,
+    /// Index into the file's `Vec<SymbolDef>` of the innermost definition whose
+    /// byte range encloses this ref (the *caller*), or `None` at top level.
+    /// Turns a flat ref list into call edges: callee `name` is used *inside*
+    /// this definition. Resolved to a row id at store time.
+    pub enclosing: Option<usize>,
+}
+
+/// An `import` brought into a file's scope: Rust `use`, Python
+/// `import`/`from`, or C/C++ `#include`. Drives cross-file symbol resolution
+/// (does this file import `name`, and from which module?) and the file-level
+/// dependency graph.
+#[derive(Debug, Clone)]
+pub struct Import {
+    /// Module path the name comes from, e.g. `crate::detector` or `numpy`.
+    /// Empty when not expressible (a bare `use Foo;` or a C header).
+    pub module_path: String,
+    /// The name bound into scope (the leaf, or its `as` alias). `"*"` for a
+    /// glob/wildcard import (`use a::*`, `from a import *`).
+    pub name: String,
+    pub is_glob: bool,
+    pub start_row: usize,
 }
 
 /// Extract definitions and references from `source` for `lang`.
@@ -58,8 +79,197 @@ pub fn extract(lang: Lang, source: &[u8]) -> Result<(Vec<SymbolDef>, Vec<SymbolR
 
     let mut defs = collect_defs(lang, &language, root, source)?;
     compute_parents(&mut defs);
-    let refs = collect_refs(lang, &language, root, source)?;
+    let mut refs = collect_refs(lang, &language, root, source)?;
+    // Attribute each ref to its enclosing definition (the caller), so the flat
+    // ref list becomes call edges once stored.
+    for r in &mut refs {
+        r.enclosing = enclosing_def(&defs, r.start_byte);
+    }
     Ok((defs, refs))
+}
+
+/// Index of the innermost definition whose `[start_byte, end_byte)` contains
+/// `byte`. Innermost = the containing def with the largest start offset.
+fn enclosing_def(defs: &[SymbolDef], byte: usize) -> Option<usize> {
+    let mut best: Option<usize> = None;
+    for (i, d) in defs.iter().enumerate() {
+        if d.start_byte <= byte && byte < d.end_byte {
+            match best {
+                Some(b) if defs[b].start_byte >= d.start_byte => {}
+                _ => best = Some(i),
+            }
+        }
+    }
+    best
+}
+
+/// Extract the imports a file brings into scope (`use` / `import` / `#include`).
+/// Heuristic string-parsing of the import path text — robust to the common
+/// shapes (groups, aliases, globs) without a full module-path resolver, which
+/// the cross-file resolver layers on top.
+pub fn extract_imports(lang: Lang, source: &[u8]) -> Result<Vec<Import>> {
+    let language = lang.ts_language();
+    let mut parser = Parser::new();
+    parser.set_language(&language).context("setting tree-sitter language")?;
+    let tree = parser.parse(source, None).context("tree-sitter parse returned None")?;
+
+    let query = Query::new(&language, lang.imports_query()).context("compiling imports query")?;
+    let names = query.capture_names();
+    let mut cursor = QueryCursor::new();
+    let mut out = Vec::new();
+
+    let mut it = cursor.matches(&query, tree.root_node(), source);
+    while let Some(m) = it.next() {
+        for cap in m.captures {
+            let text = cap.node.utf8_text(source).unwrap_or("");
+            let row = cap.node.start_position().row;
+            match names[cap.index as usize] {
+                "use.arg" => parse_rust_use(text, row, &mut out),
+                "py.import" => parse_python_import(text, row, &mut out),
+                "c.include" => {
+                    // `"foo.h"` or `<foo.h>` -> stem `foo` as the module name.
+                    let path = text.trim_matches(['"', '<', '>'].as_ref());
+                    let stem = path.rsplit('/').next().unwrap_or(path);
+                    let stem = stem.rsplit_once('.').map(|(s, _)| s).unwrap_or(stem);
+                    out.push(Import {
+                        module_path: path.to_string(),
+                        name: stem.to_string(),
+                        is_glob: false,
+                        start_row: row,
+                    });
+                }
+                _ => {}
+            }
+        }
+    }
+    Ok(out)
+}
+
+/// Split a `use` group body (`A, B::{C, D}`) on top-level commas only, so a
+/// nested group isn't split on its inner commas.
+fn split_top(s: &str) -> Vec<&str> {
+    let mut out = Vec::new();
+    let (mut depth, mut start) = (0i32, 0usize);
+    for (i, ch) in s.char_indices() {
+        match ch {
+            '{' => depth += 1,
+            '}' => depth -= 1,
+            ',' if depth == 0 => {
+                out.push(&s[start..i]);
+                start = i + 1;
+            }
+            _ => {}
+        }
+    }
+    out.push(&s[start..]);
+    out
+}
+
+/// Parse a Rust `use` argument (the text after `use`, before `;`) into imports.
+fn parse_rust_use(arg: &str, row: usize, out: &mut Vec<Import>) {
+    let arg = arg.trim().trim_end_matches(';').trim();
+    if let Some(open) = arg.find('{') {
+        let close = arg.rfind('}').unwrap_or(arg.len());
+        let prefix = arg[..open].trim().trim_end_matches("::").trim();
+        let inner = arg.get(open + 1..close).unwrap_or("");
+        for raw in split_top(inner) {
+            let part = raw.trim();
+            if !part.is_empty() {
+                push_use_leaf(prefix, part, row, out);
+            }
+        }
+    } else {
+        push_use_leaf("", arg, row, out);
+    }
+}
+
+/// Resolve one leaf of a `use` (after group expansion) to an [`Import`].
+fn push_use_leaf(prefix: &str, part: &str, row: usize, out: &mut Vec<Import>) {
+    // `use a::b::{self}` re-imports `b` itself.
+    if part == "self" {
+        let name = prefix.rsplit("::").next().unwrap_or(prefix).to_string();
+        let module_path = prefix.rsplit_once("::").map(|(m, _)| m).unwrap_or("").to_string();
+        out.push(Import { module_path, name, is_glob: false, start_row: row });
+        return;
+    }
+    if part.ends_with('*') {
+        let mp = if prefix.is_empty() {
+            part.trim_end_matches('*').trim_end_matches("::").to_string()
+        } else {
+            prefix.to_string()
+        };
+        out.push(Import { module_path: mp, name: "*".into(), is_glob: true, start_row: row });
+        return;
+    }
+    let (path, alias) = match part.split_once(" as ") {
+        Some((p, a)) => (p.trim(), Some(a.trim())),
+        None => (part, None),
+    };
+    let full = match (prefix.is_empty(), path.is_empty()) {
+        (true, _) => path.to_string(),
+        (false, true) => prefix.to_string(),
+        (false, false) => format!("{prefix}::{path}"),
+    };
+    let leaf = full.rsplit("::").next().unwrap_or(&full).to_string();
+    let module_path = full.rsplit_once("::").map(|(m, _)| m).unwrap_or("").to_string();
+    let name = alias.map(str::to_string).unwrap_or(leaf);
+    out.push(Import { module_path, name, is_glob: false, start_row: row });
+}
+
+/// Parse a Python `import` / `from ... import ...` statement into imports.
+fn parse_python_import(text: &str, row: usize, out: &mut Vec<Import>) {
+    let t = text.trim();
+    if let Some(rest) = t.strip_prefix("from ") {
+        if let Some((module, names)) = rest.split_once(" import ") {
+            let module = module.trim();
+            for raw in names.split(',') {
+                let part = raw.trim().trim_matches(['(', ')'].as_ref()).trim();
+                if part.is_empty() {
+                    continue;
+                }
+                if part == "*" {
+                    out.push(Import {
+                        module_path: module.to_string(),
+                        name: "*".into(),
+                        is_glob: true,
+                        start_row: row,
+                    });
+                    continue;
+                }
+                let (n, alias) = match part.split_once(" as ") {
+                    Some((n, a)) => (n.trim(), Some(a.trim())),
+                    None => (part, None),
+                };
+                out.push(Import {
+                    module_path: module.to_string(),
+                    name: alias.unwrap_or(n).to_string(),
+                    is_glob: false,
+                    start_row: row,
+                });
+            }
+        }
+    } else if let Some(rest) = t.strip_prefix("import ") {
+        for raw in rest.split(',') {
+            let part = raw.trim();
+            if part.is_empty() {
+                continue;
+            }
+            let (module, alias) = match part.split_once(" as ") {
+                Some((m, a)) => (m.trim(), Some(a.trim())),
+                None => (part, None),
+            };
+            // `import a.b.c` binds `a`; `import a.b.c as x` binds `x`.
+            let name = alias
+                .map(str::to_string)
+                .unwrap_or_else(|| module.split('.').next().unwrap_or(module).to_string());
+            out.push(Import {
+                module_path: module.to_string(),
+                name,
+                is_glob: false,
+                start_row: row,
+            });
+        }
+    }
 }
 
 /// Compute the human-facing signature (first line, trimmed) and its normalized
@@ -181,6 +391,7 @@ fn collect_refs(
                     start_byte: cap.node.start_byte(),
                     end_byte: cap.node.end_byte(),
                     start_row: cap.node.start_position().row,
+                    enclosing: None,
                 });
             }
         }

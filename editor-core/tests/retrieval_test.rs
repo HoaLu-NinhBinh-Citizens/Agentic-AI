@@ -101,6 +101,7 @@ fn context_places_nearest_snippet_closest_to_the_middle() {
             cursor_byte: 5,
             query: Some("token_budget".to_string()),
             max_tokens: 10_000,
+            focus_symbol: None,
         })
         .unwrap();
 
@@ -131,6 +132,7 @@ fn tight_budget_drops_snippets_and_reports_it() {
             cursor_byte: 1,
             query: Some("token_budget".to_string()),
             max_tokens: 5, // far too small for any snippet
+            focus_symbol: None,
         })
         .unwrap();
 
@@ -157,6 +159,7 @@ fn chunk_containing_cursor_is_excluded() {
             cursor_byte: 15, // inside the main.rs chunk
             query: Some("token_budget".to_string()),
             max_tokens: 10_000,
+            focus_symbol: None,
         })
         .unwrap();
 

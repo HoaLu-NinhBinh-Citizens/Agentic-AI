@@ -7,6 +7,7 @@
 
 pub mod merkle;
 
+use std::collections::HashSet;
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::time::Instant;
@@ -17,14 +18,16 @@ use tracing::{debug, info};
 
 use merkle::{build_snapshot, diff, mtime_to_ns, Candidate, Snapshot, SyncDelta};
 
-use crate::context::{BuildRequest, BuiltPrompt, ContextBuilder, Task};
+use crate::context::{BuildRequest, BuiltPrompt, SemanticContextBuilder, Task};
 use crate::detector::{DetectorConfig, DetectorRegistry, Finding, RuleMetadata};
+use crate::planner::{Plan, PlanRequest, Planner};
 use crate::retrieval::chunks::{chunk_file, Chunk};
 use crate::retrieval::embed::{Embedder, HashEmbedder};
 use crate::retrieval::lance_store::LanceVectorStore;
 use crate::retrieval::ollama::OllamaEmbedder;
 use crate::retrieval::vector::VectorStore;
 use crate::retrieval::HybridRetriever;
+use crate::semantic::{ImportEdge, ResolvedSymbol, SemanticContext, SemanticEngine, SemanticRequest};
 use crate::symbols::classifier::EditSuggestion;
 use crate::symbols::extract::extract;
 use crate::symbols::lang::Lang;
@@ -119,6 +122,66 @@ impl IndexEngine {
         let abs = self.workspace_root.join(file);
         let source = fs::read(&abs).with_context(|| format!("reading {file} for diagnostics"))?;
         self.detectors.analyze(file, source)
+    }
+
+    /// Apply byte-range `edits` to `file`, then *verify* by re-running the
+    /// detectors on the patched bytes and diffing against the pre-edit findings.
+    /// This closes the detect -> fix -> verify loop behind `/fix`.
+    ///
+    /// `dry_run` computes the full diff (resolved / introduced) and returns the
+    /// patched content WITHOUT touching disk, so the editor can preview a patch
+    /// and gate on a clean verify. A real apply writes atomically (temp +
+    /// rename) so a crash mid-write can't leave a half-patched file.
+    ///
+    /// Offsets index the file's *current* on-disk bytes. Edits must stay in
+    /// bounds, not overlap, and land on UTF-8 char boundaries — otherwise the
+    /// call errors and nothing is written.
+    pub fn apply_fix(&self, file: &str, edits: &[Edit], dry_run: bool) -> Result<FixOutcome> {
+        let abs = self.workspace_root.join(file);
+        let original = fs::read(&abs).with_context(|| format!("reading {file} for fix/apply"))?;
+        let patched = apply_edits(&original, edits)
+            .with_context(|| format!("applying edits to {file}"))?;
+
+        // Verify: run the same detectors over the old and new bytes and diff.
+        // Files in an unsupported language yield empty findings on both sides —
+        // the apply still works, just without a verification signal.
+        let before = self.detectors.analyze(file, original)?;
+        let after = self.detectors.analyze(file, patched.clone())?;
+        let (resolved, introduced) = diff_findings(&before, &after);
+
+        let mut applied = false;
+        if !dry_run {
+            write_atomic(&abs, &patched).with_context(|| format!("writing patched {file}"))?;
+            applied = true;
+        }
+
+        info!(
+            file,
+            dry_run,
+            applied,
+            before = before.len(),
+            after = after.len(),
+            resolved = resolved.len(),
+            introduced = introduced.len(),
+            "fix/apply verified"
+        );
+
+        Ok(FixOutcome {
+            file: file.to_string(),
+            dry_run,
+            applied,
+            before_count: before.len(),
+            after_count: after.len(),
+            resolved,
+            introduced,
+            // Hand the patched text back only on a dry run (the editor already
+            // has the file once it's written).
+            patched: if dry_run {
+                Some(String::from_utf8_lossy(&patched).into_owned())
+            } else {
+                None
+            },
+        })
     }
 
     /// Replace the detector config at run time (e.g. an inline config passed in
@@ -255,6 +318,32 @@ impl IndexEngine {
         self.graph.call_sites(name)
     }
 
+    /// Resolve a name used in `from_file` to its definition(s), ranked by scope
+    /// with a confidence verdict (semantic cross-file resolution).
+    pub fn resolve_symbol(&self, name: &str, from_file: &str) -> Result<Vec<ResolvedSymbol>> {
+        SemanticEngine::new(&self.graph).resolve(name, from_file)
+    }
+
+    /// The minimal relevant code for a task centered on a focus symbol — the
+    /// semantic context a planner/agent consumes instead of raw grep results.
+    pub fn semantic_context(&self, req: &SemanticRequest) -> Result<SemanticContext> {
+        SemanticEngine::new(&self.graph).context(req)
+    }
+
+    /// File-level dependency edges (resolved imports) for `file`.
+    pub fn file_dependencies(&self, file: &str) -> Result<Vec<ImportEdge>> {
+        SemanticEngine::new(&self.graph).file_dependencies(file)
+    }
+
+    /// Build a deterministic, rule-based execution plan for a request. The plan
+    /// is the contract the future Execution Engine consumes: an intent, a task
+    /// DAG, a dependency-ordered schedule, and per-task context/verification
+    /// plans. This sits *above* the semantic engine — it produces context
+    /// *requests*, it does not resolve them (no symbol lookup, no LLM).
+    pub fn plan(&self, req: &PlanRequest) -> Plan {
+        Planner::plan(req)
+    }
+
     /// Parse + chunk the given workspace-relative paths (skipping non-code).
     fn chunk_paths<'a>(&self, paths: impl Iterator<Item = &'a String>) -> Vec<Chunk> {
         let mut out = Vec::new();
@@ -335,7 +424,9 @@ impl IndexEngine {
         Ok(())
     }
 
-    /// Build a completion prompt for a cursor position (FIM, proximity-ordered).
+    /// Build a completion prompt for a cursor position (FIM). Semantic-first:
+    /// the cursor symbol's resolved callees/imports lead, retrieval fills the
+    /// rest. Falls back to retrieval-only when the cursor isn't in a known symbol.
     pub fn build_completion_context(
         &mut self,
         file: &str,
@@ -343,16 +434,25 @@ impl IndexEngine {
         max_tokens: usize,
         query: Option<String>,
     ) -> Result<BuiltPrompt> {
-        self.ensure_retriever()?;
-        let retriever = self.retriever.as_ref().expect("retriever just built");
-        let cb = ContextBuilder::new(retriever, &self.workspace_root);
-        cb.build(&BuildRequest {
+        self.build_context(&BuildRequest {
             task: Task::Completion,
             file: file.to_string(),
             cursor_byte,
             query,
             max_tokens,
+            focus_symbol: None,
         })
+    }
+
+    /// The default context entry point for *every* coding request (completion,
+    /// chat, agent). Routes through the semantic context engine, with hybrid
+    /// retrieval as the low-confidence fallback. The Planner/Execution Engine
+    /// consume this rather than raw retrieval.
+    pub fn build_context(&mut self, req: &BuildRequest) -> Result<BuiltPrompt> {
+        self.ensure_retriever()?;
+        let retriever = self.retriever.as_ref().expect("retriever just built");
+        let cb = SemanticContextBuilder::new(&self.graph, retriever, &self.workspace_root);
+        cb.build(req)
     }
 
     /// Retrieve the top-`k` relevant snippets for a free-form query. Powers
@@ -432,6 +532,103 @@ impl IndexEngine {
         }
         candidates
     }
+}
+
+/// One edit to apply to a file: replace the byte range `[start_byte, end_byte)`
+/// with `new_text`. Offsets index the file's current on-disk bytes. A pure
+/// insertion is `start_byte == end_byte`; a deletion is an empty `new_text`.
+#[derive(Debug, Clone, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct Edit {
+    pub start_byte: usize,
+    pub end_byte: usize,
+    pub new_text: String,
+}
+
+/// Result of an `apply_fix`. Reports the verify diff so the editor can show
+/// "fixed N, introduced M" and refuse to apply a patch that regresses.
+#[derive(Debug, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct FixOutcome {
+    pub file: String,
+    pub dry_run: bool,
+    /// True once the patched bytes are on disk (always false for a dry run).
+    pub applied: bool,
+    /// Detector findings before the edit (current file).
+    pub before_count: usize,
+    /// Detector findings after the edit (the patched bytes).
+    pub after_count: usize,
+    /// Findings present before but gone after — what this patch fixed.
+    pub resolved: Vec<Finding>,
+    /// Findings present only after — regressions the patch introduced. An empty
+    /// list is the "clean verify" the editor should gate a real apply on.
+    pub introduced: Vec<Finding>,
+    /// The full patched file content, returned only on a dry run for preview.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub patched: Option<String>,
+}
+
+/// Splice `edits` into `src`. Edits are sorted by start offset, then validated
+/// (in bounds, non-overlapping) and applied left-to-right. Errors rather than
+/// silently producing garbage so a bad edit set never reaches disk.
+fn apply_edits(src: &[u8], edits: &[Edit]) -> Result<Vec<u8>> {
+    let mut ordered: Vec<&Edit> = edits.iter().collect();
+    ordered.sort_by_key(|e| e.start_byte);
+
+    let mut out = Vec::with_capacity(src.len());
+    let mut cursor = 0usize;
+    for e in ordered {
+        if e.start_byte > e.end_byte {
+            anyhow::bail!("edit start_byte {} > end_byte {}", e.start_byte, e.end_byte);
+        }
+        if e.end_byte > src.len() {
+            anyhow::bail!(
+                "edit end_byte {} past end of file ({} bytes)",
+                e.end_byte,
+                src.len()
+            );
+        }
+        // `cursor` is the end of the previous edit; a start before it overlaps.
+        if e.start_byte < cursor {
+            anyhow::bail!("overlapping edits near byte {}", e.start_byte);
+        }
+        out.extend_from_slice(&src[cursor..e.start_byte]);
+        out.extend_from_slice(e.new_text.as_bytes());
+        cursor = e.end_byte;
+    }
+    out.extend_from_slice(&src[cursor..]);
+
+    // Offsets that split a multi-byte char would corrupt the file; the detectors
+    // tolerate it (lossy), but we must never write invalid UTF-8 source.
+    if std::str::from_utf8(&out).is_err() {
+        anyhow::bail!("edit produced invalid UTF-8 (an offset is not on a char boundary)");
+    }
+    Ok(out)
+}
+
+/// Diff two finding sets keyed by `(rule_id, offending line)` rather than line
+/// number — an edit shifts line numbers, but the offending source text is a
+/// stable identity. `resolved` = before − after, `introduced` = after − before.
+fn diff_findings(before: &[Finding], after: &[Finding]) -> (Vec<Finding>, Vec<Finding>) {
+    fn key(f: &Finding) -> (String, String) {
+        (f.rule_id.clone(), f.before.clone().unwrap_or_else(|| f.message.clone()))
+    }
+    let before_keys: HashSet<(String, String)> = before.iter().map(key).collect();
+    let after_keys: HashSet<(String, String)> = after.iter().map(key).collect();
+    let resolved = before.iter().filter(|f| !after_keys.contains(&key(f))).cloned().collect();
+    let introduced = after.iter().filter(|f| !before_keys.contains(&key(f))).cloned().collect();
+    (resolved, introduced)
+}
+
+/// Write `bytes` to `path` atomically: write a sibling temp file, then rename
+/// over the target (rename is atomic on the same filesystem).
+fn write_atomic(path: &Path, bytes: &[u8]) -> Result<()> {
+    let mut tmp = path.as_os_str().to_owned();
+    tmp.push(".aircore-tmp");
+    let tmp = PathBuf::from(tmp);
+    fs::write(&tmp, bytes).context("writing temp file")?;
+    fs::rename(&tmp, path).context("renaming patched file into place")?;
+    Ok(())
 }
 
 /// Lightweight status payload returned over IPC.

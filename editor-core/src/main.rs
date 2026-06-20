@@ -8,9 +8,15 @@
 //!   index/status     {}                  -> IndexStatus
 //!   symbol/find      { name }            -> SymbolRow[]
 //!   symbol/callSites { name }            -> RefRow[]
+//!   symbol/resolve   { name, fromFile }  -> { candidates: ResolvedSymbol[] }
+//!   symbol/dependencies { file }         -> { file, edges: ImportEdge[] }
+//!   semantic/context { symbol | file+byte, maxTokens?, includeBodies? } -> SemanticContext
 //!   context/completion { file, cursorByte, maxTokens?, query? } -> BuiltPrompt
+//!   context/build    { file?|focusSymbol?, cursorByte?, query?, task?, maxTokens? } -> BuiltPrompt
 //!   diagnostics/file { file }           -> { file, findings: Finding[] }
+//!   fix/apply        { file, edits, dryRun? } -> FixOutcome (verified patch)
 //!   detectors/list   {}                  -> { detectors: RuleMetadata[] }
+//!   plan/create      { goal, focusSymbol?, files?, maxTokens? } -> Plan (DAG + schedule)
 //!   retrieve         { query, k? }       -> RetrievedSnippet[]
 //!   telemetry/log    TelemetryEvent      -> (notification; opt-in, async sink)
 //!   shutdown         {}                  -> { ok: true }   (then exits)
@@ -54,9 +60,15 @@ impl Daemon {
             "index/status" => self.index_status(),
             "symbol/find" => self.symbol_find(params),
             "symbol/callSites" => self.symbol_call_sites(params),
+            "symbol/resolve" => self.symbol_resolve(params),
+            "symbol/dependencies" => self.symbol_dependencies(params),
+            "semantic/context" => self.semantic_context(params),
             "context/completion" => self.context_completion(params),
+            "context/build" => self.context_build(params),
             "diagnostics/file" => self.diagnostics_file(params),
+            "fix/apply" => self.fix_apply(params),
             "detectors/list" => self.detectors_list(),
+            "plan/create" => self.plan_create(params),
             "retrieve" => self.retrieve(params),
             "telemetry/log" => self.telemetry_log(params),
             _ => Err(RpcError::new(
@@ -129,6 +141,20 @@ impl Daemon {
         Ok(json!({ "detectors": serde_json::to_value(rules).map_err(internal)? }))
     }
 
+    /// Build a deterministic execution plan for a request. `{ goal, focusSymbol?,
+    /// files?, maxTokens? }` -> Plan (intent, task DAG, schedule, per-task
+    /// context + verification). The contract the future Execution Engine consumes.
+    fn plan_create(&mut self, params: Value) -> std::result::Result<Value, RpcError> {
+        use aircore::planner::PlanRequest;
+        let req: PlanRequest = serde_json::from_value(params)
+            .map_err(|e| RpcError::new(ErrorCode::InvalidParams, e.to_string()))?;
+        if req.goal.trim().is_empty() {
+            return Err(RpcError::new(ErrorCode::InvalidParams, "missing or empty 'goal'"));
+        }
+        let engine = self.engine_mut()?;
+        serde_json::to_value(engine.plan(&req)).map_err(internal)
+    }
+
     /// Record a batched interaction event (notification, no response). Off the
     /// hot path: the sink's `log` is non-blocking.
     fn telemetry_log(&mut self, params: Value) -> std::result::Result<Value, RpcError> {
@@ -163,6 +189,61 @@ impl Daemon {
         serde_json::to_value(rows).map_err(internal)
     }
 
+    /// Resolve a name used in a file to its definition(s), ranked by scope with
+    /// a confidence verdict. `{ name, fromFile }`.
+    fn symbol_resolve(&mut self, params: Value) -> std::result::Result<Value, RpcError> {
+        let name = Self::name_param(&params)?;
+        let from_file = params
+            .get("fromFile")
+            .and_then(Value::as_str)
+            .ok_or_else(|| RpcError::new(ErrorCode::InvalidParams, "missing 'fromFile' string param"))?
+            .to_string();
+        let engine = self.engine_mut()?;
+        let resolved = engine.resolve_symbol(&name, &from_file).map_err(internal)?;
+        Ok(json!({ "candidates": serde_json::to_value(resolved).map_err(internal)? }))
+    }
+
+    /// File-level dependency edges (resolved imports) for a file. `{ file }`.
+    fn symbol_dependencies(&mut self, params: Value) -> std::result::Result<Value, RpcError> {
+        let file = params
+            .get("file")
+            .and_then(Value::as_str)
+            .ok_or_else(|| RpcError::new(ErrorCode::InvalidParams, "missing 'file' string param"))?
+            .to_string();
+        let engine = self.engine_mut()?;
+        let edges = engine.file_dependencies(&file).map_err(internal)?;
+        Ok(json!({ "file": file, "edges": serde_json::to_value(edges).map_err(internal)? }))
+    }
+
+    /// Minimal relevant code for a task. Focus on a symbol by qualified name
+    /// (`symbol`) or by cursor (`file` + `byte`). `{ symbol? | file?, byte?,
+    /// maxTokens?, includeBodies? }`.
+    fn semantic_context(&mut self, params: Value) -> std::result::Result<Value, RpcError> {
+        use aircore::semantic::{FocusSpec, SemanticRequest};
+
+        let focus = if let Some(sym) = params.get("symbol").and_then(Value::as_str) {
+            FocusSpec::Symbol(sym.to_string())
+        } else if let (Some(file), Some(byte)) = (
+            params.get("file").and_then(Value::as_str),
+            params.get("byte").and_then(Value::as_u64),
+        ) {
+            FocusSpec::Location { file: file.to_string(), byte: byte as usize }
+        } else {
+            return Err(RpcError::new(
+                ErrorCode::InvalidParams,
+                "provide either 'symbol' or both 'file' and 'byte'",
+            ));
+        };
+        let max_tokens = params.get("maxTokens").and_then(Value::as_u64).unwrap_or(2000) as usize;
+        let include_bodies =
+            params.get("includeBodies").and_then(Value::as_bool).unwrap_or(false);
+
+        let req = SemanticRequest { focus, max_tokens, include_bodies };
+        let engine = self.engine_mut()?;
+        let ctx = engine.semantic_context(&req).map_err(internal)?;
+        serde_json::to_value(ctx).map_err(internal)
+    }
+
     /// Build a FIM completion prompt for a cursor position.
     fn context_completion(&mut self, params: Value) -> std::result::Result<Value, RpcError> {
         let file = params
@@ -186,6 +267,38 @@ impl Daemon {
         serde_json::to_value(prompt).map_err(internal)
     }
 
+    /// Task-aware semantic context assembly for chat/agent requests. Centers on
+    /// `focusSymbol` (qualified name) or `file`+`cursorByte`, resolves its
+    /// callees/imports, and fills leftover budget with retrieval. `{ file?,
+    /// cursorByte?, focusSymbol?, query?, task?, maxTokens? }`.
+    fn context_build(&mut self, params: Value) -> std::result::Result<Value, RpcError> {
+        use aircore::context::{BuildRequest, Task};
+
+        let task = match params.get("task").and_then(Value::as_str).unwrap_or("chat") {
+            "completion" => Task::Completion,
+            "nextEditSemantic" => Task::NextEditSemantic,
+            _ => Task::Chat,
+        };
+        let file = params.get("file").and_then(Value::as_str).unwrap_or("").to_string();
+        let focus_symbol = params.get("focusSymbol").and_then(Value::as_str).map(str::to_string);
+        // Either a file or an explicit focus symbol must be given.
+        if file.is_empty() && focus_symbol.is_none() {
+            return Err(RpcError::new(
+                ErrorCode::InvalidParams,
+                "provide 'file' (with optional 'cursorByte') or 'focusSymbol'",
+            ));
+        }
+        let cursor_byte = params.get("cursorByte").and_then(Value::as_u64).unwrap_or(0) as usize;
+        let query = params.get("query").and_then(Value::as_str).map(str::to_string);
+        let max_tokens = params.get("maxTokens").and_then(Value::as_u64).unwrap_or(4000) as usize;
+
+        let engine = self.engine_mut()?;
+        let prompt = engine
+            .build_context(&BuildRequest { task, file, cursor_byte, query, max_tokens, focus_symbol })
+            .map_err(internal)?;
+        serde_json::to_value(prompt).map_err(internal)
+    }
+
     /// Run bug detectors over one file and return findings (severity, line,
     /// message, before/after fix). The foundation for `/fix @file:line`.
     fn diagnostics_file(&mut self, params: Value) -> std::result::Result<Value, RpcError> {
@@ -197,6 +310,31 @@ impl Daemon {
         let engine = self.engine_mut()?;
         let findings = engine.diagnose(&file).map_err(internal)?;
         Ok(json!({ "file": file, "findings": serde_json::to_value(findings).map_err(internal)? }))
+    }
+
+    /// Apply byte-range edits to a file and verify by re-running the detectors
+    /// on the patched bytes. `{ file, edits: [{ startByte, endByte, newText }],
+    /// dryRun? }`. With `dryRun: true` it returns the diff + patched content
+    /// without writing — the editor previews, then re-calls without `dryRun` to
+    /// commit. Powers the apply step of `/fix @file:line`.
+    fn fix_apply(&mut self, params: Value) -> std::result::Result<Value, RpcError> {
+        #[derive(serde::Deserialize)]
+        #[serde(rename_all = "camelCase")]
+        struct Params {
+            file: String,
+            #[serde(default)]
+            edits: Vec<aircore::index::Edit>,
+            #[serde(default)]
+            dry_run: bool,
+        }
+        let p: Params = serde_json::from_value(params)
+            .map_err(|e| RpcError::new(ErrorCode::InvalidParams, e.to_string()))?;
+        if p.edits.is_empty() {
+            return Err(RpcError::new(ErrorCode::InvalidParams, "missing or empty 'edits'"));
+        }
+        let engine = self.engine_mut()?;
+        let outcome = engine.apply_fix(&p.file, &p.edits, p.dry_run).map_err(internal)?;
+        serde_json::to_value(outcome).map_err(internal)
     }
 
     /// Retrieve top-k relevant snippets for a query (Cmd+K inline edit / chat).

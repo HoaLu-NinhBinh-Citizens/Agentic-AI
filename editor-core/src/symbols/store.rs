@@ -14,10 +14,12 @@ use anyhow::{Context, Result};
 use rusqlite::{params, Connection, OptionalExtension};
 use serde::Serialize;
 
-use super::extract::{SymbolDef, SymbolRef};
+use super::extract::{Import, SymbolDef, SymbolRef};
 
 /// Bumped whenever the schema changes. A mismatch triggers a clean rebuild.
-const SCHEMA_VERSION: i64 = 1;
+/// v2 adds the semantic layer: `imports`, `refs.enclosing_symbol_id` (call
+/// edges), and `files.crate_root` (cross-file resolution scope).
+const SCHEMA_VERSION: i64 = 2;
 
 pub struct SymbolStore {
     conn: Connection,
@@ -55,6 +57,42 @@ pub struct RefRow {
     pub start_row: usize,
 }
 
+/// A full definition record for the resolver / semantic engine: identity plus
+/// the byte span (to read its source) and the resolution-scope columns
+/// (`file`, `crate_root`).
+#[derive(Debug, Clone, Serialize)]
+pub struct DefRecord {
+    pub id: i64,
+    pub file: String,
+    pub name: String,
+    pub kind: String,
+    pub qualified_name: String,
+    pub signature: String,
+    pub start_byte: usize,
+    pub end_byte: usize,
+    pub start_row: usize,
+    /// Workspace-relative crate root dir (nearest `Cargo.toml` ancestor), or
+    /// empty when the file isn't inside a crate.
+    pub crate_root: String,
+}
+
+/// One import row brought into a file's scope.
+#[derive(Debug, Clone, Serialize)]
+pub struct ImportRow {
+    pub module_path: String,
+    pub name: String,
+    pub is_glob: bool,
+    pub start_row: usize,
+}
+
+/// A distinct callee name referenced inside one definition (a call edge's
+/// target name, pre-resolution).
+#[derive(Debug, Clone)]
+pub struct RefName {
+    pub name: String,
+    pub start_row: usize,
+}
+
 impl SymbolStore {
     pub fn open(db_path: &Path) -> Result<Self> {
         if let Some(parent) = db_path.parent() {
@@ -79,7 +117,8 @@ impl SymbolStore {
 
         if version != SCHEMA_VERSION {
             self.conn.execute_batch(
-                "DROP TABLE IF EXISTS refs;
+                "DROP TABLE IF EXISTS imports;
+                 DROP TABLE IF EXISTS refs;
                  DROP TABLE IF EXISTS symbols;
                  DROP TABLE IF EXISTS files;",
             )?;
@@ -92,7 +131,8 @@ impl SymbolStore {
                 path         TEXT NOT NULL UNIQUE,
                 lang         TEXT NOT NULL,
                 content_hash TEXT NOT NULL,
-                indexed_at   INTEGER NOT NULL
+                indexed_at   INTEGER NOT NULL,
+                crate_root   TEXT NOT NULL DEFAULT ''
             );
 
             CREATE TABLE IF NOT EXISTS symbols (
@@ -115,15 +155,28 @@ impl SymbolStore {
             CREATE INDEX IF NOT EXISTS idx_symbols_qname ON symbols(qualified_name);
 
             CREATE TABLE IF NOT EXISTS refs (
-                id         INTEGER PRIMARY KEY,
-                file_id    INTEGER NOT NULL REFERENCES files(id) ON DELETE CASCADE,
-                name       TEXT NOT NULL,
-                start_byte INTEGER NOT NULL,
-                end_byte   INTEGER NOT NULL,
-                start_row  INTEGER NOT NULL
+                id                  INTEGER PRIMARY KEY,
+                file_id             INTEGER NOT NULL REFERENCES files(id) ON DELETE CASCADE,
+                name                TEXT NOT NULL,
+                start_byte          INTEGER NOT NULL,
+                end_byte            INTEGER NOT NULL,
+                start_row           INTEGER NOT NULL,
+                enclosing_symbol_id INTEGER REFERENCES symbols(id) ON DELETE SET NULL
             );
             CREATE INDEX IF NOT EXISTS idx_refs_name ON refs(name);
             CREATE INDEX IF NOT EXISTS idx_refs_file ON refs(file_id);
+            CREATE INDEX IF NOT EXISTS idx_refs_enclosing ON refs(enclosing_symbol_id);
+
+            CREATE TABLE IF NOT EXISTS imports (
+                id          INTEGER PRIMARY KEY,
+                file_id     INTEGER NOT NULL REFERENCES files(id) ON DELETE CASCADE,
+                module_path TEXT NOT NULL,
+                name        TEXT NOT NULL,
+                is_glob     INTEGER NOT NULL,
+                start_row   INTEGER NOT NULL
+            );
+            CREATE INDEX IF NOT EXISTS idx_imports_file ON imports(file_id);
+            CREATE INDEX IF NOT EXISTS idx_imports_name ON imports(name);
             "#,
         )?;
 
@@ -139,15 +192,17 @@ impl SymbolStore {
         lang: &str,
         content_hash: &str,
         indexed_at: i64,
+        crate_root: &str,
     ) -> Result<i64> {
         tx.execute(
-            "INSERT INTO files (path, lang, content_hash, indexed_at)
-             VALUES (?1, ?2, ?3, ?4)
+            "INSERT INTO files (path, lang, content_hash, indexed_at, crate_root)
+             VALUES (?1, ?2, ?3, ?4, ?5)
              ON CONFLICT(path) DO UPDATE SET
                  lang = excluded.lang,
                  content_hash = excluded.content_hash,
-                 indexed_at = excluded.indexed_at",
-            params![path, lang, content_hash, indexed_at],
+                 indexed_at = excluded.indexed_at,
+                 crate_root = excluded.crate_root",
+            params![path, lang, content_hash, indexed_at, crate_root],
         )?;
         let id: i64 = tx.query_row(
             "SELECT id FROM files WHERE path = ?1",
@@ -165,16 +220,20 @@ impl SymbolStore {
         lang: &str,
         content_hash: &str,
         indexed_at: i64,
+        crate_root: &str,
         defs: &[SymbolDef],
         refs: &[SymbolRef],
+        imports: &[Import],
     ) -> Result<()> {
         let qnames = qualified_names(file, defs);
         let tx = self.conn.transaction()?;
-        let file_id = Self::upsert_file_row(&tx, file, lang, content_hash, indexed_at)?;
+        let file_id =
+            Self::upsert_file_row(&tx, file, lang, content_hash, indexed_at, crate_root)?;
 
         // Clear prior rows for this file before reinserting (delete by file_id).
-        tx.execute("DELETE FROM symbols WHERE file_id = ?1", params![file_id])?;
+        tx.execute("DELETE FROM imports WHERE file_id = ?1", params![file_id])?;
         tx.execute("DELETE FROM refs WHERE file_id = ?1", params![file_id])?;
+        tx.execute("DELETE FROM symbols WHERE file_id = ?1", params![file_id])?;
 
         // Two passes: insert with NULL parent_id collecting row ids, then patch
         // parent_id now that every def has an id.
@@ -212,16 +271,28 @@ impl SymbolStore {
         }
 
         for r in refs {
+            // Map the in-file enclosing-def index to its freshly inserted row id
+            // (the call edge's source symbol), NULL at top level.
+            let enclosing_id = r.enclosing.map(|idx| ids[idx]);
             tx.execute(
-                "INSERT INTO refs (file_id, name, start_byte, end_byte, start_row)
-                 VALUES (?1, ?2, ?3, ?4, ?5)",
+                "INSERT INTO refs (file_id, name, start_byte, end_byte, start_row, enclosing_symbol_id)
+                 VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
                 params![
                     file_id,
                     r.name,
                     r.start_byte as i64,
                     r.end_byte as i64,
-                    r.start_row as i64
+                    r.start_row as i64,
+                    enclosing_id,
                 ],
+            )?;
+        }
+
+        for im in imports {
+            tx.execute(
+                "INSERT INTO imports (file_id, module_path, name, is_glob, start_row)
+                 VALUES (?1, ?2, ?3, ?4, ?5)",
+                params![file_id, im.module_path, im.name, im.is_glob as i64, im.start_row as i64],
             )?;
         }
 
@@ -337,6 +408,110 @@ impl SymbolStore {
             .conn
             .query_row("SELECT COUNT(*) FROM symbols", [], |r| r.get(0))?;
         Ok(n as usize)
+    }
+
+    // ---- semantic layer: resolution + call graph ---------------------------
+
+    /// Shared SELECT for [`DefRecord`] rows so every accessor maps the same
+    /// columns in the same order.
+    const DEF_SELECT: &'static str = "SELECT s.id, f.path, s.name, s.kind, s.qualified_name, \
+         s.signature, s.start_byte, s.end_byte, s.start_row, f.crate_root \
+         FROM symbols s JOIN files f ON f.id = s.file_id";
+
+    fn map_def(r: &rusqlite::Row) -> rusqlite::Result<DefRecord> {
+        Ok(DefRecord {
+            id: r.get(0)?,
+            file: r.get(1)?,
+            name: r.get(2)?,
+            kind: r.get(3)?,
+            qualified_name: r.get(4)?,
+            signature: r.get(5)?,
+            start_byte: r.get::<_, i64>(6)? as usize,
+            end_byte: r.get::<_, i64>(7)? as usize,
+            start_row: r.get::<_, i64>(8)? as usize,
+            crate_root: r.get(9)?,
+        })
+    }
+
+    /// Every definition named `name` across the workspace — the candidate set the
+    /// resolver ranks.
+    pub fn resolve_candidates(&self, name: &str) -> Result<Vec<DefRecord>> {
+        let sql = format!("{} WHERE s.name = ?1 ORDER BY f.path, s.start_byte", Self::DEF_SELECT);
+        let mut stmt = self.conn.prepare(&sql)?;
+        let rows = stmt
+            .query_map(params![name], Self::map_def)?
+            .collect::<rusqlite::Result<Vec<_>>>()?;
+        Ok(rows)
+    }
+
+    /// A definition by its exact qualified name (`file::Mod::name`).
+    pub fn def_by_qname(&self, qname: &str) -> Result<Option<DefRecord>> {
+        let sql = format!("{} WHERE s.qualified_name = ?1 LIMIT 1", Self::DEF_SELECT);
+        let def = self
+            .conn
+            .query_row(&sql, params![qname], Self::map_def)
+            .optional()?;
+        Ok(def)
+    }
+
+    /// The innermost definition in `file` whose byte range contains `byte` —
+    /// "what symbol is the cursor in?".
+    pub fn def_at(&self, file: &str, byte: usize) -> Result<Option<DefRecord>> {
+        let sql = format!(
+            "{} WHERE f.path = ?1 AND s.start_byte <= ?2 AND s.end_byte > ?2 \
+             ORDER BY s.start_byte DESC LIMIT 1",
+            Self::DEF_SELECT
+        );
+        let def = self
+            .conn
+            .query_row(&sql, params![file, byte as i64], Self::map_def)
+            .optional()?;
+        Ok(def)
+    }
+
+    /// Distinct callee names referenced inside the definition `symbol_id` — the
+    /// outgoing call edges of one symbol, pre-resolution.
+    pub fn refs_in_symbol(&self, symbol_id: i64) -> Result<Vec<RefName>> {
+        let mut stmt = self.conn.prepare(
+            "SELECT name, MIN(start_row) FROM refs
+             WHERE enclosing_symbol_id = ?1 GROUP BY name ORDER BY MIN(start_row)",
+        )?;
+        let rows = stmt
+            .query_map(params![symbol_id], |r| {
+                Ok(RefName { name: r.get(0)?, start_row: r.get::<_, i64>(1)? as usize })
+            })?
+            .collect::<rusqlite::Result<Vec<_>>>()?;
+        Ok(rows)
+    }
+
+    /// Imports a file brings into scope.
+    pub fn imports_of_file(&self, file: &str) -> Result<Vec<ImportRow>> {
+        let mut stmt = self.conn.prepare(
+            "SELECT i.module_path, i.name, i.is_glob, i.start_row
+             FROM imports i JOIN files f ON f.id = i.file_id
+             WHERE f.path = ?1 ORDER BY i.start_row",
+        )?;
+        let rows = stmt
+            .query_map(params![file], |r| {
+                Ok(ImportRow {
+                    module_path: r.get(0)?,
+                    name: r.get(1)?,
+                    is_glob: r.get::<_, i64>(2)? != 0,
+                    start_row: r.get::<_, i64>(3)? as usize,
+                })
+            })?
+            .collect::<rusqlite::Result<Vec<_>>>()?;
+        Ok(rows)
+    }
+
+    /// The crate root recorded for `file` (empty string if none, `None` if the
+    /// file isn't indexed).
+    pub fn crate_root_of(&self, file: &str) -> Result<Option<String>> {
+        let root = self
+            .conn
+            .query_row("SELECT crate_root FROM files WHERE path = ?1", params![file], |r| r.get(0))
+            .optional()?;
+        Ok(root)
     }
 }
 
