@@ -86,3 +86,42 @@ weaker local model.
 - (+) Both layers are pure lookup tables → unit-testable offline.
 - (−) Air-gap users accept lower chat quality (local 7B) — acceptable for a
   niche (defense/classified) market.
+
+---
+
+## ADR-004 — The Model Runtime: LLMs as first-class runtime components
+
+**Status:** Accepted · **Context date:** 2026-06-20
+
+### Context
+Through ADR-003 the model call was a stub seam (`NoEdits`) reached from the
+executor. That couples deterministic orchestration to nondeterministic inference
+the moment model concerns (selection, prompting, streaming, validation) start to
+matter. A model is not just an external service to call — it is a runtime
+component with a lifecycle.
+
+### Decision
+- Introduce a **Model Runtime** as the only component that interacts with a
+  language model:
+  `Planner → Capability Layer → Execution Runtime → Model Runtime → LLM Provider`.
+- Split the five concerns into one module each: **selection** (wraps the ADR-003
+  router), **prompt** assembly, **provider** interface + streaming, **invocation**,
+  and **validation**.
+- A prompt is a structured **`Prompt` object**, not a string — system + capability
+  + semantic context + user request + execution metadata, rendered per provider.
+- Multiple providers live behind one `ModelProvider` trait, resolved by a
+  `ProviderRegistry`. The default `NullProvider` keeps the runtime wired but
+  edit-free until a real backend is registered.
+- **Validation gates every mutation**: malformed, empty, or truncated output is
+  rejected before any edit reaches the workspace. The executor's `apply_fix` diff
+  is the second gate.
+- The Model Runtime *is* the executor's existing `EditProvider` seam, so the
+  Planner, Capability Layer, Tool Registry, and Execution Runtime are unchanged.
+
+### Consequences
+- (+) Every model concern lives in one auditable layer with one responsibility each.
+- (+) Determinism holds end to end; the provider's output is the only variable.
+- (+) New providers are additive — one `Box<dyn ModelProvider>`, no runtime change.
+- (+) Untrusted model output cannot mutate the workspace unvalidated.
+- (−) No reflection/retry/memory/multi-agent yet — a rejected response is skipped,
+  not recovered. Deliberate: those are later milestones.

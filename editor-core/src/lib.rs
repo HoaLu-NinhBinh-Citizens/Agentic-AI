@@ -10,6 +10,7 @@ pub mod execution;
 pub mod inference;
 pub mod index;
 pub mod ipc;
+pub mod model_runtime;
 pub mod planner;
 pub mod protocol;
 pub mod retrieval;
