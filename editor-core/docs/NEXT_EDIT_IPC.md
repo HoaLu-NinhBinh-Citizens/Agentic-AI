@@ -54,8 +54,14 @@ the editor side for mechanical renames.
 
 - Byte spans are exact identifier ranges — applying `edits` cannot corrupt
   surrounding code.
-- v1 matches call sites by **name** (no cross-module resolution yet), so a
-  mechanical rename may include same-named symbols from unrelated modules. The
-  per-site Tab-to-jump confirmation is the safety net; do **not** auto-apply all
-  edits silently. Resolution (`target_symbol_id`) is the v2 fix
-  (`SYMBOL_GRAPH_SPEC.md` §5).
+- **Safe-rename resolution (v2).** A `rename` suggestion is only marked
+  `mechanical: true` (so its `edits` may be applied verbatim) when the old name
+  is **globally unique** — i.e. after the rename no definition of `old_name`
+  survives anywhere in the graph, so every remaining reference provably bound to
+  the renamed symbol. If a same-named definition still exists in another module,
+  the rename is **ambiguous**: `mechanical` is `false` and `edits` is empty, but
+  `sites` are still populated as Tab-to-jump targets for manual review. The core
+  logs the ambiguity (name-based match, no over-applying). This is the
+  conservative, query-time form of the `target_symbol_id` resolution in
+  `SYMBOL_GRAPH_SPEC.md` §5 — it never over-matches, at the cost of not
+  auto-applying genuinely-safe cross-module renames when the name collides.
