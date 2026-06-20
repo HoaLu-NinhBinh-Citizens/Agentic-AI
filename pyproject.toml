@@ -92,9 +92,3 @@ src_path = ["src"]
 warn_return_any = true
 warn_unused_configs = true
 ignore_missing_imports = true
-
-[tool.pytest.ini_options]
-testpaths = ["tests/unit", "tests/integration"]
-pythonpath = ["src", "."]
-asyncio_mode = "auto"
-addopts = "-v"
