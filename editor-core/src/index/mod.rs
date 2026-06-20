@@ -22,7 +22,7 @@ use crate::retrieval::chunks::{chunk_file, Chunk};
 use crate::retrieval::embed::{Embedder, HashEmbedder};
 use crate::retrieval::lance_store::LanceVectorStore;
 use crate::retrieval::ollama::OllamaEmbedder;
-use crate::retrieval::vector::{InMemoryVectorStore, VectorStore};
+use crate::retrieval::vector::VectorStore;
 use crate::retrieval::HybridRetriever;
 use crate::symbols::classifier::EditSuggestion;
 use crate::symbols::extract::extract;
@@ -167,10 +167,22 @@ impl IndexEngine {
             let stale: Vec<String> =
                 modified.iter().chain(removed.iter()).cloned().collect();
             let fresh = self.chunk_paths(added.iter().chain(modified.iter()));
+            let mut ok = true;
             if let Some(r) = self.retriever.as_mut() {
                 if let Err(e) = r.apply_delta(&stale, fresh) {
                     debug!(error = %e, "retriever incremental update failed; dropping for rebuild");
-                    self.retriever = None;
+                    ok = false;
+                }
+            }
+            if !ok {
+                self.retriever = None;
+            } else if self.persistable_retriever() {
+                // Re-snapshot so the next session loads instead of rebuilding.
+                let dir = self.retriever_dir();
+                if let Some(r) = self.retriever.as_ref() {
+                    if let Err(e) = r.persist(&dir, &root) {
+                        debug!(error = %e, "retriever persist failed");
+                    }
                 }
             }
         } else {
@@ -228,21 +240,9 @@ impl IndexEngine {
         out
     }
 
-    /// Build (if needed) the hybrid retriever from the current snapshot by
-    /// re-parsing + chunking every known-language file. Full rebuild; cached
-    /// and then kept fresh incrementally by `sync`.
-    fn ensure_retriever(&mut self) -> Result<()> {
-        if self.retriever.is_some() {
-            return Ok(());
-        }
-        let started = Instant::now();
-        let all_chunks = self.chunk_paths(self.snapshot.entries.keys());
-        let n = all_chunks.len();
-
-        // Build embedder + vector store from config (Ollama/LanceDB or the
-        // offline defaults).
+    fn make_embedder(&self) -> Box<dyn Embedder> {
         let cfg = &self.retrieval_cfg;
-        let embedder: Box<dyn Embedder> = if cfg.use_ollama {
+        if cfg.use_ollama {
             Box::new(OllamaEmbedder::new(
                 cfg.ollama_host.clone(),
                 cfg.ollama_model.clone(),
@@ -250,23 +250,56 @@ impl IndexEngine {
             ))
         } else {
             Box::new(HashEmbedder::default())
-        };
-        let dim = embedder.dim();
-        let store: Box<dyn VectorStore> = if cfg.use_lance {
-            let uri = self.workspace_root.join(INDEX_DIR).join("vectors.lance");
-            Box::new(LanceVectorStore::open(&uri.to_string_lossy(), dim)?)
-        } else {
-            Box::new(InMemoryVectorStore::new())
-        };
+        }
+    }
 
+    fn retriever_dir(&self) -> PathBuf {
+        self.workspace_root.join(INDEX_DIR).join("retriever")
+    }
+
+    /// Whether the retriever can persist + update incrementally (in-memory
+    /// backend). The LanceDB backend persists vectors itself but isn't wired
+    /// for our snapshot persistence, so it stays on lazy full rebuild.
+    fn persistable_retriever(&self) -> bool {
+        !self.retrieval_cfg.use_lance
+    }
+
+    /// Ensure the retriever exists: load a valid persisted index, else build it
+    /// (persisting on the way for the persistable in-memory backend).
+    fn ensure_retriever(&mut self) -> Result<()> {
+        if self.retriever.is_some() {
+            return Ok(());
+        }
+        let started = Instant::now();
+
+        if self.persistable_retriever() {
+            let dir = self.retriever_dir();
+            // Try the persisted index first — skips the rebuild on reopen.
+            if let Some(r) =
+                HybridRetriever::try_load(self.make_embedder(), &dir, &self.snapshot.root)?
+            {
+                info!(ms = started.elapsed().as_millis(), "loaded persisted retriever");
+                self.retriever = Some(r);
+                return Ok(());
+            }
+            let all_chunks = self.chunk_paths(self.snapshot.entries.keys());
+            let n = all_chunks.len();
+            let r = HybridRetriever::build_persistent(self.make_embedder(), all_chunks, &dir)?;
+            r.persist(&dir, &self.snapshot.root)?;
+            info!(chunks = n, ms = started.elapsed().as_millis(), "built + persisted hybrid retriever");
+            self.retriever = Some(r);
+            return Ok(());
+        }
+
+        // LanceDB path: in-RAM lexical, vectors in Lance, lazy rebuild.
+        let all_chunks = self.chunk_paths(self.snapshot.entries.keys());
+        let n = all_chunks.len();
+        let embedder = self.make_embedder();
+        let dim = embedder.dim();
+        let uri = self.workspace_root.join(INDEX_DIR).join("vectors.lance");
+        let store: Box<dyn VectorStore> = Box::new(LanceVectorStore::open(&uri.to_string_lossy(), dim)?);
         let retriever = HybridRetriever::build_with(embedder, store, all_chunks)?;
-        info!(
-            chunks = n,
-            ollama = cfg.use_ollama,
-            lance = cfg.use_lance,
-            ms = started.elapsed().as_millis(),
-            "built hybrid retriever"
-        );
+        info!(chunks = n, lance = true, ms = started.elapsed().as_millis(), "built hybrid retriever");
         self.retriever = Some(retriever);
         Ok(())
     }

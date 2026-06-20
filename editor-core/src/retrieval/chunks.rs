@@ -2,9 +2,11 @@
 //! whole-file fallback when a file has no extracted symbols. Chunking on symbol
 //! boundaries keeps a function/class intact instead of splitting mid-body.
 
+use serde::{Deserialize, Serialize};
+
 use crate::symbols::extract::SymbolDef;
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Chunk {
     pub id: u64,
     pub file: String,

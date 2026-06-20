@@ -10,6 +10,7 @@ pub mod ollama;
 pub mod vector;
 
 use std::collections::HashMap;
+use std::path::Path;
 
 use anyhow::Result;
 
@@ -21,6 +22,12 @@ use vector::{InMemoryVectorStore, VectorStore};
 /// RRF constant. 60 is the value from the original paper; it damps the
 /// influence of any single ranker's top results.
 const RRF_K: f32 = 60.0;
+
+// On-disk persistence layout (under .agentic/index/retriever/).
+const LEX_DIR: &str = "tantivy";
+const VEC_FILE: &str = "vectors.json";
+const CHUNK_FILE: &str = "chunks.json";
+const META_FILE: &str = "meta.json";
 
 /// A chunk with its fused retrieval score.
 #[derive(Debug, Clone)]
@@ -76,6 +83,79 @@ impl HybridRetriever {
         }
         vector.commit()?;
         Ok(Self { embedder, vector, lexical, chunks: map, file_chunks })
+    }
+
+    /// Build with an on-disk (persistable) in-memory backend: vectors stay in
+    /// RAM for fast cosine, the lexical index is written under `dir/tantivy`,
+    /// and `persist` snapshots vectors+chunks so reopening skips the rebuild.
+    pub fn build_persistent(
+        embedder: Box<dyn Embedder>,
+        chunks: Vec<Chunk>,
+        dir: &Path,
+    ) -> Result<Self> {
+        let lex_dir = dir.join(LEX_DIR);
+        let _ = std::fs::remove_dir_all(&lex_dir); // fresh
+        let lexical = LexicalIndex::build_at(&lex_dir, &chunks)?;
+        let mut vector: Box<dyn VectorStore> = Box::new(InMemoryVectorStore::new());
+        let mut map = HashMap::with_capacity(chunks.len());
+        let mut file_chunks: HashMap<String, Vec<u64>> = HashMap::new();
+        for c in chunks {
+            vector.add(c.id, embedder.embed(&c.text));
+            file_chunks.entry(c.file.clone()).or_default().push(c.id);
+            map.insert(c.id, c);
+        }
+        vector.commit()?;
+        Ok(Self { embedder, vector, lexical, chunks: map, file_chunks })
+    }
+
+    /// Load a persisted retriever if present and still valid for `expected_root`
+    /// (the Merkle snapshot root). Returns `None` to signal "rebuild".
+    pub fn try_load(
+        embedder: Box<dyn Embedder>,
+        dir: &Path,
+        expected_root: &str,
+    ) -> Result<Option<Self>> {
+        let Ok(meta) = std::fs::read(dir.join(META_FILE)) else { return Ok(None) };
+        let meta: serde_json::Value = serde_json::from_slice(&meta).unwrap_or_default();
+        if meta.get("root").and_then(|v| v.as_str()) != Some(expected_root) {
+            return Ok(None); // index is stale relative to the workspace
+        }
+        let (Ok(vb), Ok(cb)) = (
+            std::fs::read(dir.join(VEC_FILE)),
+            std::fs::read(dir.join(CHUNK_FILE)),
+        ) else {
+            return Ok(None);
+        };
+        let items: Vec<(u64, Vec<f32>)> = serde_json::from_slice(&vb)?;
+        let chunks: Vec<Chunk> = serde_json::from_slice(&cb)?;
+        let lexical = match LexicalIndex::open_at(&dir.join(LEX_DIR)) {
+            Ok(l) => l,
+            Err(_) => return Ok(None),
+        };
+        let vector: Box<dyn VectorStore> = Box::new(InMemoryVectorStore::from_items(items));
+        let mut map = HashMap::with_capacity(chunks.len());
+        let mut file_chunks: HashMap<String, Vec<u64>> = HashMap::new();
+        for c in chunks {
+            file_chunks.entry(c.file.clone()).or_default().push(c.id);
+            map.insert(c.id, c);
+        }
+        Ok(Some(Self { embedder, vector, lexical, chunks: map, file_chunks }))
+    }
+
+    /// Snapshot vectors + chunks + the current root so a later session can load.
+    /// No-op for backends that persist themselves (LanceDB → `dump` is `None`).
+    /// The lexical index is already on disk (written by `build_at`/`update`).
+    pub fn persist(&self, dir: &Path, root: &str) -> Result<()> {
+        let Some(items) = self.vector.dump() else { return Ok(()) };
+        std::fs::create_dir_all(dir).ok();
+        std::fs::write(dir.join(VEC_FILE), serde_json::to_vec(&items)?)?;
+        let chunks: Vec<&Chunk> = self.chunks.values().collect();
+        std::fs::write(dir.join(CHUNK_FILE), serde_json::to_vec(&chunks)?)?;
+        std::fs::write(
+            dir.join(META_FILE),
+            serde_json::to_vec(&serde_json::json!({ "root": root }))?,
+        )?;
+        Ok(())
     }
 
     pub fn len(&self) -> usize {

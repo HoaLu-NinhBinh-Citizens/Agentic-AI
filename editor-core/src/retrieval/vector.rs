@@ -20,6 +20,11 @@ pub trait VectorStore {
     fn supports_incremental(&self) -> bool {
         false
     }
+    /// Dump all `(id, vector)` for persistence. `None` if the backend persists
+    /// itself (LanceDB) and shouldn't be re-serialized by the retriever.
+    fn dump(&self) -> Option<Vec<(u64, Vec<f32>)>> {
+        None
+    }
     /// Finalize pending adds so `search` can run. No-op for stores that index
     /// eagerly (in-memory); batch-oriented stores (LanceDB) flush here.
     fn commit(&mut self) -> anyhow::Result<()> {
@@ -42,6 +47,11 @@ impl InMemoryVectorStore {
     pub fn new() -> Self {
         Self::default()
     }
+
+    /// Reconstruct from a persisted dump.
+    pub fn from_items(items: Vec<(u64, Vec<f32>)>) -> Self {
+        Self { items }
+    }
 }
 
 fn dot(a: &[f32], b: &[f32]) -> f32 {
@@ -63,6 +73,10 @@ impl VectorStore for InMemoryVectorStore {
 
     fn supports_incremental(&self) -> bool {
         true
+    }
+
+    fn dump(&self) -> Option<Vec<(u64, Vec<f32>)>> {
+        Some(self.items.clone())
     }
 
     fn search(&self, query: &[f32], k: usize) -> Vec<(u64, f32)> {
