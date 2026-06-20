@@ -214,19 +214,19 @@ function sendTelemetry(event: Record<string, unknown>): void {
 }
 
 /** Apply a chat code block to the active editor: replace the selection if there
- *  is one, otherwise insert at the cursor. */
+ *  is one, otherwise insert at the cursor. Goes through the same diff preview +
+ *  confirmation flow as cmd-K so chat edits are never written to disk blind. */
 async function applyCodeToEditor(code: string): Promise<void> {
   const editor = vscode.window.activeTextEditor ?? vscode.window.visibleTextEditors[0];
   if (!editor) {
     vscode.window.showWarningMessage("aircode: open a file to apply the code into.");
     return;
   }
+  // Empty selection -> zero-width range at the cursor; previewAndApply's
+  // replace() then behaves as an insert, matching the previous behaviour.
   const sel = editor.selection;
-  await editor.edit((eb) => {
-    if (sel.isEmpty) eb.insert(sel.active, code);
-    else eb.replace(sel, code);
-  });
-  sendTelemetry({ task: "chat_apply", outcome: "accepted" });
+  const range = sel.isEmpty ? new vscode.Range(sel.active, sel.active) : sel;
+  await previewAndApply(editor, range, code, "apply from chat", "chat_apply");
 }
 
 /** Load the completion model into memory at startup so the first real
@@ -622,7 +622,8 @@ async function previewAndApply(
   editor: vscode.TextEditor,
   range: vscode.Range,
   rewrite: string,
-  instruction: string
+  instruction: string,
+  telemetryTask: string = "inline_edit"
 ): Promise<void> {
   const doc = editor.document;
   const startOff = doc.offsetAt(range.start);
@@ -655,9 +656,9 @@ async function previewAndApply(
 
   if (choice === "Apply") {
     await editor.edit((eb) => eb.replace(range, rewrite));
-    sendTelemetry({ task: "inline_edit", outcome: "accepted" });
+    sendTelemetry({ task: telemetryTask, outcome: "accepted" });
   } else {
-    sendTelemetry({ task: "inline_edit", outcome: "rejected" });
+    sendTelemetry({ task: telemetryTask, outcome: "rejected" });
   }
 }
 

@@ -201,6 +201,43 @@ fn rename_produces_mechanical_edits_at_all_call_sites() {
 }
 
 #[test]
+fn ambiguous_rename_does_not_over_match_other_modules() {
+    // Two unrelated modules each define `parse`. Renaming one must NOT
+    // mechanically rewrite call sites, because name-only matching cannot tell
+    // which `parse` a reference bound to (SYMBOL_GRAPH_SPEC §5).
+    let dir = TempDir::new().unwrap();
+    write(&dir, "a.rs", "pub fn parse() {}\n");
+    write(&dir, "b.rs", "pub fn parse() {}\n");
+    write(&dir, "main.rs", "fn main() {\n    parse();\n}\n");
+
+    let mut engine = IndexEngine::open(dir.path()).unwrap();
+    engine.sync().unwrap();
+
+    // Rename only a.rs's parse; b.rs still defines `parse`.
+    write(&dir, "a.rs", "pub fn parse_a() {}\n");
+    let result = engine.sync().unwrap();
+
+    let rename = result
+        .suggestions
+        .iter()
+        .find(|s| s.old_name == "parse")
+        .expect("expected a rename suggestion for parse");
+
+    assert!(
+        !rename.mechanical,
+        "an ambiguous rename (name still defined elsewhere) must not auto-apply"
+    );
+    assert!(
+        rename.edits.is_empty(),
+        "no mechanical edits when the name is ambiguous — avoids over-matching b.rs's parse"
+    );
+    assert!(
+        !rename.sites.is_empty(),
+        "sites are still surfaced for manual review"
+    );
+}
+
+#[test]
 fn signature_change_is_semantic_not_mechanical() {
     let dir = TempDir::new().unwrap();
     write(&dir, "lib.rs", "pub fn f(a: i32) -> i32 { a }\n");

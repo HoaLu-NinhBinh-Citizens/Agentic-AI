@@ -15,7 +15,7 @@ use std::time::{Instant, SystemTime, UNIX_EPOCH};
 use anyhow::Result;
 use rayon::prelude::*;
 use serde::Serialize;
-use tracing::{debug, info};
+use tracing::{debug, info, warn};
 
 use classifier::{classify, EditKind, EditSite, EditSuggestion, Replacement};
 use extract::{extract, SymbolDef, SymbolRef};
@@ -130,7 +130,7 @@ impl SymbolGraph {
             // Only files that already existed can yield a meaningful diff.
             if !old_defs.is_empty() {
                 for c in classify(&old_defs, &p.defs) {
-                    suggestions.push(self.build_suggestion(c)?);
+                    suggestions.push(self.build_suggestion(c, &p.file)?);
                 }
             }
         }
@@ -158,6 +158,7 @@ impl SymbolGraph {
     fn build_suggestion(
         &self,
         c: classifier::Classification,
+        file: &str,
     ) -> Result<EditSuggestion> {
         let refs = self.store.call_sites(&c.old_name)?;
         let sites: Vec<EditSite> = refs
@@ -170,7 +171,29 @@ impl SymbolGraph {
             })
             .collect();
 
-        let mechanical = c.kind == EditKind::Rename;
+        // Safe-rename resolution (SYMBOL_GRAPH_SPEC.md §5). Classification runs
+        // *after* the upsert, so the renamed definition already carries the new
+        // name. If NO definition named `old_name` survives anywhere in the repo,
+        // every remaining `old_name` reference must have bound to the symbol we
+        // just renamed — applying the rewrite verbatim cannot over-match. If a
+        // definition of `old_name` still exists (e.g. a same-named function in
+        // another module), name-only matching is ambiguous, so we surface the
+        // sites for manual review instead of auto-applying.
+        let is_rename = c.kind == EditKind::Rename;
+        let surviving = self.store.def_count(&c.old_name)?;
+        let mechanical = is_rename && surviving == 0;
+
+        if is_rename && surviving > 0 {
+            warn!(
+                file,
+                old_name = %c.old_name,
+                new_name = %c.new_name,
+                surviving_defs = surviving,
+                sites = sites.len(),
+                "rename is ambiguous (name still defined elsewhere); surfacing sites for manual review, not auto-applying (name-based match, SYMBOL_GRAPH_SPEC §5)"
+            );
+        }
+
         let edits = if mechanical {
             refs.iter()
                 .map(|r| Replacement {

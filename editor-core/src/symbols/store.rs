@@ -317,6 +317,20 @@ impl SymbolStore {
         Ok(hash)
     }
 
+    /// How many definitions across the whole graph carry `name`. Next Edit
+    /// Prediction uses this to tell a globally-unique rename (safe to apply at
+    /// every call site) from an ambiguous one: if a definition of `old_name`
+    /// still exists in another module, name-only call-site matching would
+    /// over-match, so the rename must not auto-apply (SYMBOL_GRAPH_SPEC.md §5).
+    pub fn def_count(&self, name: &str) -> Result<usize> {
+        let n: i64 = self.conn.query_row(
+            "SELECT COUNT(*) FROM symbols WHERE name = ?1",
+            params![name],
+            |r| r.get(0),
+        )?;
+        Ok(n as usize)
+    }
+
     /// Total symbol count — used in status.
     pub fn symbol_count(&self) -> Result<usize> {
         let n: i64 = self
