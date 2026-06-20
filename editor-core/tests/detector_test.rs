@@ -138,9 +138,163 @@ fn disabled_detector_is_skipped() {
 }
 
 #[test]
-fn default_registry_lists_three_builtins() {
+fn default_registry_lists_all_builtins() {
     let ids = DetectorRegistry::with_defaults().ids();
-    assert!(ids.contains(&"rust/unwrap"));
-    assert!(ids.contains(&"rust/unsafe-block"));
-    assert!(ids.contains(&"ml/hardcoded-hyperparam"));
+    for id in [
+        "rust/unwrap",
+        "rust/unsafe-block",
+        "ml/hardcoded-hyperparam",
+        "ml/data-leakage",
+        "ml/device-mismatch",
+        "ml/no-grad-eval",
+        "rust/unsafe-ffi-lifetime",
+        "c/unsafe-libc",
+    ] {
+        assert!(ids.contains(&id), "missing builtin {id}: {ids:?}");
+    }
+}
+
+// ---- ml/data-leakage ------------------------------------------------------
+
+#[test]
+fn flags_fit_on_full_dataset_but_not_on_train_split() {
+    let src = r#"
+fn prep(x: &Data, x_train: &Data) {
+    scaler.fit(x);            // leakage: fit on full data
+    scaler.fit(x_train);      // ok: fit on the train split
+}
+"#;
+    let f = analyze("src/prep.rs", src);
+    let l: Vec<_> = f.iter().filter(|x| x.rule_id == "ml/data-leakage").collect();
+    assert_eq!(l.len(), 1, "only the full-dataset fit should flag: {f:?}");
+    assert_eq!(l[0].severity, Severity::High);
+    assert_eq!(l[0].line, 3);
+}
+
+#[test]
+fn flags_fit_transform_python() {
+    let src = "scaler = StandardScaler()\nx = scaler.fit_transform(data)\n";
+    let f = analyze("prep.py", src);
+    assert!(f.iter().any(|x| x.rule_id == "ml/data-leakage"), "{f:?}");
+}
+
+// ---- ml/device-mismatch ---------------------------------------------------
+
+#[test]
+fn flags_cpu_tensor_in_cuda_code() {
+    let src = r#"
+fn run() {
+    let dev = Device::Cuda(0);
+    let t = input.to_device(Device::Cpu);  // mismatch
+}
+"#;
+    let f = analyze("src/run.rs", src);
+    let d: Vec<_> = f.iter().filter(|x| x.rule_id == "ml/device-mismatch").collect();
+    assert_eq!(d.len(), 1, "cpu placement in cuda code should flag: {f:?}");
+}
+
+#[test]
+fn does_not_flag_cpu_when_no_gpu_in_file() {
+    let src = r#"
+fn run() {
+    let t = input.to_device(Device::Cpu);
+}
+"#;
+    let f = analyze("src/run.rs", src);
+    assert!(
+        f.iter().all(|x| x.rule_id != "ml/device-mismatch"),
+        "cpu-only file must not flag: {f:?}"
+    );
+}
+
+// ---- ml/no-grad-eval ------------------------------------------------------
+
+#[test]
+fn flags_eval_forward_without_no_grad() {
+    let src = r#"
+fn evaluate(model: &Net, x: &Tensor) -> Tensor {
+    model.forward(x)
+}
+"#;
+    let f = analyze("src/eval.rs", src);
+    let n: Vec<_> = f.iter().filter(|x| x.rule_id == "ml/no-grad-eval").collect();
+    assert_eq!(n.len(), 1, "eval forward without no_grad should flag: {f:?}");
+}
+
+#[test]
+fn eval_with_no_grad_is_ok() {
+    let src = r#"
+fn evaluate(model: &Net, x: &Tensor) -> Tensor {
+    tch::no_grad(|| model.forward(x))
+}
+"#;
+    let f = analyze("src/eval.rs", src);
+    assert!(
+        f.iter().all(|x| x.rule_id != "ml/no-grad-eval"),
+        "guarded eval must not flag: {f:?}"
+    );
+}
+
+// ---- rust/unsafe-ffi-lifetime ---------------------------------------------
+
+#[test]
+fn flags_unmanaged_cuda_alloc() {
+    let src = r#"
+fn alloc(n: usize) {
+    let mut p = std::ptr::null_mut();
+    unsafe { cudaMalloc(&mut p, n); }
+}
+"#;
+    let f = analyze("src/cuda.rs", src);
+    let c: Vec<_> = f.iter().filter(|x| x.rule_id == "rust/unsafe-ffi-lifetime").collect();
+    assert_eq!(c.len(), 1, "raw cudaMalloc should flag: {f:?}");
+    assert_eq!(c[0].severity, Severity::Critical);
+}
+
+// ---- c/unsafe-libc --------------------------------------------------------
+
+#[test]
+fn flags_unbounded_libc_string_calls() {
+    let src = r#"
+void copy(char *dst, const char *src) {
+    strcpy(dst, src);
+    char buf[8];
+    sprintf(buf, "%s", src);
+}
+"#;
+    let f = analyze("main.c", src);
+    let c: Vec<_> = f.iter().filter(|x| x.rule_id == "c/unsafe-libc").collect();
+    assert_eq!(c.len(), 2, "strcpy + sprintf should flag: {f:?}");
+}
+
+#[test]
+fn unsafe_libc_applies_to_cpp_too() {
+    let f = analyze("main.cpp", "void f(){ char b[4]; strcat(b, \"x\"); }");
+    assert!(f.iter().any(|x| x.rule_id == "c/unsafe-libc"), "{f:?}");
+}
+
+// ---- config.toml toggle ---------------------------------------------------
+
+#[test]
+fn config_disables_listed_detectors() {
+    use aircore::detector::DetectorConfig;
+    let cfg = DetectorConfig::from_toml_str(
+        "[detectors]\ndisabled = [\"c/unsafe-libc\", \"ml/no-grad-eval\"]\n",
+    )
+    .unwrap();
+    let reg = DetectorRegistry::with_config(cfg);
+    let f = reg
+        .analyze("main.c", b"void f(){ char b[4]; strcpy(b, \"x\"); }".to_vec())
+        .unwrap();
+    assert!(
+        f.iter().all(|x| x.rule_id != "c/unsafe-libc"),
+        "disabled-by-config rule must not fire: {f:?}"
+    );
+}
+
+#[test]
+fn config_without_detectors_section_disables_nothing() {
+    use aircore::detector::DetectorConfig;
+    let cfg = DetectorConfig::from_toml_str("[other]\nkey = 1\n").unwrap();
+    assert!(cfg.disabled.is_empty());
 }

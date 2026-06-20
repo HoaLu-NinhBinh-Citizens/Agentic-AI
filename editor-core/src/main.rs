@@ -3,13 +3,14 @@
 //! One process per workspace. Speaks JSON-RPC 2.0 over stdio (LSP-style
 //! framing) to the editor. Phase 1 exposes the index engine:
 //!
-//!   initialize       { workspaceRoot, telemetry? } -> { ok, status }
+//!   initialize       { workspaceRoot, telemetry?, retrieval?, detectors? } -> { ok, status }
 //!   index/sync       {}                  -> SyncResult (delta + symbols + suggestions)
 //!   index/status     {}                  -> IndexStatus
 //!   symbol/find      { name }            -> SymbolRow[]
 //!   symbol/callSites { name }            -> RefRow[]
 //!   context/completion { file, cursorByte, maxTokens?, query? } -> BuiltPrompt
 //!   diagnostics/file { file }           -> { file, findings: Finding[] }
+//!   detectors/list   {}                  -> { detectors: RuleMetadata[] }
 //!   retrieve         { query, k? }       -> RetrievedSnippet[]
 //!   telemetry/log    TelemetryEvent      -> (notification; opt-in, async sink)
 //!   shutdown         {}                  -> { ok: true }   (then exits)
@@ -25,6 +26,7 @@ use tracing_subscriber::EnvFilter;
 
 use std::path::Path;
 
+use aircore::detector::DetectorConfig;
 use aircore::index::{IndexEngine, RetrievalConfig};
 use aircore::ipc;
 use aircore::protocol::{ErrorCode, Request, Response, RpcError};
@@ -54,6 +56,7 @@ impl Daemon {
             "symbol/callSites" => self.symbol_call_sites(params),
             "context/completion" => self.context_completion(params),
             "diagnostics/file" => self.diagnostics_file(params),
+            "detectors/list" => self.detectors_list(),
             "retrieve" => self.retrieve(params),
             "telemetry/log" => self.telemetry_log(params),
             _ => Err(RpcError::new(
@@ -100,12 +103,30 @@ impl Daemon {
             engine.set_retrieval_config(cfg);
         }
 
+        // Optional inline detector config overrides the auto-discovered
+        // config.toml (e.g. the editor pushing user settings). Shape mirrors the
+        // `[detectors]` TOML table: { disabled: [..], rules: { id: {..} } }.
+        if let Some(d) = params.get("detectors") {
+            let cfg: DetectorConfig = serde_json::from_value(d.clone()).map_err(|e| {
+                RpcError::new(ErrorCode::InvalidParams, format!("invalid 'detectors' config: {e}"))
+            })?;
+            engine.set_detector_config(cfg);
+        }
+
         let status = engine.status();
         self.engine = Some(engine);
         Ok(json!({
             "ok": true,
             "status": serde_json::to_value(status).map_err(internal)?,
         }))
+    }
+
+    /// List every registered detector and its effective config (enabled state,
+    /// severity, languages, options) so the editor can render a settings panel.
+    fn detectors_list(&mut self) -> std::result::Result<Value, RpcError> {
+        let engine = self.engine_mut()?;
+        let rules = engine.detector_metadata();
+        Ok(json!({ "detectors": serde_json::to_value(rules).map_err(internal)? }))
     }
 
     /// Record a batched interaction event (notification, no response). Off the
