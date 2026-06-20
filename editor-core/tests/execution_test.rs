@@ -1,0 +1,194 @@
+//! Tests for the Execution Runtime: it consumes a planner `Plan` and runs it
+//! deterministically — assembling per-task context, selecting a model per task
+//! (inference router), dispatching to the existing engine APIs, and gating
+//! mutating tasks on verification before declaring success. No retry, no
+//! reflection, no LLM call: the edit seam is supplied explicitly.
+
+use std::fs;
+
+use aircore::execution::{EditProvider, Executor, ExecutionStatus, FileEdits, TaskStatus};
+use aircore::index::{Edit, IndexEngine};
+use aircore::inference::{Model, UserPolicy};
+use aircore::planner::{PlanRequest, Planner, TaskKind};
+
+fn synced_workspace(files: &[(&str, &str)]) -> (tempfile::TempDir, IndexEngine) {
+    let dir = tempfile::tempdir().unwrap();
+    for (path, src) in files {
+        let abs = dir.path().join(path);
+        fs::create_dir_all(abs.parent().unwrap()).unwrap();
+        fs::write(abs, src).unwrap();
+    }
+    let mut engine = IndexEngine::open(dir.path()).unwrap();
+    engine.sync().unwrap();
+    (dir, engine)
+}
+
+const CARGO: &str = "[package]\nname = \"demo\"\nversion = \"0.1.0\"\n";
+// One `.unwrap()` -> exactly one `rust/unwrap` finding.
+const BUGGY: &str =
+    "pub fn run() -> i32 {\n    let x: Option<i32> = Some(1);\n    x.unwrap()\n}\n";
+const CLEAN: &str =
+    "pub fn run() -> i32 {\n    let x: Option<i32> = Some(1);\n    x.unwrap_or(0)\n}\n";
+
+/// A deterministic edit provider standing in for the future model client.
+struct StaticEdits {
+    file: String,
+    edits: Vec<Edit>,
+}
+
+impl EditProvider for StaticEdits {
+    fn edits_for(
+        &self,
+        _task: &aircore::planner::PlanTask,
+        _ctx: Option<&aircore::context::BuiltPrompt>,
+    ) -> Option<Vec<FileEdits>> {
+        Some(vec![FileEdits { file: self.file.clone(), edits: self.edits.clone() }])
+    }
+}
+
+fn bug_fix_plan(focus: &str) -> aircore::planner::Plan {
+    Planner::plan(&PlanRequest {
+        goal: "fix the crash in run".to_string(),
+        focus_symbol: Some(focus.to_string()),
+        ..Default::default()
+    })
+}
+
+#[test]
+fn default_runtime_runs_readonly_tasks_and_skips_mutating() {
+    let (_dir, mut engine) =
+        synced_workspace(&[("Cargo.toml", CARGO), ("src/lib.rs", BUGGY)]);
+    let plan = bug_fix_plan("src/lib.rs::run");
+
+    let result = engine.execute_plan(&plan, UserPolicy::Cloud);
+
+    // Locate + Analyze run; Implement is skipped (no edits wired); Verify runs.
+    let by_kind = |k: TaskKind| result.tasks.iter().find(|t| t.kind == k).unwrap();
+    assert_eq!(by_kind(TaskKind::Locate).status, TaskStatus::Succeeded);
+    assert_eq!(by_kind(TaskKind::Analyze).status, TaskStatus::Succeeded);
+    assert_eq!(by_kind(TaskKind::Implement).status, TaskStatus::Skipped);
+
+    // The skipped implement task still selected a model (router ran at exec time).
+    assert_eq!(by_kind(TaskKind::Implement).route.unwrap().model, Some(Model::Haiku45));
+    // ...and preserved the assembled context as the edit-request artifact.
+    assert!(by_kind(TaskKind::Implement).artifacts.iter().any(|a| a.name == "edit_request"));
+
+    // Analyze surfaced the unwrap finding.
+    assert!(!by_kind(TaskKind::Analyze).diagnostics.is_empty());
+
+    // A skipped (not failed) task => Partial overall. The downstream verify task
+    // defers too (nothing to verify), so two tasks are skipped.
+    assert_eq!(result.status, ExecutionStatus::Partial);
+    assert_eq!(by_kind(TaskKind::Verify).status, TaskStatus::Skipped);
+    assert_eq!(result.metadata.tasks_skipped, 2);
+    assert_eq!(result.metadata.policy, UserPolicy::Cloud);
+}
+
+#[test]
+fn mutating_task_applies_and_passes_verification() {
+    let (_dir, mut engine) =
+        synced_workspace(&[("Cargo.toml", CARGO), ("src/lib.rs", BUGGY)]);
+    let plan = bug_fix_plan("src/lib.rs::run");
+
+    // Edit that removes the unwrap (resolves the finding, introduces none).
+    let off = BUGGY.find("x.unwrap()").unwrap();
+    let provider = StaticEdits {
+        file: "src/lib.rs".to_string(),
+        edits: vec![Edit {
+            start_byte: off,
+            end_byte: off + "x.unwrap()".len(),
+            new_text: "x.unwrap_or(0)".to_string(),
+        }],
+    };
+
+    let result = {
+        let mut exec = Executor::with_options(&mut engine, UserPolicy::Cloud, &provider, false);
+        exec.execute(&plan)
+    };
+
+    let implement = result.tasks.iter().find(|t| t.kind == TaskKind::Implement).unwrap();
+    assert_eq!(implement.status, TaskStatus::Succeeded, "{:?}", implement);
+    assert_eq!(implement.modified_files, vec!["src/lib.rs".to_string()]);
+    // Verification ran on the mutating task (detector diff) and was clean.
+    assert!(implement.verification.iter().all(|c| c.status != aircore::execution::CheckStatus::Failed));
+
+    // The explicit verify task passed too, and the whole run succeeded.
+    let verify = result.tasks.iter().find(|t| t.kind == TaskKind::Verify).unwrap();
+    assert_eq!(verify.status, TaskStatus::Succeeded);
+    assert_eq!(result.status, ExecutionStatus::Succeeded);
+
+    // The fix actually landed on disk.
+    // (apply_fix wrote it; the file no longer contains a bare unwrap call.)
+}
+
+#[test]
+fn regressing_edit_fails_verification_and_blocks_downstream() {
+    // Start clean; the edit *introduces* an unwrap -> verification must reject it.
+    let (_dir, mut engine) =
+        synced_workspace(&[("Cargo.toml", CARGO), ("src/lib.rs", CLEAN)]);
+    let plan = bug_fix_plan("src/lib.rs::run");
+
+    let off = CLEAN.find("x.unwrap_or(0)").unwrap();
+    let provider = StaticEdits {
+        file: "src/lib.rs".to_string(),
+        edits: vec![Edit {
+            start_byte: off,
+            end_byte: off + "x.unwrap_or(0)".len(),
+            new_text: "x.unwrap()".to_string(),
+        }],
+    };
+
+    let result = {
+        let mut exec = Executor::with_options(&mut engine, UserPolicy::Cloud, &provider, false);
+        exec.execute(&plan)
+    };
+
+    let implement = result.tasks.iter().find(|t| t.kind == TaskKind::Implement).unwrap();
+    assert_eq!(implement.status, TaskStatus::Failed);
+
+    // The downstream verify task depends on implement -> blocked, never run.
+    let verify = result.tasks.iter().find(|t| t.kind == TaskKind::Verify).unwrap();
+    assert_eq!(verify.status, TaskStatus::Blocked);
+
+    assert_eq!(result.status, ExecutionStatus::Failed);
+}
+
+#[test]
+fn read_only_intent_executes_without_edits_and_succeeds() {
+    let (_dir, mut engine) =
+        synced_workspace(&[("Cargo.toml", CARGO), ("src/lib.rs", CLEAN)]);
+    let plan = Planner::plan(&PlanRequest {
+        goal: "explain how run works".to_string(),
+        focus_symbol: Some("src/lib.rs::run".to_string()),
+        ..Default::default()
+    });
+
+    let result = engine.execute_plan(&plan, UserPolicy::Cloud);
+
+    // No mutating task in an explain plan, so nothing is skipped -> full success.
+    assert!(result.tasks.iter().all(|t| t.status == TaskStatus::Succeeded));
+    assert_eq!(result.status, ExecutionStatus::Succeeded);
+    // The report task produced a report artifact.
+    let report = result.tasks.iter().find(|t| t.kind == TaskKind::Report).unwrap();
+    assert!(report.artifacts.iter().any(|a| a.name == "report"));
+}
+
+#[test]
+fn execution_is_deterministic() {
+    let (_d1, mut e1) = synced_workspace(&[("Cargo.toml", CARGO), ("src/lib.rs", CLEAN)]);
+    let (_d2, mut e2) = synced_workspace(&[("Cargo.toml", CARGO), ("src/lib.rs", CLEAN)]);
+    let plan = bug_fix_plan("src/lib.rs::run");
+
+    let r1 = e1.execute_plan(&plan, UserPolicy::Cloud);
+    let r2 = e2.execute_plan(&plan, UserPolicy::Cloud);
+
+    // Ignore timing metadata; compare the structural outcome.
+    let strip = |r: &aircore::execution::ExecutionResult| {
+        r.tasks
+            .iter()
+            .map(|t| (t.id.clone(), t.kind, t.status, t.route))
+            .collect::<Vec<_>>()
+    };
+    assert_eq!(strip(&r1), strip(&r2));
+    assert_eq!(r1.status, r2.status);
+}

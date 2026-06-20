@@ -5,6 +5,7 @@
 
 pub mod context;
 pub mod detector;
+pub mod execution;
 pub mod inference;
 pub mod index;
 pub mod ipc;
