@@ -18,6 +18,7 @@ use tracing::{debug, info};
 use merkle::{build_snapshot, diff, mtime_to_ns, Candidate, Snapshot, SyncDelta};
 
 use crate::context::{BuildRequest, BuiltPrompt, ContextBuilder, Task};
+use crate::detector::{DetectorRegistry, Finding};
 use crate::retrieval::chunks::{chunk_file, Chunk};
 use crate::retrieval::embed::{Embedder, HashEmbedder};
 use crate::retrieval::lance_store::LanceVectorStore;
@@ -44,6 +45,8 @@ pub struct IndexEngine {
     /// logged so it's never a silent surprise.
     retriever: Option<HybridRetriever>,
     retrieval_cfg: RetrievalConfig,
+    /// Bug-finding rules run on demand via `diagnose` (the `/fix` foundation).
+    detectors: DetectorRegistry,
 }
 
 /// Selects which embedder + vector store the retriever uses. Default is the
@@ -99,7 +102,18 @@ impl IndexEngine {
             graph,
             retriever: None,
             retrieval_cfg: RetrievalConfig::default(),
+            detectors: DetectorRegistry::with_defaults(),
         })
+    }
+
+    /// Run the bug detectors over one workspace-relative file. Reads the file
+    /// fresh (the editor may have unsaved-then-saved it) and returns findings
+    /// sorted Critical-first. Powers a `diagnostics/file` request and, later,
+    /// `/fix @file:line`.
+    pub fn diagnose(&self, file: &str) -> Result<Vec<Finding>> {
+        let abs = self.workspace_root.join(file);
+        let source = fs::read(&abs).with_context(|| format!("reading {file} for diagnostics"))?;
+        self.detectors.analyze(file, source)
     }
 
     /// Override retrieval backends (Ollama embedder / LanceDB store). Invalidates

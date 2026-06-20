@@ -9,6 +9,7 @@
 //!   symbol/find      { name }            -> SymbolRow[]
 //!   symbol/callSites { name }            -> RefRow[]
 //!   context/completion { file, cursorByte, maxTokens?, query? } -> BuiltPrompt
+//!   diagnostics/file { file }           -> { file, findings: Finding[] }
 //!   retrieve         { query, k? }       -> RetrievedSnippet[]
 //!   telemetry/log    TelemetryEvent      -> (notification; opt-in, async sink)
 //!   shutdown         {}                  -> { ok: true }   (then exits)
@@ -52,6 +53,7 @@ impl Daemon {
             "symbol/find" => self.symbol_find(params),
             "symbol/callSites" => self.symbol_call_sites(params),
             "context/completion" => self.context_completion(params),
+            "diagnostics/file" => self.diagnostics_file(params),
             "retrieve" => self.retrieve(params),
             "telemetry/log" => self.telemetry_log(params),
             _ => Err(RpcError::new(
@@ -161,6 +163,19 @@ impl Daemon {
             .build_completion_context(&file, cursor_byte, max_tokens, query)
             .map_err(internal)?;
         serde_json::to_value(prompt).map_err(internal)
+    }
+
+    /// Run bug detectors over one file and return findings (severity, line,
+    /// message, before/after fix). The foundation for `/fix @file:line`.
+    fn diagnostics_file(&mut self, params: Value) -> std::result::Result<Value, RpcError> {
+        let file = params
+            .get("file")
+            .and_then(Value::as_str)
+            .ok_or_else(|| RpcError::new(ErrorCode::InvalidParams, "missing 'file' string param"))?
+            .to_string();
+        let engine = self.engine_mut()?;
+        let findings = engine.diagnose(&file).map_err(internal)?;
+        Ok(json!({ "file": file, "findings": serde_json::to_value(findings).map_err(internal)? }))
     }
 
     /// Retrieve top-k relevant snippets for a query (Cmd+K inline edit / chat).

@@ -4,6 +4,7 @@
 //! exposing them as a library lets integration tests drive the engine directly.
 
 pub mod context;
+pub mod detector;
 pub mod inference;
 pub mod index;
 pub mod ipc;
