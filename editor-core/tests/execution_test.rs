@@ -6,7 +6,9 @@
 
 use std::fs;
 
-use aircore::execution::{EditProvider, Executor, ExecutionStatus, FileEdits, TaskStatus};
+use aircore::execution::{
+    ArtifactKind, EditProvider, Executor, ExecutionEvent, ExecutionStatus, FileEdits, TaskState,
+};
 use aircore::index::{Edit, IndexEngine};
 use aircore::inference::{Model, UserPolicy};
 use aircore::planner::{PlanRequest, Planner, TaskKind};
@@ -64,9 +66,9 @@ fn default_runtime_runs_readonly_tasks_and_skips_mutating() {
 
     // Locate + Analyze run; Implement is skipped (no edits wired); Verify runs.
     let by_kind = |k: TaskKind| result.tasks.iter().find(|t| t.kind == k).unwrap();
-    assert_eq!(by_kind(TaskKind::Locate).status, TaskStatus::Succeeded);
-    assert_eq!(by_kind(TaskKind::Analyze).status, TaskStatus::Succeeded);
-    assert_eq!(by_kind(TaskKind::Implement).status, TaskStatus::Skipped);
+    assert_eq!(by_kind(TaskKind::Locate).state, TaskState::Succeeded);
+    assert_eq!(by_kind(TaskKind::Analyze).state, TaskState::Succeeded);
+    assert_eq!(by_kind(TaskKind::Implement).state, TaskState::Skipped);
 
     // The skipped implement task still selected a model (router ran at exec time).
     assert_eq!(by_kind(TaskKind::Implement).route.unwrap().model, Some(Model::Haiku45));
@@ -79,7 +81,7 @@ fn default_runtime_runs_readonly_tasks_and_skips_mutating() {
     // A skipped (not failed) task => Partial overall. The downstream verify task
     // defers too (nothing to verify), so two tasks are skipped.
     assert_eq!(result.status, ExecutionStatus::Partial);
-    assert_eq!(by_kind(TaskKind::Verify).status, TaskStatus::Skipped);
+    assert_eq!(by_kind(TaskKind::Verify).state, TaskState::Skipped);
     assert_eq!(result.metadata.tasks_skipped, 2);
     assert_eq!(result.metadata.policy, UserPolicy::Cloud);
 }
@@ -107,18 +109,23 @@ fn mutating_task_applies_and_passes_verification() {
     };
 
     let implement = result.tasks.iter().find(|t| t.kind == TaskKind::Implement).unwrap();
-    assert_eq!(implement.status, TaskStatus::Succeeded, "{:?}", implement);
+    assert_eq!(implement.state, TaskState::Succeeded, "{:?}", implement);
     assert_eq!(implement.modified_files, vec!["src/lib.rs".to_string()]);
     // Verification ran on the mutating task (detector diff) and was clean.
     assert!(implement.verification.iter().all(|c| c.status != aircore::execution::CheckStatus::Failed));
 
     // The explicit verify task passed too, and the whole run succeeded.
     let verify = result.tasks.iter().find(|t| t.kind == TaskKind::Verify).unwrap();
-    assert_eq!(verify.status, TaskStatus::Succeeded);
+    assert_eq!(verify.state, TaskState::Succeeded);
     assert_eq!(result.status, ExecutionStatus::Succeeded);
 
-    // The fix actually landed on disk.
-    // (apply_fix wrote it; the file no longer contains a bare unwrap call.)
+    // The verify task consumed the implement task's ModifiedFiles artifact and
+    // re-checked it: a detector check passed over the now-clean file.
+    assert!(verify.verification.iter().any(|c| c.kind == aircore::planner::VerificationKind::Detectors
+        && c.status == aircore::execution::CheckStatus::Passed));
+
+    // The implement task recorded a modified_files artifact downstream consumed.
+    assert!(implement.artifacts.iter().any(|a| a.kind == ArtifactKind::ModifiedFiles));
 }
 
 #[test]
@@ -144,11 +151,11 @@ fn regressing_edit_fails_verification_and_blocks_downstream() {
     };
 
     let implement = result.tasks.iter().find(|t| t.kind == TaskKind::Implement).unwrap();
-    assert_eq!(implement.status, TaskStatus::Failed);
+    assert_eq!(implement.state, TaskState::Failed);
 
     // The downstream verify task depends on implement -> blocked, never run.
     let verify = result.tasks.iter().find(|t| t.kind == TaskKind::Verify).unwrap();
-    assert_eq!(verify.status, TaskStatus::Blocked);
+    assert_eq!(verify.state, TaskState::Blocked);
 
     assert_eq!(result.status, ExecutionStatus::Failed);
 }
@@ -166,7 +173,7 @@ fn read_only_intent_executes_without_edits_and_succeeds() {
     let result = engine.execute_plan(&plan, UserPolicy::Cloud);
 
     // No mutating task in an explain plan, so nothing is skipped -> full success.
-    assert!(result.tasks.iter().all(|t| t.status == TaskStatus::Succeeded));
+    assert!(result.tasks.iter().all(|t| t.state == TaskState::Succeeded));
     assert_eq!(result.status, ExecutionStatus::Succeeded);
     // The report task produced a report artifact.
     let report = result.tasks.iter().find(|t| t.kind == TaskKind::Report).unwrap();
@@ -186,9 +193,107 @@ fn execution_is_deterministic() {
     let strip = |r: &aircore::execution::ExecutionResult| {
         r.tasks
             .iter()
-            .map(|t| (t.id.clone(), t.kind, t.status, t.route))
+            .map(|t| (t.id.clone(), t.kind, t.state, t.route))
             .collect::<Vec<_>>()
     };
     assert_eq!(strip(&r1), strip(&r2));
     assert_eq!(r1.status, r2.status);
+    // The event stream is deterministic too (ignoring per-task timing).
+    let ev = |r: &aircore::execution::ExecutionResult| {
+        r.events.iter().map(|e| serde_json::to_value(&e.event).unwrap()).collect::<Vec<_>>()
+    };
+    assert_eq!(ev(&r1), ev(&r2));
+}
+
+#[test]
+fn emits_lifecycle_and_artifact_events() {
+    let (_dir, mut engine) =
+        synced_workspace(&[("Cargo.toml", CARGO), ("src/lib.rs", BUGGY)]);
+    let plan = bug_fix_plan("src/lib.rs::run");
+    let result = engine.execute_plan(&plan, UserPolicy::Cloud);
+
+    // Event sequence numbers are monotonic from zero.
+    for (i, e) in result.events.iter().enumerate() {
+        assert_eq!(e.seq, i);
+    }
+
+    // The stream opens and closes with plan-level events.
+    assert!(matches!(result.events.first().map(|e| &e.event), Some(ExecutionEvent::PlanStarted { .. })));
+    assert!(matches!(result.events.last().map(|e| &e.event), Some(ExecutionEvent::PlanFinished { .. })));
+
+    // Lifecycle + artifact events were emitted.
+    let has = |pred: fn(&ExecutionEvent) -> bool| result.events.iter().any(|e| pred(&e.event));
+    assert!(has(|e| matches!(e, ExecutionEvent::TaskStarted { .. })));
+    assert!(has(|e| matches!(e, ExecutionEvent::TaskStateChanged { .. })));
+    assert!(has(|e| matches!(e, ExecutionEvent::TaskFinished { .. })));
+    assert!(has(|e| matches!(e, ExecutionEvent::ArtifactProduced { .. })));
+
+    // Every task that ran passed through Running at some point.
+    assert!(result.events.iter().any(|e| matches!(
+        &e.event,
+        ExecutionEvent::TaskStateChanged { to: TaskState::Running, .. }
+    )));
+}
+
+#[test]
+fn verifying_state_is_entered_for_mutating_tasks() {
+    let (_dir, mut engine) =
+        synced_workspace(&[("Cargo.toml", CARGO), ("src/lib.rs", BUGGY)]);
+    let plan = bug_fix_plan("src/lib.rs::run");
+    let off = BUGGY.find("x.unwrap()").unwrap();
+    let provider = StaticEdits {
+        file: "src/lib.rs".to_string(),
+        edits: vec![Edit {
+            start_byte: off,
+            end_byte: off + "x.unwrap()".len(),
+            new_text: "x.unwrap_or(0)".to_string(),
+        }],
+    };
+
+    let result = {
+        let mut exec = Executor::with_options(&mut engine, UserPolicy::Cloud, &provider, false);
+        exec.execute(&plan)
+    };
+
+    // The implement task transitioned into Verifying and emitted verification
+    // start/finish events.
+    assert!(result.events.iter().any(|e| matches!(
+        &e.event,
+        ExecutionEvent::TaskStateChanged { to: TaskState::Verifying, .. }
+    )));
+    assert!(result.events.iter().any(|e| matches!(&e.event, ExecutionEvent::VerificationStarted { .. })));
+    assert!(result.events.iter().any(|e| matches!(&e.event, ExecutionEvent::VerificationFinished { .. })));
+}
+
+#[test]
+fn pluggable_tool_overrides_default() {
+    use aircore::execution::{Tool, ToolCx, ToolOutcome, ToolRegistry};
+
+    // A custom Analyze tool that records a sentinel state instead of the default.
+    struct NoopAnalyze;
+    impl Tool for NoopAnalyze {
+        fn name(&self) -> &'static str {
+            "noop-analyze"
+        }
+        fn run(&self, _task: &aircore::planner::PlanTask, _cx: &mut ToolCx) -> ToolOutcome {
+            ToolOutcome::succeeded("custom analyze ran")
+        }
+    }
+
+    let (_dir, mut engine) =
+        synced_workspace(&[("Cargo.toml", CARGO), ("src/lib.rs", BUGGY)]);
+    let plan = bug_fix_plan("src/lib.rs::run");
+
+    let result = {
+        let mut reg = ToolRegistry::with_defaults();
+        reg.register(TaskKind::Analyze, Box::new(NoopAnalyze));
+        let mut exec = Executor::new(&mut engine, UserPolicy::Cloud);
+        exec.set_registry(reg);
+        exec.execute(&plan)
+    };
+
+    let analyze = result.tasks.iter().find(|t| t.kind == TaskKind::Analyze).unwrap();
+    assert_eq!(analyze.summary, "custom analyze ran");
+    // The custom tool produced no diagnostics (unlike the default analyzer).
+    assert!(analyze.diagnostics.is_empty());
 }
