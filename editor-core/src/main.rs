@@ -17,6 +17,7 @@
 //!   fix/apply        { file, edits, dryRun? } -> FixOutcome (verified patch)
 //!   detectors/list   {}                  -> { detectors: RuleMetadata[] }
 //!   plan/create      { goal, focusSymbol?, files?, maxTokens? } -> Plan (DAG + schedule)
+//!   plan/execute     { goal, focusSymbol?, files?, maxTokens?, policy? } -> ExecutionResult
 //!   retrieve         { query, k? }       -> RetrievedSnippet[]
 //!   telemetry/log    TelemetryEvent      -> (notification; opt-in, async sink)
 //!   shutdown         {}                  -> { ok: true }   (then exits)
@@ -69,6 +70,7 @@ impl Daemon {
             "fix/apply" => self.fix_apply(params),
             "detectors/list" => self.detectors_list(),
             "plan/create" => self.plan_create(params),
+            "plan/execute" => self.plan_execute(params),
             "retrieve" => self.retrieve(params),
             "telemetry/log" => self.telemetry_log(params),
             _ => Err(RpcError::new(
@@ -153,6 +155,30 @@ impl Daemon {
         }
         let engine = self.engine_mut()?;
         serde_json::to_value(engine.plan(&req)).map_err(internal)
+    }
+
+    /// Plan a request and execute it deterministically. `{ goal, focusSymbol?,
+    /// files?, maxTokens?, policy? }` -> ExecutionResult. Uses the default
+    /// runtime (no edits wired): non-mutating tasks run for real, mutating tasks
+    /// report `skipped`. Model selection per task is recorded in each task's
+    /// `route`. `policy` is one of "air_gap" | "compliance" | "cloud".
+    fn plan_execute(&mut self, params: Value) -> std::result::Result<Value, RpcError> {
+        use aircore::inference::UserPolicy;
+        use aircore::planner::PlanRequest;
+        let req: PlanRequest = serde_json::from_value(params.clone())
+            .map_err(|e| RpcError::new(ErrorCode::InvalidParams, e.to_string()))?;
+        if req.goal.trim().is_empty() {
+            return Err(RpcError::new(ErrorCode::InvalidParams, "missing or empty 'goal'"));
+        }
+        let policy = match params.get("policy").and_then(Value::as_str).unwrap_or("cloud") {
+            "air_gap" => UserPolicy::AirGap,
+            "compliance" => UserPolicy::Compliance,
+            _ => UserPolicy::Cloud,
+        };
+        let engine = self.engine_mut()?;
+        let plan = engine.plan(&req);
+        let result = engine.execute_plan(&plan, policy);
+        serde_json::to_value(result).map_err(internal)
     }
 
     /// Record a batched interaction event (notification, no response). Off the

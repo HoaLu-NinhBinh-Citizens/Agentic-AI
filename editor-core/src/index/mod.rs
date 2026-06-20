@@ -20,6 +20,8 @@ use merkle::{build_snapshot, diff, mtime_to_ns, Candidate, Snapshot, SyncDelta};
 
 use crate::context::{BuildRequest, BuiltPrompt, SemanticContextBuilder, Task};
 use crate::detector::{DetectorConfig, DetectorRegistry, Finding, RuleMetadata};
+use crate::execution::{ExecutionResult, Executor};
+use crate::inference::UserPolicy;
 use crate::planner::{Plan, PlanRequest, Planner};
 use crate::retrieval::chunks::{chunk_file, Chunk};
 use crate::retrieval::embed::{Embedder, HashEmbedder};
@@ -342,6 +344,18 @@ impl IndexEngine {
     /// *requests*, it does not resolve them (no symbol lookup, no LLM).
     pub fn plan(&self, req: &PlanRequest) -> Plan {
         Planner::plan(req)
+    }
+
+    /// Execute a plan with the deterministic default runtime ([`NoEdits`]): every
+    /// non-mutating task runs for real (context assembly, detectors, verification)
+    /// and mutating tasks are reported `Skipped` (no model wired yet). Model
+    /// selection per task happens here, at execution time. For a runtime that
+    /// supplies edits, construct an [`Executor`] directly with an `EditProvider`.
+    ///
+    /// [`NoEdits`]: crate::execution::NoEdits
+    /// [`Executor`]: crate::execution::Executor
+    pub fn execute_plan(&mut self, plan: &Plan, policy: UserPolicy) -> ExecutionResult {
+        Executor::new(self, policy).execute(plan)
     }
 
     /// Parse + chunk the given workspace-relative paths (skipping non-code).
