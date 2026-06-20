@@ -105,6 +105,22 @@ impl Lang {
         }
     }
 
+    /// Query capturing import statements for cross-file resolution. Captures are
+    /// language-tagged (`use.arg` / `py.import` / `c.include`) so `extract_imports`
+    /// knows how to parse each one's path text.
+    pub fn imports_query(self) -> &'static str {
+        match self {
+            Lang::Rust => r#"(use_declaration argument: (_) @use.arg)"#,
+            Lang::Python => {
+                r#"
+                (import_statement) @py.import
+                (import_from_statement) @py.import
+                "#
+            }
+            Lang::C | Lang::Cpp => r#"(preproc_include path: (_) @c.include)"#,
+        }
+    }
+
     /// Query whose `@ref.call` capture is the callee name at a call site.
     pub fn refs_query(self) -> &'static str {
         match self {

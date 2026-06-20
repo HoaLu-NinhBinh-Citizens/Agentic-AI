@@ -9,6 +9,7 @@ pub mod extract;
 pub mod lang;
 pub mod store;
 
+use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::time::{Instant, SystemTime, UNIX_EPOCH};
 
@@ -18,9 +19,9 @@ use serde::Serialize;
 use tracing::{debug, info, warn};
 
 use classifier::{classify, EditKind, EditSite, EditSuggestion, Replacement};
-use extract::{extract, SymbolDef, SymbolRef};
+use extract::{extract, extract_imports, Import, SymbolDef, SymbolRef};
 use lang::Lang;
-use store::{RefRow, SymbolRow, SymbolStore};
+use store::{DefRecord, ImportRow, RefName, RefRow, SymbolRow, SymbolStore};
 
 const SYMBOLS_DB: &str = ".agentic/index/symbols.db";
 
@@ -54,6 +55,7 @@ struct Parsed {
     lang: Lang,
     defs: Vec<SymbolDef>,
     refs: Vec<SymbolRef>,
+    imports: Vec<Import>,
 }
 
 fn now_ms() -> i64 {
@@ -96,7 +98,10 @@ impl SymbolGraph {
                 let source = std::fs::read(&abs).ok()?;
                 match extract(*lang, &source) {
                     Ok((defs, refs)) => {
-                        Some(Parsed { file: file.clone(), lang: *lang, defs, refs })
+                        // Imports are best-effort: a parse hiccup here shouldn't
+                        // drop the file's symbols, just its import edges.
+                        let imports = extract_imports(*lang, &source).unwrap_or_default();
+                        Some(Parsed { file: file.clone(), lang: *lang, defs, refs, imports })
                     }
                     Err(e) => {
                         debug!(file, error = %e, "extract failed; skipping");
@@ -112,16 +117,20 @@ impl SymbolGraph {
         let indexed_at = now_ms();
         let mut stats = SymbolSyncStats::default();
         let mut suggestions = Vec::new();
+        let mut crate_cache: HashMap<String, String> = HashMap::new();
         for p in &parsed {
             let old_defs = self.store.symbols_of_file(&p.file)?;
             let content_hash = hash_of(&p.file).unwrap_or_default();
+            let crate_root = self.crate_root_for(&p.file, &mut crate_cache);
             self.store.upsert_file(
                 &p.file,
                 p.lang.name(),
                 &content_hash,
                 indexed_at,
+                &crate_root,
                 &p.defs,
                 &p.refs,
+                &p.imports,
             )?;
             stats.files_parsed += 1;
             stats.symbols += p.defs.len();
@@ -227,5 +236,64 @@ impl SymbolGraph {
 
     pub fn symbol_count(&self) -> Result<usize> {
         self.store.symbol_count()
+    }
+
+    /// Workspace root, so the semantic engine can read a definition's source.
+    pub fn workspace_root(&self) -> &Path {
+        &self.workspace_root
+    }
+
+    /// Nearest-ancestor crate root for a workspace-relative `file`: walk up its
+    /// directory chain for the first dir holding a `Cargo.toml`. Returns the
+    /// workspace-relative dir (`""` = workspace root crate, or no crate). Memoized
+    /// per directory across one sync.
+    fn crate_root_for(&self, file: &str, cache: &mut HashMap<String, String>) -> String {
+        let dir = file.rsplit_once('/').map(|(d, _)| d).unwrap_or("");
+        if let Some(c) = cache.get(dir) {
+            return c.clone();
+        }
+        let mut cur = dir.to_string();
+        let root = loop {
+            let manifest = if cur.is_empty() {
+                self.workspace_root.join("Cargo.toml")
+            } else {
+                self.workspace_root.join(&cur).join("Cargo.toml")
+            };
+            if manifest.is_file() {
+                break cur.clone();
+            }
+            if cur.is_empty() {
+                break String::new();
+            }
+            cur = cur.rsplit_once('/').map(|(d, _)| d.to_string()).unwrap_or_default();
+        };
+        cache.insert(dir.to_string(), root.clone());
+        root
+    }
+
+    // ---- semantic-layer primitives (consumed by the semantic engine) -------
+
+    pub fn resolve_candidates(&self, name: &str) -> Result<Vec<DefRecord>> {
+        self.store.resolve_candidates(name)
+    }
+
+    pub fn def_by_qname(&self, qname: &str) -> Result<Option<DefRecord>> {
+        self.store.def_by_qname(qname)
+    }
+
+    pub fn def_at(&self, file: &str, byte: usize) -> Result<Option<DefRecord>> {
+        self.store.def_at(file, byte)
+    }
+
+    pub fn refs_in_symbol(&self, symbol_id: i64) -> Result<Vec<RefName>> {
+        self.store.refs_in_symbol(symbol_id)
+    }
+
+    pub fn imports_of_file(&self, file: &str) -> Result<Vec<ImportRow>> {
+        self.store.imports_of_file(file)
+    }
+
+    pub fn crate_root_of(&self, file: &str) -> Result<Option<String>> {
+        self.store.crate_root_of(file)
     }
 }
