@@ -23,6 +23,7 @@
 
 use serde::{Deserialize, Serialize};
 
+use crate::capability::Capability;
 use crate::semantic::FocusSpec;
 
 /// Default per-task context budget (tokens) when the request doesn't set one.
@@ -63,7 +64,11 @@ impl Intent {
     }
 }
 
-/// What kind of step a task is. The Execution Engine dispatches on this.
+/// The concrete tool identity a capability orchestrates. The [`ToolRegistry`] is
+/// keyed by this, and the runtime records which kind actually ran. The Planner
+/// requests a [`Capability`] instead; the Capability Layer maps it to these.
+///
+/// [`ToolRegistry`]: crate::execution::ToolRegistry
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum TaskKind {
@@ -133,7 +138,9 @@ pub struct ContextPlan {
 pub struct PlanTask {
     /// Stable id within this plan (`"t1"`, `"t2"`, …). Referenced by `depends_on`.
     pub id: String,
-    pub kind: TaskKind,
+    /// The capability this task requests. The Capability Layer resolves it to
+    /// concrete tool(s); the Planner never names a tool.
+    pub capability: Capability,
     pub title: String,
     pub description: String,
     /// The context this task requests, independently of every other task.
@@ -305,7 +312,7 @@ impl<'a> TaskListBuilder<'a> {
     /// Append a task, returning its id so callers can wire dependencies.
     fn push(
         &mut self,
-        kind: TaskKind,
+        capability: Capability,
         title: &str,
         description: &str,
         context: ContextPlan,
@@ -317,7 +324,7 @@ impl<'a> TaskListBuilder<'a> {
         let id = format!("t{}", self.next);
         self.tasks.push(PlanTask {
             id: id.clone(),
-            kind,
+            capability,
             title: title.to_string(),
             description: description.to_string(),
             context,
@@ -330,7 +337,7 @@ impl<'a> TaskListBuilder<'a> {
 
     fn bug_fix(mut self) -> Vec<PlanTask> {
         let locate = self.push(
-            TaskKind::Locate,
+            Capability::ReadCode,
             "Locate the defect",
             "Resolve the focus symbol and its callees to pin where the wrong \
              behavior originates.",
@@ -340,7 +347,7 @@ impl<'a> TaskListBuilder<'a> {
             false,
         );
         let diagnose = self.push(
-            TaskKind::Analyze,
+            Capability::AnalyzeCode,
             "Diagnose the root cause",
             "Run detectors over the located code and read the resolved context \
              to identify the faulty logic.",
@@ -353,7 +360,7 @@ impl<'a> TaskListBuilder<'a> {
             false,
         );
         let fix = self.push(
-            TaskKind::Implement,
+            Capability::ModifyCode,
             "Apply the fix",
             "Produce a minimal edit that corrects the root cause without changing \
              unrelated behavior.",
@@ -363,7 +370,7 @@ impl<'a> TaskListBuilder<'a> {
             true,
         );
         self.push(
-            TaskKind::Verify,
+            Capability::VerifyCode,
             "Verify the fix",
             "Confirm the fix compiles, clears the targeted findings, passes tests, \
              and introduces no regression.",
@@ -377,7 +384,7 @@ impl<'a> TaskListBuilder<'a> {
 
     fn feature(mut self) -> Vec<PlanTask> {
         let locate = self.push(
-            TaskKind::Locate,
+            Capability::ReadCode,
             "Locate insertion points",
             "Find the modules and symbols the new capability hooks into.",
             self.ctx(false),
@@ -386,7 +393,7 @@ impl<'a> TaskListBuilder<'a> {
             false,
         );
         let design = self.push(
-            TaskKind::Analyze,
+            Capability::AnalyzeCode,
             "Design the change",
             "Read the resolved context and decide the shape of the new code \
              (signatures, call sites, data flow).",
@@ -396,7 +403,7 @@ impl<'a> TaskListBuilder<'a> {
             false,
         );
         let implement = self.push(
-            TaskKind::Implement,
+            Capability::ModifyCode,
             "Implement the feature",
             "Produce the edits that add the capability, following existing \
              patterns in the located code.",
@@ -406,7 +413,7 @@ impl<'a> TaskListBuilder<'a> {
             true,
         );
         self.push(
-            TaskKind::Verify,
+            Capability::VerifyCode,
             "Verify the feature",
             "Confirm the new code compiles and the test suite passes.",
             self.ctx_workspace(),
@@ -422,7 +429,7 @@ impl<'a> TaskListBuilder<'a> {
 
     fn refactor(mut self) -> Vec<PlanTask> {
         let locate = self.push(
-            TaskKind::Locate,
+            Capability::ReadCode,
             "Locate the refactor target",
             "Resolve the target symbol and everything that depends on it so the \
              change set is complete.",
@@ -432,7 +439,7 @@ impl<'a> TaskListBuilder<'a> {
             false,
         );
         let plan_transform = self.push(
-            TaskKind::Analyze,
+            Capability::AnalyzeCode,
             "Plan the transformation",
             "Decide the structural change and enumerate every call site that must \
              move with it.",
@@ -442,7 +449,7 @@ impl<'a> TaskListBuilder<'a> {
             false,
         );
         let apply = self.push(
-            TaskKind::Implement,
+            Capability::ModifyCode,
             "Apply the refactor",
             "Produce the edits that restructure the code while preserving behavior.",
             self.ctx(true),
@@ -451,7 +458,7 @@ impl<'a> TaskListBuilder<'a> {
             true,
         );
         self.push(
-            TaskKind::Verify,
+            Capability::VerifyCode,
             "Verify behavior is preserved",
             "Confirm the refactor compiles, clears detectors, passes tests, and \
              changes no observable behavior.",
@@ -465,7 +472,7 @@ impl<'a> TaskListBuilder<'a> {
 
     fn review(mut self) -> Vec<PlanTask> {
         let locate = self.push(
-            TaskKind::Locate,
+            Capability::ReadCode,
             "Locate the code under review",
             "Resolve the focus symbol and its dependencies into review scope.",
             self.ctx(false),
@@ -474,7 +481,7 @@ impl<'a> TaskListBuilder<'a> {
             false,
         );
         let analyze = self.push(
-            TaskKind::Analyze,
+            Capability::AnalyzeCode,
             "Analyze for issues",
             "Run detectors and inspect the resolved context for bugs, risks, and \
              smells.",
@@ -487,7 +494,7 @@ impl<'a> TaskListBuilder<'a> {
             false,
         );
         self.push(
-            TaskKind::Report,
+            Capability::Report,
             "Report findings",
             "Summarize the review: findings, severity, and suggested fixes. No \
              edits are applied.",
@@ -501,7 +508,7 @@ impl<'a> TaskListBuilder<'a> {
 
     fn explain(mut self) -> Vec<PlanTask> {
         let locate = self.push(
-            TaskKind::Locate,
+            Capability::ReadCode,
             "Locate the subject",
             "Resolve the focus symbol and the callees it depends on.",
             self.ctx(false),
@@ -510,7 +517,7 @@ impl<'a> TaskListBuilder<'a> {
             false,
         );
         let gather = self.push(
-            TaskKind::Analyze,
+            Capability::AnalyzeCode,
             "Gather supporting context",
             "Pull the resolved callee bodies and imports needed to explain the \
              behavior end to end.",
@@ -520,7 +527,7 @@ impl<'a> TaskListBuilder<'a> {
             false,
         );
         self.push(
-            TaskKind::Report,
+            Capability::Report,
             "Explain",
             "Produce the explanation from the gathered context. No edits are \
              applied.",
