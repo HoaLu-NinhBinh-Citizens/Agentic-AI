@@ -19,11 +19,14 @@
 //!   tests / regression are seams reported as `Skipped` until a runner exists).
 //!
 //! This milestone is deterministic: no retry, no reflection, no replanning, no
-//! memory, no multi-agent. The one variation point a future milestone fills —
-//! turning assembled context into actual edits via the LLM — is the
-//! [`EditProvider`] seam. Its default ([`NoEdits`]) produces nothing, so a
-//! mutating task without a wired model is reported `Skipped` (honestly, never
-//! fabricated).
+//! memory, no multi-agent. The one variation point — turning assembled context
+//! into actual edits via the LLM — lives below this layer in the
+//! [`Model Runtime`](crate::model_runtime), reached through its
+//! [`ModelBackend`] port. Its default ([`NullBackend`], or a [`ModelRuntime`] with
+//! no real provider) produces nothing, so a mutating task without a wired model is
+//! reported `Skipped` (honestly, never fabricated).
+//!
+//! [`ModelRuntime`]: crate::model_runtime::ModelRuntime
 
 use std::time::Instant;
 
@@ -34,7 +37,9 @@ use crate::capability::CapabilityLayer;
 use crate::context::{BuildRequest, BuiltPrompt, Task as CtxTask};
 use crate::detector::Finding;
 use crate::index::{Edit, IndexEngine};
-use crate::inference::{self, Route, Task as InfTask, UserPolicy};
+use crate::inference::{Route, UserPolicy};
+use crate::model_runtime::dto::{ModelEdit, ModelTask, OutputExpectation, PromptContext};
+use crate::model_runtime::ModelBackend;
 use crate::planner::{
     ContextPlan, Intent, Plan, PlanTask, TaskKind, VerificationCheck, VerificationKind,
 };
@@ -90,33 +95,44 @@ impl TaskState {
     }
 }
 
-// ───────────────────────────── Edit provider seam ──────────────────────────
+// ──────────────────────── Model Runtime boundary adapters ───────────────────
 
-/// Edits a mutating task wants applied, grouped per file. The Execution Engine
-/// applies these through the verifying [`IndexEngine::apply_fix`] path.
-#[derive(Debug, Clone)]
-pub struct FileEdits {
-    pub file: String,
-    pub edits: Vec<Edit>,
-}
-
-/// The seam between "assembled context" and "concrete edits". In this milestone
-/// the default is [`NoEdits`] (deterministic, no LLM). A future milestone plugs
-/// a model client in here without touching the runtime.
-pub trait EditProvider {
-    /// Given a mutating task and the context assembled for it, return the edits
-    /// to apply, or `None` when no edits are available.
-    fn edits_for(&self, task: &PlanTask, context: Option<&BuiltPrompt>) -> Option<Vec<FileEdits>>;
-}
-
-/// Default provider: produces no edits. Mutating tasks become `Skipped` with the
-/// assembled context preserved as an artifact (the request a model would fill).
-pub struct NoEdits;
-
-impl EditProvider for NoEdits {
-    fn edits_for(&self, _task: &PlanTask, _context: Option<&BuiltPrompt>) -> Option<Vec<FileEdits>> {
-        None
+/// Adapt a [`PlanTask`] into the Model Runtime's neutral [`ModelTask`]. This is
+/// the one place planner/capability detail is translated into the runtime's
+/// vocabulary; the runtime never sees a `PlanTask`. The capability owns both the
+/// routing input ([`Capability::inference_task`]) and the model directive
+/// ([`Capability::model_directive`]), so routing has a single source.
+///
+/// [`Capability::inference_task`]: crate::capability::Capability::inference_task
+/// [`Capability::model_directive`]: crate::capability::Capability::model_directive
+pub fn model_task(task: &PlanTask) -> ModelTask {
+    let cap = task.capability;
+    ModelTask {
+        id: task.id.clone(),
+        capability: cap.as_str().to_string(),
+        directive: cap.model_directive().to_string(),
+        request: task.description.clone(),
+        inference_task: cap.inference_task(),
+        // Only the mutating capability returns a structured edit set; every other
+        // capability (analyze / report) produces free-form text.
+        expectation: if cap.mutates() { OutputExpectation::Edits } else { OutputExpectation::Text },
     }
+}
+
+/// Adapt the Semantic Engine's [`BuiltPrompt`] into the runtime's neutral
+/// [`PromptContext`].
+pub fn prompt_context(prompt: &BuiltPrompt) -> PromptContext {
+    PromptContext { text: prompt.text.clone(), mode: prompt.mode.to_string() }
+}
+
+/// Adapt a model-produced [`ModelEdit`] back into the index engine's [`Edit`]s for
+/// the verifying [`IndexEngine::apply_fix`] path. The runtime produces edits; the
+/// Execution Runtime applies them.
+fn to_engine_edits(edit: &ModelEdit) -> Vec<Edit> {
+    edit.spans
+        .iter()
+        .map(|s| Edit { start_byte: s.start_byte, end_byte: s.end_byte, new_text: s.new_text.clone() })
+        .collect()
 }
 
 // ───────────────────────────── Verification types ──────────────────────────
@@ -346,7 +362,7 @@ pub struct ExecutionResult {
 pub struct ToolCx<'a> {
     pub engine: &'a mut IndexEngine,
     pub policy: UserPolicy,
-    pub edits: &'a dyn EditProvider,
+    pub model: &'a dyn ModelBackend,
     /// Apply edits to disk (`false`) or only compute + verify them (`true`).
     pub dry_run: bool,
     /// Artifacts produced by upstream tasks (read-only).
@@ -564,21 +580,24 @@ impl Tool for ImplementTool {
             ));
         }
 
-        // The model seam: turn context into edits. Default => none.
-        let Some(file_edits) = cx.edits.edits_for(task, prompt.as_ref()) else {
+        // The Model Runtime: turn context into validated edits. Default => none.
+        let mtask = model_task(task);
+        let pctx = prompt.as_ref().map(prompt_context);
+        let Some(model_edits) = cx.model.run_for_edits(&mtask, pctx.as_ref()) else {
             o.state = TaskState::Skipped;
-            o.summary = "no edits produced (model seam not wired)".to_string();
+            o.summary = "no edits produced (no model wired or response rejected)".to_string();
             return o;
         };
 
         let mut all_clean = true;
         let mut touched: Vec<String> = Vec::new();
-        for fe in &file_edits {
-            touched.push(fe.file.clone());
-            match cx.engine.apply_fix(&fe.file, &fe.edits, cx.dry_run) {
+        for me in &model_edits {
+            touched.push(me.file.clone());
+            let engine_edits = to_engine_edits(me);
+            match cx.engine.apply_fix(&me.file, &engine_edits, cx.dry_run) {
                 Ok(outcome) => {
                     if outcome.applied {
-                        o.modified_files.push(fe.file.clone());
+                        o.modified_files.push(me.file.clone());
                     }
                     let clean = outcome.introduced.is_empty();
                     all_clean &= clean;
@@ -587,7 +606,7 @@ impl Tool for ImplementTool {
                         status: if clean { CheckStatus::Passed } else { CheckStatus::Failed },
                         detail: format!(
                             "{}: resolved {}, introduced {}",
-                            fe.file,
+                            me.file,
                             outcome.resolved.len(),
                             outcome.introduced.len()
                         ),
@@ -601,7 +620,7 @@ impl Tool for ImplementTool {
                     o.verification.push(CheckResult {
                         kind: VerificationKind::Detectors,
                         status: CheckStatus::Failed,
-                        detail: format!("{}: apply failed: {e}", fe.file),
+                        detail: format!("{}: apply failed: {e}", me.file),
                     });
                 }
             }
@@ -722,7 +741,7 @@ impl Artifact {
 pub struct Executor<'a> {
     engine: &'a mut IndexEngine,
     policy: UserPolicy,
-    edits: &'a dyn EditProvider,
+    model: &'a dyn ModelBackend,
     dry_run: bool,
     registry: ToolRegistry,
     capabilities: CapabilityLayer,
@@ -731,24 +750,23 @@ pub struct Executor<'a> {
 }
 
 impl<'a> Executor<'a> {
-    /// Executor with the deterministic default ([`NoEdits`]): mutating tasks are
-    /// skipped (no model wired), everything else runs for real.
-    pub fn new(engine: &'a mut IndexEngine, policy: UserPolicy) -> Self {
-        Self::with_options(engine, policy, &NoEdits, false)
-    }
-
-    /// Full control: supply an [`EditProvider`] (the future model seam) and choose
-    /// whether mutating edits are written (`dry_run = false`) or only verified.
-    pub fn with_options(
+    /// Executor over an explicit [`ModelBackend`]. Supply
+    /// [`NullBackend`](crate::model_runtime::NullBackend) (or a
+    /// [`ModelRuntime`] with no real provider) for the deterministic default where
+    /// mutating tasks are skipped; choose whether edits are written
+    /// (`dry_run = false`) or only computed + verified.
+    ///
+    /// [`ModelRuntime`]: crate::model_runtime::ModelRuntime
+    pub fn with_backend(
         engine: &'a mut IndexEngine,
         policy: UserPolicy,
-        edits: &'a dyn EditProvider,
+        model: &'a dyn ModelBackend,
         dry_run: bool,
     ) -> Self {
         Self {
             engine,
             policy,
-            edits,
+            model,
             dry_run,
             registry: ToolRegistry::with_defaults(),
             capabilities: CapabilityLayer::new(),
@@ -852,7 +870,10 @@ impl<'a> Executor<'a> {
         // The capability names the work; its primary tool kind drives model
         // routing and labels the recorded execution.
         let kind = task.capability.primary_kind();
-        let route = route_for(kind, self.policy);
+        // Routing is the Model Runtime's single decision; the executor only asks.
+        // Keep the prior contract: a no-model task records no route (None).
+        let resolved = self.model.route_for(&model_task(task), self.policy);
+        let route = resolved.model.map(|_| resolved);
 
         self.transition(&task.id, TaskState::Ready, TaskState::Running);
         self.log.emit(ExecutionEvent::TaskStarted { task: task.id.clone(), kind });
@@ -864,7 +885,7 @@ impl<'a> Executor<'a> {
             let mut cx = ToolCx {
                 engine: &mut *self.engine,
                 policy: self.policy,
-                edits: self.edits,
+                model: self.model,
                 dry_run: self.dry_run,
                 upstream: &self.artifacts,
             };
@@ -925,23 +946,6 @@ impl<'a> Executor<'a> {
 }
 
 // ───────────────────────────── Free helpers ────────────────────────────────
-
-/// Which inference task (if any) a kind corresponds to. Context-only and
-/// verification steps need no model.
-fn inference_task(kind: TaskKind) -> Option<InfTask> {
-    match kind {
-        TaskKind::Locate => None,
-        TaskKind::Analyze => Some(InfTask::Chat),
-        TaskKind::Implement => Some(InfTask::Apply),
-        TaskKind::Verify => None,
-        TaskKind::Report => Some(InfTask::Chat),
-    }
-}
-
-/// Resolve the model route for a task kind under a policy (at execution time).
-fn route_for(kind: TaskKind, policy: UserPolicy) -> Option<Route> {
-    inference_task(kind).map(|t| inference::plan(policy, t))
-}
 
 /// The workspace file a focus names: the location's file, or the qualified
 /// name's `file::…` prefix for a symbol focus.

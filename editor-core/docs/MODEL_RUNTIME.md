@@ -21,7 +21,8 @@ responsibility each.
 
 | Module          | Responsibility                                                        |
 | --------------- | --------------------------------------------------------------------- |
-| `selection`     | Which model, on which endpoint — wraps the ADR-003 inference router.   |
+| `dto`           | Neutral DTOs (`ModelTask`, `PromptContext`, `ModelEdit`) the runtime speaks in. |
+| `selection`     | Which model, on which endpoint — the single caller of the ADR-003 router. |
 | `prompt`        | Assembles the structured `Prompt` object (not a string).              |
 | `provider`      | The common `ModelProvider` interface + token streaming.              |
 | `invocation`    | Resolves model → provider and drives one generation.                 |
@@ -65,15 +66,38 @@ response could end in a partial-but-plausible edit), and only then yields
 `apply_fix` path then re-checks bounds and the detector diff. A rejected response
 yields no edits; the task is honestly skipped, never retried or fabricated.
 
-## How it plugs in without changing the Execution Runtime
+## Dependency direction & the `ModelBackend` port
 
-The executor already owns the seam that turns assembled context into concrete
-edits: the `EditProvider` trait. `ModelRuntime` *is* the real implementation of
-that seam. The executor is constructed exactly as before —
-`Executor::with_options(engine, policy, &model_runtime, dry_run)` — so the
-Planner, Capability Layer, Tool Registry, and Execution Runtime are untouched.
-What was a `NoEdits` stub is now: select → assemble → invoke → stream → validate,
-with validated edits flowing back through the executor's verifying apply path.
+The Model Runtime depends on nothing above it. It speaks only in its own neutral
+DTOs and exposes one port, `ModelBackend`:
+
+```rust
+trait ModelBackend {
+    fn generate_edits(&self, task: &ModelTask, ctx: Option<&PromptContext>) -> Option<Vec<ModelEdit>>;
+    fn route_for(&self, task: &ModelTask, policy: UserPolicy) -> Route { ModelSelector::select(task, policy) }
+}
+```
+
+The **Execution Runtime depends on the Model Runtime** (correct direction): it
+adapts its `PlanTask`/`BuiltPrompt` *into* `ModelTask`/`PromptContext`, calls the
+port, and adapts `ModelEdit`s *back* into its own apply type (`execution::model_task`,
+`execution::prompt_context`, `execution::to_engine_edits`). The runtime never
+imports a planner, capability, or execution type — only `inference`, the
+foundational router it integrates.
+
+## Routing lives in one place
+
+`Capability::inference_task()` is the **single** mapping from intent to the
+router's vocabulary; `ModelSelector::select` is the **single** caller of
+`inference::plan`. The executor no longer routes — it asks `model.route_for(...)`.
+So "which model" is decided exactly once and cannot drift.
+
+## Wired into production
+
+`IndexEngine::execute_plan` constructs a real `ModelRuntime` (default
+`NullProvider`) and runs the executor against it via `Executor::with_backend`. The
+live JSON-RPC `plan/execute` path therefore flows through the Model Runtime today;
+registering a real provider is the only remaining step to produce edits.
 
 ## Scope
 

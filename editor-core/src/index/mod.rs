@@ -21,6 +21,7 @@ use merkle::{build_snapshot, diff, mtime_to_ns, Candidate, Snapshot, SyncDelta};
 use crate::context::{BuildRequest, BuiltPrompt, SemanticContextBuilder, Task};
 use crate::detector::{DetectorConfig, DetectorRegistry, Finding, RuleMetadata};
 use crate::execution::{ExecutionResult, Executor};
+use crate::model_runtime::ModelRuntime;
 use crate::inference::UserPolicy;
 use crate::planner::{Plan, PlanRequest, Planner};
 use crate::retrieval::chunks::{chunk_file, Chunk};
@@ -346,16 +347,21 @@ impl IndexEngine {
         Planner::plan(req)
     }
 
-    /// Execute a plan with the deterministic default runtime ([`NoEdits`]): every
-    /// non-mutating task runs for real (context assembly, detectors, verification)
-    /// and mutating tasks are reported `Skipped` (no model wired yet). Model
-    /// selection per task happens here, at execution time. For a runtime that
-    /// supplies edits, construct an [`Executor`] directly with an `EditProvider`.
+    /// Execute a plan through the Model Runtime. The runtime is the live model
+    /// layer: every non-mutating task runs for real (context assembly, detectors,
+    /// verification) and mutating tasks go select → assemble → invoke → validate.
+    /// With the default ([`ProviderRegistry::with_defaults`]) providers no real
+    /// model is wired, so mutating tasks are reported `Skipped` (honest, never
+    /// fabricated) — but the production path now flows through the Model Runtime.
+    /// Register a real provider via [`ModelRuntime::with_providers`] and call
+    /// [`Executor::with_backend`] to produce edits.
     ///
-    /// [`NoEdits`]: crate::execution::NoEdits
-    /// [`Executor`]: crate::execution::Executor
+    /// [`ProviderRegistry::with_defaults`]: crate::model_runtime::provider::ProviderRegistry::with_defaults
+    /// [`ModelRuntime::with_providers`]: crate::model_runtime::ModelRuntime::with_providers
+    /// [`Executor::with_backend`]: crate::execution::Executor::with_backend
     pub fn execute_plan(&mut self, plan: &Plan, policy: UserPolicy) -> ExecutionResult {
-        Executor::new(self, policy).execute(plan)
+        let runtime = ModelRuntime::new(policy);
+        Executor::with_backend(self, policy, &runtime, false).execute(plan)
     }
 
     /// Parse + chunk the given workspace-relative paths (skipping non-code).

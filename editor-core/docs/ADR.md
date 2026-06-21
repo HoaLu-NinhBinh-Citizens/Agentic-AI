@@ -115,13 +115,27 @@ component with a lifecycle.
 - **Validation gates every mutation**: malformed, empty, or truncated output is
   rejected before any edit reaches the workspace. The executor's `apply_fix` diff
   is the second gate.
-- The Model Runtime *is* the executor's existing `EditProvider` seam, so the
-  Planner, Capability Layer, Tool Registry, and Execution Runtime are unchanged.
+- **Dependency direction is inverted via neutral DTOs.** The Model Runtime owns
+  `ModelTask`, `PromptContext`, `ModelEdit` and exposes one port, `ModelBackend`.
+  The Execution Runtime depends on the Model Runtime (not the reverse), adapting
+  its types at the boundary. The runtime imports only `inference`.
+- **Routing has a single source.** `Capability::inference_task()` is the one
+  intent→task mapping; `ModelSelector::select` is the one caller of
+  `inference::plan`. The executor asks `ModelBackend::route_for`; it no longer
+  routes.
+- **Wired into production.** `execute_plan` runs through a real `ModelRuntime`
+  (default `NullProvider`), so the live `plan/execute` path flows through the
+  Model Runtime.
 
 ### Consequences
 - (+) Every model concern lives in one auditable layer with one responsibility each.
 - (+) Determinism holds end to end; the provider's output is the only variable.
 - (+) New providers are additive — one `Box<dyn ModelProvider>`, no runtime change.
 - (+) Untrusted model output cannot mutate the workspace unvalidated.
+- (+) The layering arrow points down only; the runtime has no upward imports.
+- (−) The Execution Runtime now depends on the Model Runtime's DTOs/port — a
+  deliberate, correct coupling that replaced the old in-`execution` `EditProvider`.
+- (−) New *models* (not providers) still require touching the closed
+  `inference::Model` enum + router — a known limit, not addressed here.
 - (−) No reflection/retry/memory/multi-agent yet — a rejected response is skipped,
   not recovered. Deliberate: those are later milestones.

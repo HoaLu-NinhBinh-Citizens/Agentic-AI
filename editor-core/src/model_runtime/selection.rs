@@ -1,38 +1,29 @@
-//! Model selection — the Model Runtime's owned use of the inference router.
+//! Model selection — the single place the route is decided.
 //!
-//! ADR-003's Policy Layer + Inference Router stay exactly as they are; this module
-//! is the *only* caller of [`inference::plan`] inside the Model Runtime. Selection
-//! used to be reached straight from the executor's edit path; concentrating it
-//! here means "which model, on which endpoint" is decided in one place, alongside
-//! invocation and validation, rather than scattered across the runtime.
+//! ADR-003's Policy Layer + Inference Router stay exactly as they are; this is the
+//! one and only caller of [`inference::plan`] in the whole system. The Execution
+//! Runtime no longer routes; it asks the backend (which delegates here), so the
+//! "which model, which endpoint" decision exists in exactly one function.
+//!
+//! Selection reads only [`ModelTask::inference_task`] — the capability→task
+//! mapping happened once, upstream, on `Capability::inference_task`. This module
+//! knows nothing of planners or capabilities.
 
-use crate::capability::Capability;
-use crate::inference::{self, resolve_endpoint, Route, Task as InfTask, UserPolicy};
-use crate::planner::PlanTask;
+use crate::inference::{self, resolve_endpoint, Route, UserPolicy};
 
-/// Maps a requested capability to the model route for it, under a policy.
+use super::dto::ModelTask;
+
+/// Resolves the model route for a task under a policy.
 pub struct ModelSelector;
 
 impl ModelSelector {
-    /// Resolve the route for `task` under `policy`. Capabilities that need no model
-    /// (read/verify) collapse to a `model: None` route on the policy endpoint, so
-    /// the caller can uniformly skip invocation without a separate code path.
-    pub fn select(task: &PlanTask, policy: UserPolicy) -> Route {
-        match inference_task(task.capability) {
+    /// Resolve the route for `task` under `policy`. A task that needs no model
+    /// collapses to a `model: None` route on the policy endpoint, so callers take
+    /// one uniform path.
+    pub fn select(task: &ModelTask, policy: UserPolicy) -> Route {
+        match task.inference_task {
             Some(t) => inference::plan(policy, t),
             None => Route { model: None, endpoint: resolve_endpoint(policy) },
         }
-    }
-}
-
-/// Which inference task (if any) a capability maps to. Mirrors the executor's
-/// kind→task mapping, keyed on the capability the Capability Layer requested.
-fn inference_task(capability: Capability) -> Option<InfTask> {
-    match capability {
-        Capability::ReadCode => None,
-        Capability::AnalyzeCode => Some(InfTask::Chat),
-        Capability::ModifyCode => Some(InfTask::Apply),
-        Capability::VerifyCode => None,
-        Capability::Report => Some(InfTask::Chat),
     }
 }

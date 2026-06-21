@@ -24,6 +24,7 @@
 use serde::{Deserialize, Serialize};
 
 use crate::execution::{TaskState, ToolCx, ToolOutcome, ToolRegistry};
+use crate::inference::Task as InfTask;
 use crate::planner::{PlanTask, TaskKind};
 
 /// An intent-level unit of work the Planner requests. The Capability Layer
@@ -86,6 +87,39 @@ impl Capability {
     /// verify capabilities do; read-only ones don't.
     pub fn runs_verification(self) -> bool {
         matches!(self, Capability::ModifyCode | Capability::VerifyCode)
+    }
+
+    /// The inference task this capability needs a model for, if any. This is the
+    /// **single** mapping from intent to the router's vocabulary: both the
+    /// Execution Runtime (for the route it records) and the Model Runtime (for
+    /// selection) derive routing from here, so the decision can never drift.
+    /// `None` means the capability needs no model (pure context / verification).
+    pub fn inference_task(self) -> Option<InfTask> {
+        match self {
+            Capability::ReadCode => None,
+            Capability::AnalyzeCode => Some(InfTask::Chat),
+            Capability::ModifyCode => Some(InfTask::Apply),
+            Capability::VerifyCode => None,
+            Capability::Report => Some(InfTask::Chat),
+        }
+    }
+
+    /// The capability-specific instruction handed to the model. Intent wording
+    /// lives with the capability that defines the intent; prompt assembly only
+    /// places it.
+    pub fn model_directive(self) -> &'static str {
+        match self {
+            Capability::ReadCode => "Summarize the relevant code for the request.",
+            Capability::AnalyzeCode => {
+                "Analyze the code and explain the issue the request describes."
+            }
+            Capability::ModifyCode => {
+                "Produce the minimal edit set that satisfies the request. \
+                 Return only the JSON edit object described in the system prompt."
+            }
+            Capability::VerifyCode => "Assess whether the change satisfies the request.",
+            Capability::Report => "Write a concise human-facing report answering the request.",
+        }
     }
 }
 

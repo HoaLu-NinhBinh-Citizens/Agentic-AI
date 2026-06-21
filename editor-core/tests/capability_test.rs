@@ -75,7 +75,7 @@ fn layer_reports_skipped_when_no_tool_registered() {
     let mut cx = aircore::execution::ToolCx {
         engine: &mut engine,
         policy: aircore::inference::UserPolicy::Cloud,
-        edits: &aircore::execution::NoEdits,
+        model: &aircore::model_runtime::NullBackend,
         dry_run: false,
         upstream: &store,
     };

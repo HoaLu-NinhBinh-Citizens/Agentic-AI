@@ -7,10 +7,14 @@
 use std::fs;
 
 use aircore::execution::{
-    ArtifactKind, EditProvider, Executor, ExecutionEvent, ExecutionStatus, FileEdits, TaskState,
+    ArtifactKind, Executor, ExecutionEvent, ExecutionStatus, TaskState,
 };
-use aircore::index::{Edit, IndexEngine};
-use aircore::inference::{Model, UserPolicy};
+use aircore::index::IndexEngine;
+use aircore::inference::{Endpoint, Model, Route, UserPolicy};
+use aircore::model_runtime::dto::EditSpan;
+use aircore::model_runtime::dto::ModelEdit;
+use aircore::model_runtime::provider::TokenSink;
+use aircore::model_runtime::{ModelBackend, ModelOutcome, ModelRequest, ModelResult};
 use aircore::planner::{PlanRequest, Planner, TaskKind};
 
 fn synced_workspace(files: &[(&str, &str)]) -> (tempfile::TempDir, IndexEngine) {
@@ -32,19 +36,27 @@ const BUGGY: &str =
 const CLEAN: &str =
     "pub fn run() -> i32 {\n    let x: Option<i32> = Some(1);\n    x.unwrap_or(0)\n}\n";
 
-/// A deterministic edit provider standing in for the future model client.
+/// A deterministic model backend standing in for a real model client. Returns a
+/// fixed edit set regardless of input (the model output is the only nondeterminism
+/// the runtime allows, so a test pins it). Routing uses the trait default.
 struct StaticEdits {
     file: String,
-    edits: Vec<Edit>,
+    spans: Vec<EditSpan>,
 }
 
-impl EditProvider for StaticEdits {
-    fn edits_for(
-        &self,
-        _task: &aircore::planner::PlanTask,
-        _ctx: Option<&aircore::context::BuiltPrompt>,
-    ) -> Option<Vec<FileEdits>> {
-        Some(vec![FileEdits { file: self.file.clone(), edits: self.edits.clone() }])
+impl ModelBackend for StaticEdits {
+    fn run(&self, _req: &ModelRequest, _sink: &mut dyn TokenSink) -> ModelResult {
+        ModelResult {
+            // The executor records the route via the trait-default `route_for`;
+            // this test double's own route is unused, so a neutral stub suffices.
+            route: Route { model: None, endpoint: Endpoint::Local },
+            prompt: None,
+            response: None,
+            outcome: ModelOutcome::Edits(vec![ModelEdit {
+                file: self.file.clone(),
+                spans: self.spans.clone(),
+            }]),
+        }
     }
 }
 
@@ -96,7 +108,7 @@ fn mutating_task_applies_and_passes_verification() {
     let off = BUGGY.find("x.unwrap()").unwrap();
     let provider = StaticEdits {
         file: "src/lib.rs".to_string(),
-        edits: vec![Edit {
+        spans: vec![EditSpan {
             start_byte: off,
             end_byte: off + "x.unwrap()".len(),
             new_text: "x.unwrap_or(0)".to_string(),
@@ -104,7 +116,7 @@ fn mutating_task_applies_and_passes_verification() {
     };
 
     let result = {
-        let mut exec = Executor::with_options(&mut engine, UserPolicy::Cloud, &provider, false);
+        let mut exec = Executor::with_backend(&mut engine, UserPolicy::Cloud, &provider, false);
         exec.execute(&plan)
     };
 
@@ -138,7 +150,7 @@ fn regressing_edit_fails_verification_and_blocks_downstream() {
     let off = CLEAN.find("x.unwrap_or(0)").unwrap();
     let provider = StaticEdits {
         file: "src/lib.rs".to_string(),
-        edits: vec![Edit {
+        spans: vec![EditSpan {
             start_byte: off,
             end_byte: off + "x.unwrap_or(0)".len(),
             new_text: "x.unwrap()".to_string(),
@@ -146,7 +158,7 @@ fn regressing_edit_fails_verification_and_blocks_downstream() {
     };
 
     let result = {
-        let mut exec = Executor::with_options(&mut engine, UserPolicy::Cloud, &provider, false);
+        let mut exec = Executor::with_backend(&mut engine, UserPolicy::Cloud, &provider, false);
         exec.execute(&plan)
     };
 
@@ -243,7 +255,7 @@ fn verifying_state_is_entered_for_mutating_tasks() {
     let off = BUGGY.find("x.unwrap()").unwrap();
     let provider = StaticEdits {
         file: "src/lib.rs".to_string(),
-        edits: vec![Edit {
+        spans: vec![EditSpan {
             start_byte: off,
             end_byte: off + "x.unwrap()".len(),
             new_text: "x.unwrap_or(0)".to_string(),
@@ -251,7 +263,7 @@ fn verifying_state_is_entered_for_mutating_tasks() {
     };
 
     let result = {
-        let mut exec = Executor::with_options(&mut engine, UserPolicy::Cloud, &provider, false);
+        let mut exec = Executor::with_backend(&mut engine, UserPolicy::Cloud, &provider, false);
         exec.execute(&plan)
     };
 
@@ -287,7 +299,8 @@ fn pluggable_tool_overrides_default() {
     let result = {
         let mut reg = ToolRegistry::with_defaults();
         reg.register(TaskKind::Analyze, Box::new(NoopAnalyze));
-        let mut exec = Executor::new(&mut engine, UserPolicy::Cloud);
+        let backend = aircore::model_runtime::NullBackend;
+        let mut exec = Executor::with_backend(&mut engine, UserPolicy::Cloud, &backend, false);
         exec.set_registry(reg);
         exec.execute(&plan)
     };
